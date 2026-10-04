@@ -294,4 +294,114 @@ class ProductExcelImportServiceTest {
         // 5000 sản phẩm lưu theo batch 500 -> gọi saveAll chính xác 10 lần
         verify(productRepository, times(10)).saveAll(anyList());
     }
+
+    @Test
+    @DisplayName("S208-01: Dòng có Mô tả > 1000 ký tự được ghi nhận vào errorRows, các dòng hợp lệ vẫn nhập thành công")
+    void executeImport_S208_01_DescriptionExceeds1000Chars_RejectedAsErrorRow() throws IOException {
+        String longDescription = "A".repeat(1001); // 1001 ký tự
+        List<List<Object>> rows = List.of(
+                List.of(1, "SP-VALID-01", "Sản phẩm hợp lệ", "Lon", "Đồ uống", "Thùng 24", 200000, "111", "ACTIVE", "Mô tả ngắn"),
+                List.of(2, "SP-ERR-DESC", "Sản phẩm lỗi mô tả dài", "Chai", "Đồ uống", "Lốc 6", 150000, "222", "ACTIVE", longDescription)
+        );
+
+        byte[] excelBytes = createTestExcelBytes(rows);
+        MockMultipartFile file = new MockMultipartFile("file", "test_desc.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(productRepository.findExistingSkus(anyCollection())).thenReturn(Set.of());
+        when(productRepository.findBySkuIn(anyCollection())).thenReturn(List.of());
+
+        ProductImportSummaryResponse summary = productExcelImportService.executeImport(file);
+
+        assertThat(summary).isNotNull();
+        assertThat(summary.getTotalRows()).isEqualTo(2);
+        assertThat(summary.getSuccessCount()).isEqualTo(1);
+        assertThat(summary.getCreatedCount()).isEqualTo(1);
+        assertThat(summary.getErrorCount()).isEqualTo(1);
+        assertThat(summary.getErrorRows()).hasSize(1);
+        assertThat(summary.getErrorRows().get(0).getSku()).isEqualTo("SP-ERR-DESC");
+        assertThat(summary.getErrorRows().get(0).getErrors())
+                .anyMatch(err -> err.contains("Mô tả / Ghi chú không được vượt quá 1000 ký tự"));
+
+        // Chỉ có 1 sản phẩm hợp lệ được lưu
+        verify(productRepository, times(1)).saveAll(any());
+    }
+
+    @Test
+    @DisplayName("S208-02: SKU không phân biệt hoa thường - DB có SP-COCA-330, file có sp-coca-330 nhận diện là UPDATE")
+    void previewAndExecute_S208_02_CaseInsensitiveSkuMatching() throws IOException {
+        List<List<Object>> rows = List.of(
+                List.of(1, "sp-coca-330", "Coca-Cola lon 330ml", "Lon", "Nước ngọt", "Thùng 24", 215000, "893", "ACTIVE", "Cập nhật chữ thường")
+        );
+
+        byte[] excelBytes = createTestExcelBytes(rows);
+        MockMultipartFile file = new MockMultipartFile("file", "test_sku_case.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        // Giả lập DB trả về SKU dạng UPPERCASE từ query findExistingSkus
+        when(productRepository.findExistingSkus(anyCollection())).thenReturn(Set.of("SP-COCA-330"));
+
+        ProductImportPreviewResponse preview = productExcelImportService.previewImport(file);
+
+        assertThat(preview.getTotalRows()).isEqualTo(1);
+        assertThat(preview.getCreateCount()).isEqualTo(0);
+        assertThat(preview.getUpdateCount()).isEqualTo(1);
+        assertThat(preview.getRows().get(0).getAction()).isEqualTo("UPDATE");
+        assertThat(preview.getRows().get(0).isUpdate()).isTrue();
+
+        // Kiểm tra tiếp khi Execute
+        Product existingProduct = Product.builder()
+                .id(10L)
+                .sku("SP-COCA-330")
+                .name("Coca cũ")
+                .baseUnit("Lon")
+                .costPrice(BigDecimal.valueOf(180000))
+                .status("ACTIVE")
+                .build();
+
+        when(productRepository.findBySkuIn(anyCollection())).thenReturn(List.of(existingProduct));
+
+        ProductImportSummaryResponse summary = productExcelImportService.executeImport(file);
+
+        assertThat(summary.getSuccessCount()).isEqualTo(1);
+        assertThat(summary.getUpdatedCount()).isEqualTo(1);
+        assertThat(summary.getCreatedCount()).isEqualTo(0);
+        assertThat(existingProduct.getName()).isEqualTo("Coca-Cola lon 330ml");
+        assertThat(existingProduct.getCostPrice()).isEqualByComparingTo("215000");
+    }
+
+    @Test
+    @DisplayName("S208-03: Cập nhật sản phẩm để trống Giá vốn và Trạng thái phải giữ nguyên giá trị cũ")
+    void executeImport_S208_03_EmptyPriceAndStatusPreservesExistingData() throws IOException {
+        // Excel để trống Giá vốn và Trạng thái cho SP-COCA-330
+        List<List<Object>> rows = List.of(
+                List.of(1, "SP-COCA-330", "Coca Tên Mới", "Lon", "Nước ngọt", "Thùng 24", "", "", "", "Cập nhật tên")
+        );
+
+        byte[] excelBytes = createTestExcelBytes(rows);
+        MockMultipartFile file = new MockMultipartFile("file", "test_keep_data.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        Product existingProduct = Product.builder()
+                .id(1L)
+                .sku("SP-COCA-330")
+                .name("Coca Tên Cũ")
+                .baseUnit("Lon")
+                .costPrice(BigDecimal.valueOf(210000))
+                .status("INACTIVE")
+                .build();
+
+        when(productRepository.findExistingSkus(anyCollection())).thenReturn(Set.of("SP-COCA-330"));
+        when(productRepository.findBySkuIn(anyCollection())).thenReturn(List.of(existingProduct));
+
+        ProductImportSummaryResponse summary = productExcelImportService.executeImport(file);
+
+        assertThat(summary.getSuccessCount()).isEqualTo(1);
+        assertThat(summary.getUpdatedCount()).isEqualTo(1);
+        // Tên được cập nhật
+        assertThat(existingProduct.getName()).isEqualTo("Coca Tên Mới");
+        // Giá vốn và Trạng thái giữ nguyên giá trị cũ, KHÔNG bị ghi đè thành 0 và ACTIVE
+        assertThat(existingProduct.getCostPrice()).isEqualByComparingTo("210000");
+        assertThat(existingProduct.getStatus()).isEqualTo("INACTIVE");
+    }
 }

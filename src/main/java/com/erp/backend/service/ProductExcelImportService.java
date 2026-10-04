@@ -226,7 +226,7 @@ public class ProductExcelImportService {
 
         // Lấy tất cả SKU hợp lệ để load sẵn từ DB trong 1 query (tránh N+1)
         Set<String> skusToProcess = validRows.stream()
-                .map(r -> r.getSku().trim())
+                .map(r -> r.getSku().trim().toUpperCase())
                 .collect(Collectors.toSet());
 
         Map<String, Product> existingProductMap = productRepository.findBySkuIn(skusToProcess).stream()
@@ -250,12 +250,14 @@ public class ProductExcelImportService {
                 if (StringUtils.hasText(row.getPackaging())) {
                     product.setPackaging(row.getPackaging().trim());
                 }
+                // S208-03: Chỉ cập nhật khi ô Giá vốn có dữ liệu trên Excel, để trống thì giữ nguyên giá cũ
                 if (row.getCostPrice() != null) {
                     product.setCostPrice(row.getCostPrice());
                 }
                 if (StringUtils.hasText(row.getBarcode())) {
                     product.setBarcode(row.getBarcode().trim());
                 }
+                // S208-03: Chỉ cập nhật khi ô Trạng thái có dữ liệu trên Excel, để trống thì giữ nguyên trạng thái cũ
                 if (StringUtils.hasText(row.getStatus())) {
                     product.setStatus(row.getStatus().trim().toUpperCase());
                 }
@@ -265,9 +267,9 @@ public class ProductExcelImportService {
                 productsToSave.add(product);
                 updatedCount++;
             } else {
-                // S2-08 AC2: SKU chưa có -> TẠO MỚI
+                // S2-08 AC2: SKU chưa có -> TẠO MỚI (chuẩn hóa SKU chữ hoa)
                 Product newProd = Product.builder()
-                        .sku(row.getSku().trim())
+                        .sku(row.getSku().trim().toUpperCase())
                         .name(row.getName().trim())
                         .baseUnit(row.getBaseUnit().trim())
                         .category(StringUtils.hasText(row.getCategory()) ? row.getCategory().trim() : null)
@@ -327,18 +329,18 @@ public class ProductExcelImportService {
                 throw BusinessException.badRequest("NO_DATA_ROW", "Tệp Excel không có dòng dữ liệu nào sau dòng tiêu đề.");
             }
 
-            // Thu thập trước tất cả SKU trong file để kiểm tra trùng trong DB qua 1 lần query
+            // Thu thập trước tất cả SKU trong file để kiểm tra trùng trong DB qua 1 lần query (chuẩn hóa UPPERCASE để không phân biệt hoa thường)
             List<String> skusInFile = new ArrayList<>();
             for (int r = 1; r <= lastRowNum; r++) {
                 Row row = sheet.getRow(r);
                 if (row == null || isRowEmpty(row, formatter)) continue;
                 String sku = clean(formatter.formatCellValue(row.getCell(1)));
                 if (StringUtils.hasText(sku)) {
-                    skusInFile.add(sku);
+                    skusInFile.add(sku.trim().toUpperCase());
                 }
             }
 
-            // Truy vấn 1 lần duy nhất danh sách các SKU đã tồn tại trong DB (Bulk query)
+            // Truy vấn 1 lần duy nhất danh sách các SKU đã tồn tại trong DB không phân biệt hoa thường (Bulk query)
             Set<String> existingSkusInDb = skusInFile.isEmpty() ? Set.of() :
                     productRepository.findExistingSkus(skusInFile).stream()
                             .map(String::toUpperCase)
@@ -373,7 +375,7 @@ public class ProductExcelImportService {
                 } else if (!SKU_PATTERN.matcher(sku).matches()) {
                     errors.add("Mã SKU chứa ký tự không hợp lệ. Chỉ chấp nhận chữ cái, số, gạch ngang, gạch dưới, dấu chấm.");
                 } else {
-                    String skuUpper = sku.toUpperCase();
+                    String skuUpper = sku.trim().toUpperCase();
                     if (!seenSkusInFile.add(skuUpper)) {
                         errors.add("Mã SKU '" + sku + "' bị trùng lặp nhiều lần trong chính tệp Excel này.");
                     }
@@ -393,22 +395,38 @@ public class ProductExcelImportService {
                     errors.add("Đơn vị tính cơ sở không được vượt quá 30 ký tự.");
                 }
 
-                // 4. Kiểm tra Giá vốn (VNĐ)
-                BigDecimal costPrice = BigDecimal.ZERO;
+                // S208-01: Kiểm tra độ dài các trường văn bản theo CSDL
+                if (StringUtils.hasText(category) && category.length() > 100) {
+                    errors.add("Nhóm hàng không được vượt quá 100 ký tự.");
+                }
+                if (StringUtils.hasText(packaging) && packaging.length() > 100) {
+                    errors.add("Quy cách đóng gói không được vượt quá 100 ký tự.");
+                }
+                if (StringUtils.hasText(barcode) && barcode.length() > 50) {
+                    errors.add("Mã vạch không được vượt quá 50 ký tự.");
+                }
+                if (StringUtils.hasText(description) && description.length() > 1000) {
+                    errors.add("Mô tả / Ghi chú không được vượt quá 1000 ký tự (độ dài hiện tại: " + description.length() + ").");
+                }
+
+                // 4. S208-03: Kiểm tra Giá vốn (VNĐ) - null nếu để trống trong file Excel
+                BigDecimal costPrice = null;
                 if (StringUtils.hasText(rawCostPrice)) {
                     try {
                         String cleanedPrice = rawCostPrice.replaceAll("[,\\s]", "");
-                        costPrice = new BigDecimal(cleanedPrice);
-                        if (costPrice.compareTo(BigDecimal.ZERO) < 0) {
+                        BigDecimal parsedPrice = new BigDecimal(cleanedPrice);
+                        if (parsedPrice.compareTo(BigDecimal.ZERO) < 0) {
                             errors.add("Giá vốn không được là số âm (giá trị hiện tại: " + rawCostPrice + ").");
+                        } else {
+                            costPrice = parsedPrice;
                         }
                     } catch (NumberFormatException e) {
                         errors.add("Giá vốn '" + rawCostPrice + "' không đúng định dạng số hợp lệ.");
                     }
                 }
 
-                // 5. Kiểm tra Trạng thái
-                String status = "ACTIVE";
+                // 5. S208-03: Kiểm tra Trạng thái - null nếu để trống trong file Excel
+                String status = null;
                 if (StringUtils.hasText(rawStatus)) {
                     String st = rawStatus.toUpperCase();
                     if (!"ACTIVE".equals(st) && !"INACTIVE".equals(st)) {
@@ -418,11 +436,11 @@ public class ProductExcelImportService {
                     }
                 }
 
-                // 6. S2-08 AC2: Xác định hành động (CREATE vs UPDATE)
+                // 6. S2-08 AC2 & S208-02: Xác định hành động (CREATE vs UPDATE) không phân biệt hoa thường
                 boolean isUpdate = false;
                 String action = "CREATE";
                 if (StringUtils.hasText(sku)) {
-                    if (existingSkusInDb.contains(sku.toUpperCase())) {
+                    if (existingSkusInDb.contains(sku.trim().toUpperCase())) {
                         isUpdate = true;
                         action = "UPDATE";
                     }
