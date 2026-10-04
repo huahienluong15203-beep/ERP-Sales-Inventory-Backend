@@ -1,5 +1,6 @@
 package com.erp.backend.dto.product;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.*;
 
@@ -51,6 +52,7 @@ public class ProductImportRowDto {
     @Schema(description = "Hành động dự kiến: CREATE (Tạo mới) hoặc UPDATE (Cập nhật sản phẩm đã tồn tại)", example = "UPDATE")
     private String action;
 
+    @JsonProperty("isUpdate")
     @Schema(description = "Đánh dấu SKU này đã tồn tại trong hệ thống (S2-08 AC2)", example = "true")
     private boolean isUpdate;
 
