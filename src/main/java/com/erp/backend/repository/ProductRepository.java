@@ -23,12 +23,13 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
 
     boolean existsBySku(String sku);
 
-    List<Product> findBySkuIn(Collection<String> skus);
+    @Query("SELECT p FROM Product p WHERE UPPER(p.sku) IN :skus")
+    List<Product> findBySkuIn(@Param("skus") Collection<String> skus);
 
     /**
-     * Truy vấn nhanh tập hợp SKU đã tồn tại trong DB, tránh N+1 khi import tới 5.000 sản phẩm.
+     * Truy vấn nhanh tập hợp SKU đã tồn tại trong DB không phân biệt hoa thường, tránh N+1 khi import tới 5.000 sản phẩm.
      */
-    @Query("SELECT p.sku FROM Product p WHERE p.sku IN :skus")
+    @Query("SELECT UPPER(p.sku) FROM Product p WHERE UPPER(p.sku) IN :skus")
     Set<String> findExistingSkus(@Param("skus") Collection<String> skus);
 
     // ======================= S2-06: NHÓM HÀNG =======================
