@@ -58,7 +58,8 @@ public class PriceListService {
                 .filter(p -> group == null || p.getCustomerGroup() == group)
                 .filter(p -> st == null || st.equals(p.getStatus()))
                 .filter(p -> kw == null || contains(p.getCode(), kw) || contains(p.getName(), kw) || contains(p.getNote(), kw))
-                .map(p -> toResponse(p, false))
+                // Trả kèm dòng giá: màn hình sửa của Frontend lấy dữ liệu từ danh sách
+                .map(p -> toResponse(p, true))
                 .toList();
     }
 

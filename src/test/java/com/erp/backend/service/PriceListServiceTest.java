@@ -326,6 +326,6 @@ class PriceListServiceTest {
 
         assertThat(service.search("RETAIL", null, null)).extracting(PriceListResponse::code).containsExactly("BG-LE");
         assertThat(service.search(null, "ACTIVE", "cũ")).extracting(PriceListResponse::code).containsExactly("BG-OLD");
-        assertThat(service.search(null, null, null).get(0).items()).isNull();
+        assertThat(service.search(null, null, null).get(0).items()).isNotNull();
     }
 }
