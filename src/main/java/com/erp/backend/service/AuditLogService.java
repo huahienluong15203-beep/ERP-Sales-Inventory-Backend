@@ -8,6 +8,7 @@ import com.erp.backend.entity.AuditModule;
 import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.AuditLogRepository;
 import com.erp.backend.repository.AuditLogSpecifications;
+import com.erp.backend.repository.UserRepository;
 import com.erp.backend.security.UserDetailsImpl;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -37,6 +38,7 @@ public class AuditLogService {
     static final int MAX_PAGE_SIZE = 100;
 
     private final AuditLogRepository auditLogRepository;
+    private final UserRepository userRepository;
 
     /**
      * Ghi nhận 1 bản ghi nhật ký kiểm toán.
@@ -69,6 +71,19 @@ public class AuditLogService {
             }
         }
 
+        String actorAvatar = entry.getActorAvatarUrl();
+        if (!StringUtils.hasText(actorAvatar) && userRepository != null) {
+            if (entry.getActorId() != null) {
+                actorAvatar = userRepository.findById(entry.getActorId())
+                        .map(u -> StringUtils.hasText(u.getAvatarThumbnailUrl()) ? u.getAvatarThumbnailUrl() : u.getAvatarUrl())
+                        .orElse(null);
+            } else if (StringUtils.hasText(entry.getActorUsername())) {
+                actorAvatar = userRepository.findByUsername(entry.getActorUsername())
+                        .map(u -> StringUtils.hasText(u.getAvatarThumbnailUrl()) ? u.getAvatarThumbnailUrl() : u.getAvatarUrl())
+                        .orElse(null);
+            }
+        }
+
         AuditLog auditLog = AuditLog.builder()
                 .module(entry.getModule())
                 .action(entry.getAction())
@@ -78,6 +93,7 @@ public class AuditLogService {
                 .actorId(entry.getActorId())
                 .actorUsername(entry.getActorUsername())
                 .actorFullName(entry.getActorFullName())
+                .actorAvatarUrl(actorAvatar)
                 .oldValue(entry.getOldValue())
                 .newValue(entry.getNewValue())
                 .reason(entry.getReason())
@@ -155,6 +171,19 @@ public class AuditLogService {
     }
 
     public AuditLogResponse toResponse(AuditLog a) {
+        String avatarUrl = a.getActorAvatarUrl();
+        if (!StringUtils.hasText(avatarUrl) && userRepository != null) {
+            if (a.getActorId() != null) {
+                avatarUrl = userRepository.findById(a.getActorId())
+                        .map(u -> StringUtils.hasText(u.getAvatarThumbnailUrl()) ? u.getAvatarThumbnailUrl() : u.getAvatarUrl())
+                        .orElse(null);
+            } else if (StringUtils.hasText(a.getActorUsername())) {
+                avatarUrl = userRepository.findByUsername(a.getActorUsername())
+                        .map(u -> StringUtils.hasText(u.getAvatarThumbnailUrl()) ? u.getAvatarThumbnailUrl() : u.getAvatarUrl())
+                        .orElse(null);
+            }
+        }
+
         return new AuditLogResponse(
                 a.getId(),
                 a.getModule().name(),
@@ -166,6 +195,7 @@ public class AuditLogService {
                 a.getActorId(),
                 a.getActorUsername(),
                 a.getActorFullName(),
+                avatarUrl,
                 a.getOldValue(),
                 a.getNewValue(),
                 a.getReason(),

@@ -1,6 +1,7 @@
 package com.erp.backend.controller;
 
 import com.erp.backend.dto.audit.AuditLogResponse;
+import com.erp.backend.dto.audit.CreateAuditLogEntry;
 import com.erp.backend.dto.customer.OptionItem;
 import com.erp.backend.dto.user.PageResponse;
 import com.erp.backend.entity.AuditModule;
@@ -19,12 +20,12 @@ import java.util.List;
  * - Xem nhật ký thao tác trên tồn kho, giá, hạn mức công nợ và hóa đơn.
  * - Lọc theo người dùng (actorId), loại đối tượng / phân hệ (module, targetType), khoảng thời gian (startDate, endDate).
  *
- * Phân quyền: ADMIN (Quản trị hệ thống), ACCOUNTANT (Kế toán công nợ), SALES_MANAGER (Quản lý kinh doanh).
+ * Phân quyền: ADMIN (Quản trị hệ thống), ACCOUNTANT (Kế toán công nợ), SALES_MANAGER (Quản lý kinh doanh), WH_MANAGER (Quản lý kho).
  */
 @RestController
 @RequestMapping("/api/audit-logs")
 @RequiredArgsConstructor
-@PreAuthorize("hasAnyRole('ADMIN', 'ACCOUNTANT', 'SALES_MANAGER')")
+@PreAuthorize("hasAnyRole('ADMIN', 'ACCOUNTANT', 'SALES_MANAGER', 'WH_MANAGER')")
 public class AuditLogController {
 
     private final AuditLogService auditLogService;
@@ -53,6 +54,14 @@ public class AuditLogController {
     @GetMapping("/{id}")
     public AuditLogResponse getById(@PathVariable Long id) {
         return auditLogService.getById(id);
+    }
+
+    /**
+     * Ghi nhận một bản ghi nhật ký kiểm toán.
+     */
+    @PostMapping
+    public AuditLogResponse record(@RequestBody CreateAuditLogEntry entry) {
+        return auditLogService.toResponse(auditLogService.record(entry));
     }
 
     /**
