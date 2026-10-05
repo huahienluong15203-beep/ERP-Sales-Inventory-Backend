@@ -60,8 +60,16 @@ public class OrderDraftService {
     /** Tính tiền ngay khi thêm / sửa dòng hàng, không lưu gì. */
     @Transactional(readOnly = true)
     public OrderResponse preview(OrderDraftRequest req, UserDetailsImpl actor) {
+        // S3-07 AC3: đang sửa dở một đơn nháp có sẵn -> cho xem trước dù đại lý vừa bị khoá
+        Long continuingCustomerId = null;
+        if (req.getDraftId() != null) {
+            SalesOrder draft = findOrder(req.getDraftId(), actor);
+            if (SalesOrder.STATUS_DRAFT.equals(draft.getStatus())) {
+                continuingCustomerId = draft.getCustomer().getId();
+            }
+        }
         SalesOrder order = new SalesOrder();
-        fill(order, req, actor);
+        fill(order, req, actor, continuingCustomerId);
         return toResponse(order);
     }
 
@@ -73,7 +81,7 @@ public class OrderDraftService {
                 .createdById(actor != null ? actor.getId() : null)
                 .createdByUsername(actor != null ? actor.getUsername() : null)
                 .build();
-        fill(order, req, actor);
+        fill(order, req, actor, null);
         return toResponse(orderRepository.saveAndFlush(order));
     }
 
@@ -84,7 +92,8 @@ public class OrderDraftService {
         if (!SalesOrder.STATUS_DRAFT.equals(order.getStatus())) {
             throw BusinessException.conflict("ORDER_NOT_DRAFT", "Chỉ sửa được đơn đang ở trạng thái nháp", null);
         }
-        fill(order, req, actor);
+        // S3-07 AC3: đơn đang dở của đại lý bị khoá vẫn xử lý tiếp được (kèm cảnh báo trong warnings)
+        fill(order, req, actor, order.getCustomer().getId());
         return toResponse(orderRepository.saveAndFlush(order));
     }
 
@@ -153,13 +162,27 @@ public class OrderDraftService {
 
     // ======================= TÍNH ĐƠN =======================
 
-    private void fill(SalesOrder order, OrderDraftRequest req, UserDetailsImpl actor) {
+    /**
+     * @param continuingCustomerId đại lý của đơn nháp đang sửa dở (null khi tạo đơn mới).
+     *        Đại lý này bị khoá giao dịch sau khi đã có đơn nháp thì vẫn cho xử lý tiếp (S3-07 AC3);
+     *        đổi sang đại lý khác đang bị khoá thì vẫn chặn như tạo đơn mới.
+     */
+    private void fill(SalesOrder order, OrderDraftRequest req, UserDetailsImpl actor, Long continuingCustomerId) {
         Customer customer = findCustomer(req.getCustomerId(), actor);
-        try {
-            customerService.assertCanCreateOrder(customer);
-        } catch (BusinessException e) {
-            // Trả 409 thay vì 403: Frontend tự đăng xuất khi gặp 403, trong khi đây là lỗi nghiệp vụ của đại lý
-            throw new BusinessException(HttpStatus.CONFLICT, e.getCode(), e.getMessage(), "customerId");
+        boolean continuingLockedDraft = continuingCustomerId != null
+                && continuingCustomerId.equals(customer.getId()) && customer.isTransactionLocked();
+        if (continuingLockedDraft) {
+            if (!"ACTIVE".equalsIgnoreCase(customer.getStatus())) {
+                throw new BusinessException(HttpStatus.CONFLICT, "CUSTOMER_INACTIVE",
+                        "Đại lý " + customer.getName() + " (" + customer.getCode() + ") đã ngừng giao dịch.", "customerId");
+            }
+        } else {
+            try {
+                customerService.assertCanCreateOrder(customer);
+            } catch (BusinessException e) {
+                // Trả 409 thay vì 403: Frontend tự đăng xuất khi gặp 403, trong khi đây là lỗi nghiệp vụ của đại lý
+                throw new BusinessException(HttpStatus.CONFLICT, e.getCode(), e.getMessage(), "customerId");
+            }
         }
         LocalDate today = LocalDate.now(VN_ZONE);
 
@@ -348,6 +371,16 @@ public class OrderDraftService {
                 a == null ? null : new OrderResponse.DeliveryAddressInfo(a.getId(), a.getLabel(), a.getAddress(),
                         a.getReceiverName(), a.getReceiverPhone()),
                 o.getDesiredDeliveryDate(), o.getNote(), lines, o.getSubtotal(), o.getDiscountTotal(), o.getTotalAmount(),
-                o.getCreatedByUsername(), o.getCreatedAt(), o.getUpdatedAt());
+                o.getCreatedByUsername(), o.getCreatedAt(), o.getUpdatedAt(), warnings(c));
+    }
+
+    /** S3-07 AC3: cảnh báo khi đại lý của đơn đang bị khoá giao dịch. */
+    private static List<String> warnings(Customer c) {
+        if (!c.isTransactionLocked()) {
+            return List.of();
+        }
+        String reason = c.getTransactionLockReason() != null ? ": " + c.getTransactionLockReason() : "";
+        return List.of("Đại lý " + c.getName() + " (" + c.getCode() + ") đang bị khoá giao dịch" + reason
+                + ". Đơn nháp này vẫn xử lý tiếp được nhưng không tạo được đơn mới.");
     }
 }

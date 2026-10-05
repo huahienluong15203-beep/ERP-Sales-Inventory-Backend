@@ -24,7 +24,9 @@ public record OrderResponse(
         BigDecimal totalAmount,
         String createdByUsername,
         LocalDateTime createdAt,
-        LocalDateTime updatedAt) {
+        LocalDateTime updatedAt,
+        // S3-07 AC3: cảnh báo hiển thị cho người dùng (vd đại lý đang bị khoá giao dịch), rỗng nếu không có
+        List<String> warnings) {
 
     public record DeliveryAddressInfo(Long id, String label, String address, String receiverName, String receiverPhone) {
     }
