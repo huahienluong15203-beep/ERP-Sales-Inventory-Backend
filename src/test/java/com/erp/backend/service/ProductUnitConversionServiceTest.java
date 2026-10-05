@@ -325,4 +325,50 @@ class ProductUnitConversionServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .hasFieldOrPropertyWithValue("code", "UNIT_NOT_FOUND");
     }
+
+    @Test
+    @DisplayName("Nghiệp vụ cốt lõi: Đổi hệ số quy đổi không làm sai lệch các giao dịch/đơn hàng đã ghi trước đó")
+    void changeConversionFactor_DoesNotCorruptHistoricTransactions_SnapshotImmutable() {
+        // GIAI ĐOẠN 1: Ban đầu hệ số quy đổi của Thùng là 24 (1 Thùng = 24 Lon)
+        ProductUnitConversion boxUnit = ProductUnitConversion.builder()
+                .id(101L)
+                .product(product)
+                .unitName("Thùng")
+                .conversionFactor(BigDecimal.valueOf(24))
+                .status("ACTIVE")
+                .build();
+
+        when(unitConversionRepository.findByProductIdAndUnitNameIgnoreCase(1L, "Thùng"))
+                .thenReturn(Optional.of(boxUnit));
+
+        // Phiếu nhập kho / Đơn hàng số 1 phát sinh 10 Thùng tại thời điểm T1
+        UnitConversionResult tx1Result = unitConversionService.convertToBaseUnit(product, "Thùng", BigDecimal.valueOf(10));
+        assertThat(tx1Result.getBaseQuantity()).isEqualByComparingTo(BigDecimal.valueOf(240));
+        assertThat(tx1Result.getSnapshot().getConversionFactor()).isEqualByComparingTo(BigDecimal.valueOf(24));
+        assertThat(tx1Result.getSnapshot().getBaseQuantity()).isEqualByComparingTo(BigDecimal.valueOf(240));
+
+        // Mô phỏng dòng phiếu / đơn hàng lịch sử chốt snapshot đóng băng
+        var historicSnapshot = tx1Result.getSnapshot();
+
+        // GIAI ĐOẠN 2: Sau 1 tháng, nhà sản xuất đổi quy cách Thùng lên 30 lon.
+        // Thủ kho cập nhật hệ số quy đổi trong danh mục từ 24 thành 30
+        boxUnit.setConversionFactor(BigDecimal.valueOf(30));
+
+        // GIAI ĐOẠN 3: Phiếu nhập kho / Đơn hàng số 2 phát sinh 10 Thùng tại thời điểm T2 (sau khi đổi hệ số)
+        UnitConversionResult tx2Result = unitConversionService.convertToBaseUnit(product, "Thùng", BigDecimal.valueOf(10));
+        assertThat(tx2Result.getBaseQuantity()).isEqualByComparingTo(BigDecimal.valueOf(300));
+        assertThat(tx2Result.getSnapshot().getConversionFactor()).isEqualByComparingTo(BigDecimal.valueOf(30));
+        assertThat(tx2Result.getSnapshot().getBaseQuantity()).isEqualByComparingTo(BigDecimal.valueOf(300));
+
+        // KIỂM TRA BẤT BIẾN: Giao dịch số 1 cũ trong quá khứ TUYỆT ĐỐI KHÔNG BỊ SAI LỆCH
+        assertThat(historicSnapshot.getConversionFactor())
+                .as("Hệ số giao dịch cũ phải cố định ở 24, không bị nhảy lên 30")
+                .isEqualByComparingTo(BigDecimal.valueOf(24));
+        assertThat(historicSnapshot.getBaseQuantity())
+                .as("Số lượng quy về đơn vị cơ sở của giao dịch cũ phải bất biến ở 240 Lon, không bị nhảy lên 300 Lon")
+                .isEqualByComparingTo(BigDecimal.valueOf(240));
+        assertThat(historicSnapshot.getTransactionUnit()).isEqualTo("Thùng");
+        assertThat(historicSnapshot.getBaseUnit()).isEqualTo("Lon");
+    }
 }
+
