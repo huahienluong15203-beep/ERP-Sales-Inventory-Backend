@@ -13,6 +13,8 @@ import java.util.List;
 @Getter
 @Setter
 public class OrderDraftRequest {
+    /** Chỉ dùng khi xem trước lúc đang sửa một đơn nháp có sẵn (S3-07: đại lý bị khoá vẫn xử lý tiếp đơn dở). */
+    private Long draftId;
     private Long customerId;
     private Long deliveryAddressId;
     private LocalDate desiredDeliveryDate;

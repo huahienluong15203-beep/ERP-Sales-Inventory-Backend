@@ -180,6 +180,64 @@ class OrderDraftServiceTest {
                 .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT);
     }
 
+    private void lockCustomer() {
+        customer.setTransactionLocked(true);
+        customer.setTransactionLockReason("Nợ quá hạn");
+        lenient().doThrow(BusinessException.forbidden("CUSTOMER_TRANSACTION_LOCKED", "Đại lý đang bị khóa giao dịch"))
+                .when(customerService).assertCanCreateOrder(customer);
+    }
+
+    @Test
+    @DisplayName("S3-07 AC3: Đơn nháp tạo trước khi khoá -> vẫn sửa tiếp được, có cảnh báo")
+    void lockedCustomer_existingDraft_canContinueWithWarning() {
+        lockCustomer();
+        SalesOrder draft = SalesOrder.builder().id(100L).code("DH261004-AAAA").customer(customer).status("DRAFT").build();
+        when(orderRepository.findById(100L)).thenReturn(Optional.of(draft));
+
+        OrderResponse res = service.updateDraft(100L, request(line("SP-COCA", "Lon", "50")), rep);
+
+        assertThat(res.totalAmount()).isEqualByComparingTo("500000");
+        assertThat(res.warnings()).hasSize(1);
+        assertThat(res.warnings().get(0)).contains("đang bị khoá giao dịch").contains("Nợ quá hạn");
+        verify(customerService, never()).assertCanCreateOrder(any());
+    }
+
+    @Test
+    @DisplayName("S3-07 AC3: Xem trước khi đang sửa đơn nháp của đại lý bị khoá -> được, có cảnh báo")
+    void lockedCustomer_previewOfExistingDraft_allowed() {
+        lockCustomer();
+        SalesOrder draft = SalesOrder.builder().id(100L).code("DH261004-AAAA").customer(customer).status("DRAFT").build();
+        when(orderRepository.findById(100L)).thenReturn(Optional.of(draft));
+        OrderDraftRequest req = request(line("SP-COCA", "Lon", "5"));
+        req.setDraftId(100L);
+
+        OrderResponse res = service.preview(req, rep);
+
+        assertThat(res.totalAmount()).isEqualByComparingTo("50000");
+        assertThat(res.warnings()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("S3-07: Sửa đơn nháp nhưng đổi sang đại lý khác đang bị khoá -> vẫn chặn")
+    void lockedCustomer_switchToOtherLockedCustomer_blocked() {
+        Customer other = customer(9, salesRep(7));
+        SalesOrder draft = SalesOrder.builder().id(100L).code("DH261004-AAAA").customer(other).status("DRAFT").build();
+        when(orderRepository.findById(100L)).thenReturn(Optional.of(draft));
+        lockCustomer();
+
+        assertThatThrownBy(() -> service.updateDraft(100L, request(line("SP-COCA", "Lon", "5")), rep))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "CUSTOMER_TRANSACTION_LOCKED")
+                .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT);
+        verify(orderRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("S3-07: Đại lý không bị khoá -> không có cảnh báo")
+    void unlockedCustomer_noWarnings() {
+        assertThat(service.preview(request(line("SP-COCA", null, "1")), rep).warnings()).isEmpty();
+    }
+
     @Test
     @DisplayName("S3-09: SKU chưa có giá hiệu lực của nhóm khách -> chặn thêm dòng, nói rõ lý do")
     void noPrice_blocked() {
