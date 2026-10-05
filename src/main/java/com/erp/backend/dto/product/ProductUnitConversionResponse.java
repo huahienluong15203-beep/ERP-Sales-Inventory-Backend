@@ -1,5 +1,6 @@
 package com.erp.backend.dto.product;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.*;
 
@@ -7,14 +8,14 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
- * DTO trả về thông tin đơn vị tính của sản phẩm (S2-07).
+ * DTO trả về thông tin đơn vị tính của sản phẩm.
  */
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-@Schema(description = "Thông tin đơn vị tính của sản phẩm (S2-07)")
+@Schema(description = "Thông tin đơn vị tính của sản phẩm")
 public class ProductUnitConversionResponse {
 
     @Schema(description = "ID bản ghi quy đổi (null nếu là đơn vị cơ sở)", example = "1")
