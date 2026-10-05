@@ -343,6 +343,8 @@ public class UserManagementService {
                 .regions(u.getRegions().stream()
                         .map(r -> new RefItem(r.getId(), r.getCode(), r.getName()))
                         .sorted(Comparator.comparing(RefItem::code)).toList())
+                .avatarUrl(u.getAvatarUrl())
+                .avatarThumbnailUrl(u.getAvatarThumbnailUrl())
                 .createdAt(u.getCreatedAt())
                 .updatedAt(u.getUpdatedAt())
                 .build();
