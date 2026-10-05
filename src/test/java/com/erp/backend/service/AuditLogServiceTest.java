@@ -7,6 +7,7 @@ import com.erp.backend.entity.AuditLog;
 import com.erp.backend.entity.AuditModule;
 import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.AuditLogRepository;
+import com.erp.backend.repository.UserRepository;
 import com.erp.backend.security.UserDetailsImpl;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -35,6 +36,9 @@ class AuditLogServiceTest {
 
     @Mock
     private AuditLogRepository auditLogRepository;
+
+    @Mock
+    private UserRepository userRepository;
 
     @InjectMocks
     private AuditLogService auditLogService;

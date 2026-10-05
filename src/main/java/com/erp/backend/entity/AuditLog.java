@@ -61,6 +61,10 @@ public class AuditLog {
     @Column(name = "actor_full_name", length = 100)
     private String actorFullName;
 
+    // S2-03 & S2-04: Ảnh đại diện người thực hiện
+    @Column(name = "actor_avatar_url", length = 500)
+    private String actorAvatarUrl;
+
     // Giá trị trước thay đổi (chuỗi hoặc JSON)
     @Column(name = "old_value", columnDefinition = "TEXT")
     private String oldValue;
