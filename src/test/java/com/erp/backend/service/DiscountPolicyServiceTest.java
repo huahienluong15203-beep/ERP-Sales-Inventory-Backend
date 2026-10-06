@@ -231,4 +231,40 @@ class DiscountPolicyServiceTest {
         assertThat(res.status()).isEqualTo("INACTIVE");
         assertThatThrownBy(() -> service.changeStatus(1L, "DELETED", manager)).extracting("code").isEqualTo("INVALID_STATUS");
     }
+
+    @Test
+    @DisplayName("S3-01: Danh sách lọc + phân trang phía server")
+    @SuppressWarnings("unchecked")
+    void search_pagedOnServer() {
+        when(policyRepository.findAll(any(org.springframework.data.jpa.domain.Specification.class),
+                any(org.springframework.data.domain.Pageable.class)))
+                .thenAnswer(inv -> new org.springframework.data.domain.PageImpl<DiscountPolicy>(List.of(), inv.getArgument(1), 25));
+
+        com.erp.backend.dto.user.PageResponse<DiscountPolicyResponse> res = service.search("expired", "category", "bia", 1, 10);
+
+        assertThat(res.page()).isEqualTo(1);
+        assertThat(res.size()).isEqualTo(10);
+        assertThat(res.totalElements()).isEqualTo(25);
+        assertThat(res.totalPages()).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("S3-01: Lọc trạng thái / phạm vi không hợp lệ -> 400")
+    void search_invalidFilters() {
+        assertThatThrownBy(() -> service.search("DELETED", null, null, 0, 20))
+                .hasFieldOrPropertyWithValue("code", "INVALID_STATUS");
+        assertThatThrownBy(() -> service.search(null, "SKU", null, 0, 20))
+                .hasFieldOrPropertyWithValue("code", "INVALID_SCOPE");
+    }
+
+    @Test
+    @DisplayName("S3-01: Thống kê tính trên toàn bộ dữ liệu")
+    void stats_countsAll() {
+        when(policyRepository.count()).thenReturn(6L);
+        when(policyRepository.countActive(any(LocalDate.class))).thenReturn(4L);
+        when(policyRepository.countByScope("PRODUCT")).thenReturn(4L);
+        when(policyRepository.countByScope("CATEGORY")).thenReturn(2L);
+
+        assertThat(service.stats()).isEqualTo(new DiscountPolicyStatsResponse(6, 4, 4, 2));
+    }
 }

@@ -9,9 +9,16 @@ import java.time.LocalDate;
 import java.util.Collection;
 import java.util.List;
 
-public interface DiscountPolicyRepository extends JpaRepository<DiscountPolicy, Long> {
+public interface DiscountPolicyRepository extends JpaRepository<DiscountPolicy, Long>,
+        org.springframework.data.jpa.repository.JpaSpecificationExecutor<DiscountPolicy> {
 
     boolean existsByCodeIgnoreCase(String code);
+
+    long countByScope(String scope);
+
+    /** Đang bật và chưa hết hạn tính đến ngày date. */
+    @Query("SELECT COUNT(p) FROM DiscountPolicy p WHERE p.status = 'ACTIVE' AND (p.endDate IS NULL OR p.endDate >= :date)")
+    long countActive(@Param("date") LocalDate date);
 
     boolean existsByCodeIgnoreCaseAndIdNot(String code, Long id);
 

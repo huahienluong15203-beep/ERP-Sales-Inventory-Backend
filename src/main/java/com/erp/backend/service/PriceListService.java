@@ -5,6 +5,8 @@ import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.PriceListItemRepository;
 import com.erp.backend.repository.PriceListRepository;
+import com.erp.backend.repository.PriceListSpecifications;
+import com.erp.backend.dto.user.PageResponse;
 import com.erp.backend.repository.ProductRepository;
 import com.erp.backend.security.UserDetailsImpl;
 import lombok.RequiredArgsConstructor;
@@ -47,20 +49,30 @@ public class PriceListService {
 
     // ======================= XEM / TRA CỨU =======================
 
-    @Transactional(readOnly = true)
-    public List<PriceListResponse> search(String customerGroup, String status, String keyword) {
-        CustomerGroup group = StringUtils.hasText(customerGroup) ? parseGroup(customerGroup) : null;
-        String st = StringUtils.hasText(status) ? status.trim().toUpperCase() : null;
-        String kw = StringUtils.hasText(keyword) ? keyword.trim().toLowerCase() : null;
+    static final int DEFAULT_PAGE_SIZE = 20;
+    static final int MAX_PAGE_SIZE = 100;
 
-        return priceListRepository.findAll(Sort.by("startDate").descending().and(Sort.by("version").descending())
-                        .and(Sort.by("id").descending())).stream()
-                .filter(p -> group == null || p.getCustomerGroup() == group)
-                .filter(p -> st == null || st.equals(p.getStatus()))
-                .filter(p -> kw == null || contains(p.getCode(), kw) || contains(p.getName(), kw) || contains(p.getNote(), kw))
-                // Trả kèm dòng giá: màn hình sửa của Frontend lấy dữ liệu từ danh sách
-                .map(p -> toResponse(p, true))
-                .toList();
+    /** Lọc và phân trang phía server. Trả kèm dòng giá: màn hình sửa của Frontend lấy dữ liệu từ danh sách. */
+    @Transactional(readOnly = true)
+    public PageResponse<PriceListResponse> search(String customerGroup, String status, String keyword, int page, int size) {
+        CustomerGroup group = StringUtils.hasText(customerGroup) ? parseGroup(customerGroup) : null;
+        int safePage = Math.max(page, 0);
+        int safeSize = size <= 0 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
+        Sort sort = Sort.by("startDate").descending().and(Sort.by("version").descending()).and(Sort.by("id").descending());
+        return PageResponse.of(priceListRepository.findAll(PriceListSpecifications.filter(group, status, keyword),
+                PageRequest.of(safePage, safeSize, sort)).map(p -> toResponse(p, true)));
+    }
+
+    /** Số liệu cho các thẻ thống kê (toàn bộ dữ liệu, không phụ thuộc trang đang xem). */
+    @Transactional(readOnly = true)
+    public PriceListStatsResponse stats() {
+        return new PriceListStatsResponse(
+                priceListRepository.count(),
+                priceListRepository.countByStatus("ACTIVE"),
+                priceListRepository.countByCustomerGroup(CustomerGroup.DEALER_LEVEL_1),
+                priceListRepository.countByCustomerGroup(CustomerGroup.DEALER_LEVEL_2),
+                priceListRepository.countByCustomerGroup(CustomerGroup.RETAIL),
+                priceListRepository.countByHasOrdersTrue());
     }
 
     @Transactional(readOnly = true)

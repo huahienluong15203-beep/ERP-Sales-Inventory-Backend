@@ -317,15 +317,52 @@ class PriceListServiceTest {
     }
 
     @Test
-    @DisplayName("S2-10: Lọc danh sách theo nhóm khách hàng và từ khoá")
-    void search_filters() {
+    @DisplayName("S2-10: Danh sách lọc + phân trang phía server, trả kèm dòng giá")
+    @SuppressWarnings("unchecked")
+    void search_pagedOnServer() {
         PriceList a = existing(false);
-        PriceList b = PriceList.builder().id(6L).code("BG-LE").name("Giá lẻ").customerGroup(CustomerGroup.RETAIL)
-                .startDate(LocalDate.of(2026, 9, 1)).status("ACTIVE").version(1).build();
-        when(priceListRepository.findAll(any(Sort.class))).thenReturn(List.of(a, b));
+        when(priceListRepository.findAll(any(org.springframework.data.jpa.domain.Specification.class), any(Pageable.class)))
+                .thenAnswer(inv -> new org.springframework.data.domain.PageImpl<>(List.of(a), inv.getArgument(1), 41));
 
-        assertThat(service.search("RETAIL", null, null)).extracting(PriceListResponse::code).containsExactly("BG-LE");
-        assertThat(service.search(null, "ACTIVE", "cũ")).extracting(PriceListResponse::code).containsExactly("BG-OLD");
-        assertThat(service.search(null, null, null).get(0).items()).isNotNull();
+        com.erp.backend.dto.user.PageResponse<PriceListResponse> res = service.search("dealer_level_1", "ACTIVE", "cũ", 2, 20);
+
+        assertThat(res.content()).extracting(PriceListResponse::code).containsExactly("BG-OLD");
+        assertThat(res.content().get(0).items()).isNotNull();
+        assertThat(res.page()).isEqualTo(2);
+        assertThat(res.totalElements()).isEqualTo(41);
+        assertThat(res.totalPages()).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("S2-10: Kích thước trang được giới hạn 1..100, trang âm về 0")
+    @SuppressWarnings("unchecked")
+    void search_clampsPaging() {
+        ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
+        when(priceListRepository.findAll(any(org.springframework.data.jpa.domain.Specification.class), captor.capture()))
+                .thenReturn(org.springframework.data.domain.Page.empty());
+
+        service.search(null, null, null, -3, 5000);
+
+        assertThat(captor.getValue().getPageNumber()).isZero();
+        assertThat(captor.getValue().getPageSize()).isEqualTo(100);
+    }
+
+    @Test
+    @DisplayName("S2-10: Nhóm khách hàng lọc không hợp lệ -> 400")
+    void search_invalidGroup() {
+        assertThatThrownBy(() -> service.search("VIP", null, null, 0, 20)).isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    @DisplayName("S2-10: Thống kê tính trên toàn bộ dữ liệu, không theo trang")
+    void stats_countsAll() {
+        when(priceListRepository.count()).thenReturn(7L);
+        when(priceListRepository.countByStatus("ACTIVE")).thenReturn(5L);
+        when(priceListRepository.countByCustomerGroup(CustomerGroup.DEALER_LEVEL_1)).thenReturn(3L);
+        when(priceListRepository.countByCustomerGroup(CustomerGroup.DEALER_LEVEL_2)).thenReturn(2L);
+        when(priceListRepository.countByCustomerGroup(CustomerGroup.RETAIL)).thenReturn(2L);
+        when(priceListRepository.countByHasOrdersTrue()).thenReturn(1L);
+
+        assertThat(service.stats()).isEqualTo(new PriceListStatsResponse(7, 5, 3, 2, 2, 1));
     }
 }
