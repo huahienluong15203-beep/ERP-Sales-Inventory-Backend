@@ -55,6 +55,10 @@ public class AuditLogInterceptor implements HandlerInterceptor {
         }
 
         String uri = request.getRequestURI();
+        // POST .../preview chỉ tính thử (vd /api/orders/preview gọi mỗi lần gõ đơn), không thay đổi dữ liệu -> không ghi nhật ký
+        if (isReadOnlyPost(uri)) {
+            return;
+        }
         AuditModule module = resolveModule(uri);
         if (module == null) {
             return;
@@ -82,6 +86,11 @@ public class AuditLogInterceptor implements HandlerInterceptor {
         } catch (Exception e) {
             log.error("Lỗi khi ghi middleware audit log cho URI {}: {}", uri, e.getMessage());
         }
+    }
+
+    static boolean isReadOnlyPost(String uri) {
+        String lower = uri.toLowerCase();
+        return lower.endsWith("/preview") || lower.endsWith("/preview/");
     }
 
     private AuditModule resolveModule(String uri) {
