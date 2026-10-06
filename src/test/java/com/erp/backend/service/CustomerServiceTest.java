@@ -62,6 +62,31 @@ class CustomerServiceTest {
         return req;
     }
 
+    // ======================= S3-07: LỌC KHOÁ GIAO DỊCH =======================
+
+    @Test
+    @DisplayName("S3-07: Lọc đại lý bị khoá giao dịch -> gửi điều kiện xuống DB và phân trang ở server")
+    @SuppressWarnings("unchecked")
+    void search_lockedFilter_queriesDatabase() {
+        Customer locked = customer(7, null);
+        locked.setTransactionLocked(true);
+        when(customerRepository.findAll(any(org.springframework.data.jpa.domain.Specification.class),
+                any(org.springframework.data.domain.Pageable.class)))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(locked),
+                        org.springframework.data.domain.PageRequest.of(1, 20), 21));
+
+        com.erp.backend.dto.user.PageResponse<CustomerResponse> res =
+                service.search(null, null, null, null, null, true, 1, 20, manager);
+
+        assertThat(res.content()).extracting(CustomerResponse::transactionLocked).containsExactly(true);
+        assertThat(res.totalElements()).isEqualTo(21);
+        ArgumentCaptor<org.springframework.data.domain.Pageable> pageable =
+                ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+        verify(customerRepository).findAll(any(org.springframework.data.jpa.domain.Specification.class), pageable.capture());
+        assertThat(pageable.getValue().getPageNumber()).isEqualTo(1);
+        assertThat(pageable.getValue().getPageSize()).isEqualTo(20);
+    }
+
     // ======================= S3-03: TẠO / SỬA =======================
 
     @Test

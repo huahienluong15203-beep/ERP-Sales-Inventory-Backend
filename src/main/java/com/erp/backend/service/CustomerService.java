@@ -57,6 +57,16 @@ public class CustomerService {
     public PageResponse<CustomerResponse> search(String keyword, Long regionId, CustomerGroup customerGroup,
                                                  Long salesRepId, String status, int page, int size,
                                                  UserDetailsImpl actor) {
+        return search(keyword, regionId, customerGroup, salesRepId, status, null, page, size, actor);
+    }
+
+    /**
+     * S3-07: thêm bộ lọc khoá giao dịch (true/false/null) để lọc trên toàn bộ DB thay vì chỉ trang đang xem.
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<CustomerResponse> search(String keyword, Long regionId, CustomerGroup customerGroup,
+                                                 Long salesRepId, String status, Boolean transactionLocked,
+                                                 int page, int size, UserDetailsImpl actor) {
         Long restrictedId = CustomerAccess.restrictedSalesRepId(actor);
         Long effectiveSalesRepId = restrictedId != null ? restrictedId : salesRepId;
 
@@ -64,7 +74,8 @@ public class CustomerService {
         int safeSize = size <= 0 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
 
         Page<Customer> result = customerRepository.findAll(
-                CustomerSpecifications.search(keyword, regionId, customerGroup, effectiveSalesRepId, status),
+                CustomerSpecifications.search(keyword, regionId, customerGroup, effectiveSalesRepId, status,
+                        transactionLocked),
                 PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by("id").descending())));
 
         return PageResponse.of(result.map(this::toResponse));
