@@ -10,7 +10,6 @@ import com.erp.backend.security.JwtUtils;
 import com.erp.backend.service.AuthService;
 import com.erp.backend.service.EmailService;
 import com.erp.backend.service.ForgotPasswordRateLimiter;
-import com.erp.backend.service.ForgotPasswordFailureLimiter;
 import com.erp.backend.exception.TooManyRequestsException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -51,9 +50,6 @@ class AuthServiceForgotPasswordTest {
     @Mock
     private ForgotPasswordRateLimiter forgotPasswordRateLimiter;
 
-    @Mock
-    private ForgotPasswordFailureLimiter forgotPasswordFailureLimiter;
-
     @InjectMocks
     private AuthService authService;
 
@@ -88,17 +84,31 @@ class AuthServiceForgotPasswordTest {
     }
 
     @Test
-    @DisplayName("Email chưa có trong hệ thống -> báo rõ để người dùng điều chỉnh, không gửi mail")
-    void testForgotPassword_EmailNotFound_Rejected() {
+    @DisplayName("S1-03: Email chưa có trong hệ thống -> CÙNG thông báo như email có thật, không sinh token, không gửi mail")
+    void testForgotPassword_EmailNotFound_SameMessage() {
         when(userRepository.findByEmailIgnoreCase("unknown@erp.com")).thenReturn(Optional.empty());
-        when(forgotPasswordFailureLimiter.recordFailure("1.2.3.4")).thenReturn(4);
 
-        RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> authService.forgotPassword(request("unknown@erp.com"), "1.2.3.4"));
+        String message = authService.forgotPassword(request("unknown@erp.com"), "1.2.3.4");
 
-        assertTrue(ex.getMessage().contains("chưa được đăng ký"));
+        assertEquals(AuthService.FORGOT_PASSWORD_MESSAGE, message);
+        assertFalse(message.contains("chưa được đăng ký"));
         verify(emailService, never()).sendPasswordResetEmail(anyString(), anyString());
         verify(tokenRepository, never()).save(any());
+        // vẫn ghi nhận lượt gửi để chống spam giống hệt email có thật
+        verify(forgotPasswordRateLimiter).recordSent("unknown@erp.com");
+    }
+
+    @Test
+    @DisplayName("S1-03: Thông báo cho email có thật và email không tồn tại giống hệt nhau")
+    void testForgotPassword_KnownAndUnknown_IdenticalResponse() {
+        User user = User.builder().id(1L).email("user@erp.com").build();
+        when(userRepository.findByEmailIgnoreCase("user@erp.com")).thenReturn(Optional.of(user));
+        when(userRepository.findByEmailIgnoreCase("ghost@erp.com")).thenReturn(Optional.empty());
+
+        String known = authService.forgotPassword(request("user@erp.com"));
+        String unknown = authService.forgotPassword(request("ghost@erp.com"));
+
+        assertEquals(known, unknown);
     }
 
     @Test
@@ -109,47 +119,16 @@ class AuthServiceForgotPasswordTest {
 
         String message = authService.forgotPassword(request(" User@erp.com "));
 
-        assertTrue(message.contains("Đã gửi liên kết"));
+        assertEquals(AuthService.FORGOT_PASSWORD_MESSAGE, message);
         verify(tokenRepository, times(1)).deleteByUser(user);
         verify(tokenRepository, times(1)).save(any(PasswordResetToken.class));
-        verify(forgotPasswordRateLimiter).recordSent("User@erp.com");
-        verify(forgotPasswordFailureLimiter).reset(null); // nhập đúng -> xoá bộ đếm sai
+        verify(forgotPasswordRateLimiter, times(1)).recordSent("User@erp.com");
         verify(emailService, times(1)).sendPasswordResetEmail(eq("user@erp.com"), contains("token="));
-    }
-
-    @Test
-    @DisplayName("Nhập email chưa đăng ký lần thứ 5 -> khoá 1 phút (429)")
-    void testForgotPassword_FifthWrongEmail_Locked() {
-        when(userRepository.findByEmailIgnoreCase("unknown@erp.com")).thenReturn(Optional.empty());
-        when(forgotPasswordFailureLimiter.recordFailure("1.2.3.4")).thenReturn(0);
-        when(forgotPasswordFailureLimiter.secondsLocked("1.2.3.4")).thenReturn(0L, 60L);
-
-        TooManyRequestsException ex = assertThrows(TooManyRequestsException.class,
-                () -> authService.forgotPassword(request("unknown@erp.com"), "1.2.3.4"));
-
-        assertEquals(60L, ex.getRetryAfterSeconds());
-        assertTrue(ex.getMessage().contains("1 phút"));
-        verify(emailService, never()).sendPasswordResetEmail(anyString(), anyString());
-    }
-
-    @Test
-    @DisplayName("Đang bị khoá do nhập sai nhiều lần -> từ chối ngay, không tra DB, không gửi mail")
-    void testForgotPassword_WhileLocked_Rejected() {
-        when(forgotPasswordFailureLimiter.secondsLocked("1.2.3.4")).thenReturn(120L);
-
-        TooManyRequestsException ex = assertThrows(TooManyRequestsException.class,
-                () -> authService.forgotPassword(request("user@erp.com"), "1.2.3.4"));
-
-        assertEquals(120L, ex.getRetryAfterSeconds());
-        assertTrue(ex.getMessage().contains("2 phút"));
-        verifyNoInteractions(userRepository, emailService);
     }
 
     @Test
     @DisplayName("Chống spam: yêu cầu lại quá nhanh -> 429, không sinh token, không gửi mail")
     void testForgotPassword_TooSoon_Throttled() {
-        User user = User.builder().id(1L).email("user@erp.com").build();
-        when(userRepository.findByEmailIgnoreCase("user@erp.com")).thenReturn(Optional.of(user));
         when(forgotPasswordRateLimiter.secondsUntilAllowed("user@erp.com")).thenReturn(45L);
 
         TooManyRequestsException ex = assertThrows(TooManyRequestsException.class,
@@ -160,6 +139,7 @@ class AuthServiceForgotPasswordTest {
         verify(tokenRepository, never()).save(any());
         verify(emailService, never()).sendPasswordResetEmail(anyString(), anyString());
         verify(forgotPasswordRateLimiter, never()).recordSent(anyString());
+        verifyNoInteractions(userRepository); // bị chặn trước khi tra DB -> không lộ email có tồn tại hay không
     }
 
     @Test
