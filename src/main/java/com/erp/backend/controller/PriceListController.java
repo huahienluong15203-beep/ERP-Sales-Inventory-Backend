@@ -1,6 +1,7 @@
 package com.erp.backend.controller;
 
 import com.erp.backend.dto.pricing.*;
+import com.erp.backend.dto.user.PageResponse;
 import com.erp.backend.security.UserDetailsImpl;
 import com.erp.backend.service.PriceListService;
 import lombok.RequiredArgsConstructor;
@@ -27,12 +28,20 @@ public class PriceListController {
 
     private final PriceListService priceListService;
 
-    /** Vd: ?customerGroup=DEALER_LEVEL_1&status=ACTIVE&keyword=thang10 */
+    /** Lọc + phân trang phía server. Vd: ?customerGroup=DEALER_LEVEL_1&status=ACTIVE&keyword=thang10&page=0&size=20 */
     @GetMapping
-    public List<PriceListResponse> search(@RequestParam(required = false) String customerGroup,
-                                          @RequestParam(required = false) String status,
-                                          @RequestParam(required = false) String keyword) {
-        return priceListService.search(customerGroup, status, keyword);
+    public PageResponse<PriceListResponse> search(@RequestParam(required = false) String customerGroup,
+                                                  @RequestParam(required = false) String status,
+                                                  @RequestParam(required = false) String keyword,
+                                                  @RequestParam(defaultValue = "0") int page,
+                                                  @RequestParam(defaultValue = "20") int size) {
+        return priceListService.search(customerGroup, status, keyword, page, size);
+    }
+
+    /** Số liệu cho các thẻ thống kê đầu trang (không phụ thuộc trang/bộ lọc). */
+    @GetMapping("/stats")
+    public PriceListStatsResponse stats() {
+        return priceListService.stats();
     }
 
     /** Giá đang áp dụng. Vd: ?customerGroup=DEALER_LEVEL_1&productSku=SP-COCA-330&date=2026-10-15 */

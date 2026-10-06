@@ -1,5 +1,6 @@
 package com.erp.backend.controller;
 
+import com.erp.backend.dto.user.PageResponse;
 import com.erp.backend.dto.discount.*;
 import com.erp.backend.security.UserDetailsImpl;
 import com.erp.backend.service.DiscountPolicyService;
@@ -25,11 +26,23 @@ public class DiscountPolicyController {
 
     private final DiscountPolicyService discountPolicyService;
 
-    /** Vd: ?status=ACTIVE&keyword=coca */
+    /**
+     * Lọc + phân trang phía server. Vd: ?status=ACTIVE&scope=CATEGORY&keyword=coca&page=0&size=20
+     * status: ACTIVE (đang áp dụng) | EXPIRED (hết hạn) | INACTIVE (đã ngừng); scope: PRODUCT | CATEGORY
+     */
     @GetMapping
-    public List<DiscountPolicyResponse> search(@RequestParam(required = false) String status,
-                                               @RequestParam(required = false) String keyword) {
-        return discountPolicyService.search(status, keyword);
+    public PageResponse<DiscountPolicyResponse> search(@RequestParam(required = false) String status,
+                                                       @RequestParam(required = false) String scope,
+                                                       @RequestParam(required = false) String keyword,
+                                                       @RequestParam(defaultValue = "0") int page,
+                                                       @RequestParam(defaultValue = "20") int size) {
+        return discountPolicyService.search(status, scope, keyword, page, size);
+    }
+
+    /** Số liệu cho các thẻ thống kê đầu trang (không phụ thuộc trang/bộ lọc). */
+    @GetMapping("/stats")
+    public DiscountPolicyStatsResponse stats() {
+        return discountPolicyService.stats();
     }
 
     @GetMapping("/{id}")

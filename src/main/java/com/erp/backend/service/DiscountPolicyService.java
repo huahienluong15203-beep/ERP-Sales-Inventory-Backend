@@ -5,6 +5,9 @@ import com.erp.backend.dto.discount.DiscountCalculationResponse.Candidate;
 import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.DiscountPolicyRepository;
+import com.erp.backend.repository.DiscountPolicySpecifications;
+import com.erp.backend.dto.user.PageResponse;
+import org.springframework.data.domain.PageRequest;
 import com.erp.backend.repository.ProductCategoryRepository;
 import com.erp.backend.repository.ProductRepository;
 import com.erp.backend.security.UserDetailsImpl;
@@ -41,6 +44,8 @@ public class DiscountPolicyService {
     static final String ACTIVE = "ACTIVE";
     static final String INACTIVE = "INACTIVE";
     static final ZoneId VN_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
+    static final int DEFAULT_PAGE_SIZE = 20;
+    static final int MAX_PAGE_SIZE = 100;
     private static final Pattern CODE_PATTERN = Pattern.compile("^[A-Z0-9][A-Z0-9_-]{1,39}$");
     private static final BigDecimal HUNDRED = new BigDecimal("100");
 
@@ -52,14 +57,31 @@ public class DiscountPolicyService {
     // ======================= XEM =======================
 
     @Transactional(readOnly = true)
-    public List<DiscountPolicyResponse> search(String status, String keyword) {
-        String st = StringUtils.hasText(status) ? status.trim().toUpperCase() : null;
-        String kw = StringUtils.hasText(keyword) ? keyword.trim().toLowerCase() : null;
-        return policyRepository.findAll(Sort.by("startDate").descending().and(Sort.by("id").descending())).stream()
-                .filter(p -> st == null || st.equals(p.getStatus()))
-                .filter(p -> kw == null || p.getCode().toLowerCase().contains(kw) || p.getName().toLowerCase().contains(kw))
-                .map(this::toResponse)
-                .toList();
+    public PageResponse<DiscountPolicyResponse> search(String status, String scope, String keyword, int page, int size) {
+        if (StringUtils.hasText(status) && !List.of("ACTIVE", "INACTIVE", "EXPIRED").contains(status.trim().toUpperCase())) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_STATUS",
+                    "Trạng thái lọc chỉ nhận ACTIVE, INACTIVE hoặc EXPIRED", "status");
+        }
+        if (StringUtils.hasText(scope) && !List.of(DiscountPolicy.SCOPE_PRODUCT, DiscountPolicy.SCOPE_CATEGORY).contains(scope.trim().toUpperCase())) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_SCOPE",
+                    "Phạm vi lọc chỉ nhận PRODUCT hoặc CATEGORY", "scope");
+        }
+        int safePage = Math.max(page, 0);
+        int safeSize = size <= 0 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
+        return PageResponse.of(policyRepository.findAll(
+                DiscountPolicySpecifications.filter(status, scope, keyword, LocalDate.now(VN_ZONE)),
+                PageRequest.of(safePage, safeSize, Sort.by("startDate").descending().and(Sort.by("id").descending())))
+                .map(this::toResponse));
+    }
+
+    /** Số liệu cho các thẻ thống kê (toàn bộ dữ liệu, không phụ thuộc trang đang xem). */
+    @Transactional(readOnly = true)
+    public DiscountPolicyStatsResponse stats() {
+        return new DiscountPolicyStatsResponse(
+                policyRepository.count(),
+                policyRepository.countActive(LocalDate.now(VN_ZONE)),
+                policyRepository.countByScope(DiscountPolicy.SCOPE_PRODUCT),
+                policyRepository.countByScope(DiscountPolicy.SCOPE_CATEGORY));
     }
 
     @Transactional(readOnly = true)
