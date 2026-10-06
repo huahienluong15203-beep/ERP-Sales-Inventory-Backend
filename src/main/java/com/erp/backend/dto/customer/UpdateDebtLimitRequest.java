@@ -22,6 +22,7 @@ public class UpdateDebtLimitRequest {
 
     @NotNull(message = "Vui lòng nhập hạn mức tiền tối đa")
     @DecimalMin(value = "0", message = "Hạn mức tiền tối đa không được nhỏ hơn 0")
+    @jakarta.validation.constraints.Digits(integer = 13, fraction = 2, message = "Hạn mức tiền tối đa không được vượt quá 13 chữ số")
     private BigDecimal creditLimit;
 
     @NotNull(message = "Vui lòng nhập số ngày nợ tối đa")

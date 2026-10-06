@@ -110,10 +110,34 @@ public class ProductManagementController {
         int safeSize = size <= 0 ? 20 : Math.min(size, 100);
 
         Sort sortOrder = Sort.by(Sort.Direction.DESC, "id");
-        if (sort.contains(",")) {
-            String[] parts = sort.split(",");
-            Sort.Direction direction = parts[1].equalsIgnoreCase("asc") ? Sort.Direction.ASC : Sort.Direction.DESC;
-            sortOrder = Sort.by(direction, parts[0]);
+        if (sort != null && !sort.isBlank()) {
+            String[] parts = sort.split(",", -1);
+            if (parts.length != 2 || parts[0].isBlank() || parts[1].isBlank()) {
+                throw com.erp.backend.exception.BusinessException.badRequest("INVALID_SORT", "Tham số sắp xếp không hợp lệ (định dạng đúng: cot,chieu)");
+            }
+            String field = parts[0].trim();
+            String dirStr = parts[1].trim().toLowerCase();
+            if (!dirStr.equals("asc") && !dirStr.equals("desc")) {
+                throw com.erp.backend.exception.BusinessException.badRequest("INVALID_SORT", "Chiều sắp xếp không hợp lệ (chỉ chấp nhận asc hoặc desc)");
+            }
+
+            java.util.Set<String> allowedFields = java.util.Set.of("id", "name", "sku", "category", "baseUnit", "packaging", "costPrice", "barcode", "status", "createdAt", "updatedAt");
+            if (!allowedFields.contains(field)) {
+                throw com.erp.backend.exception.BusinessException.badRequest("INVALID_SORT_FIELD", "Cột sắp xếp không hợp lệ: " + field);
+            }
+
+            if ("costPrice".equals(field)) {
+                boolean canManageCost = actor != null && actor.getAuthorities().stream()
+                        .anyMatch(a -> a.getAuthority().equals("ROLE_SALES_MANAGER") || a.getAuthority().equals("ROLE_ADMIN"));
+                if (!canManageCost) {
+                    // S205-01: Bỏ qua sắp xếp theo costPrice cho nhân viên không có quyền xem giá vốn, áp dụng mặc định id desc
+                    field = "id";
+                    dirStr = "desc";
+                }
+            }
+
+            Sort.Direction direction = dirStr.equals("asc") ? Sort.Direction.ASC : Sort.Direction.DESC;
+            sortOrder = Sort.by(direction, field);
         }
 
         PageResponse<ProductResponse> result = productService.searchProducts(

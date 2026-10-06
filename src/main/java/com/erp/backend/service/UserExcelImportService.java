@@ -473,9 +473,9 @@ public class UserExcelImportService {
                         .build());
             }
 
-        } catch (IOException e) {
+        } catch (Exception e) {
             log.error("Lỗi khi đọc file Excel", e);
-            throw BusinessException.badRequest("PARSE_ERROR", "Không thể đọc nội dung file Excel: " + e.getMessage());
+            throw BusinessException.badRequest("INVALID_EXCEL_FORMAT", "File không đúng định dạng Excel (.xlsx) hoặc bị hư hỏng: " + e.getMessage());
         }
 
         return result;

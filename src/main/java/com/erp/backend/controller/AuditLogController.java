@@ -57,11 +57,12 @@ public class AuditLogController {
     }
 
     /**
-     * Ghi nhận một bản ghi nhật ký kiểm toán.
+     * S204-01: Chặn client tự tạo hoặc mạo danh bản ghi nhật ký kiểm toán.
+     * Nhật ký kiểm toán chỉ được sinh tự động từ hệ thống qua Business Services & Interceptors.
      */
     @PostMapping
     public AuditLogResponse record(@RequestBody CreateAuditLogEntry entry) {
-        return auditLogService.toResponse(auditLogService.record(entry));
+        throw com.erp.backend.exception.BusinessException.forbidden("ACCESS_DENIED", "Không được phép tự tạo hoặc can thiệp nhật ký kiểm toán hệ thống.");
     }
 
     /**
