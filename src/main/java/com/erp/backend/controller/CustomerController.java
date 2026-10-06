@@ -37,7 +37,7 @@ public class CustomerController {
 
     // ======================= S3-08: TÌM KIẾM / XEM =======================
 
-    /** Vd: ?keyword=minh%20phat&regionId=1&customerGroup=DEALER_LEVEL_1&salesRepId=5&status=ACTIVE&page=0&size=20 */
+    /** Vd: ?keyword=minh%20phat&regionId=1&customerGroup=DEALER_LEVEL_1&salesRepId=5&status=ACTIVE&transactionLocked=true&page=0&size=20 */
     @GetMapping
     public PageResponse<CustomerResponse> search(
             @RequestParam(required = false) String keyword,
@@ -45,10 +45,12 @@ public class CustomerController {
             @RequestParam(required = false) CustomerGroup customerGroup,
             @RequestParam(required = false) Long salesRepId,
             @RequestParam(required = false) String status,
+            @RequestParam(required = false) Boolean transactionLocked,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
             @AuthenticationPrincipal UserDetailsImpl actor) {
-        return customerService.search(keyword, regionId, customerGroup, salesRepId, status, page, size, actor);
+        return customerService.search(keyword, regionId, customerGroup, salesRepId, status, transactionLocked,
+                page, size, actor);
     }
 
     /** Dữ liệu cho ô chọn: nhóm khách hàng, trạng thái, khu vực, nhân viên kinh doanh. */
