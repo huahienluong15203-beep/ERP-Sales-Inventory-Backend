@@ -17,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -555,5 +556,144 @@ class ProductExcelImportServiceTest {
         assertThat(existingProduct.getCategory()).isEqualTo("Có ga");
         assertThat(existingProduct.getProductCategory()).isNotNull();
         assertThat(existingProduct.getProductCategory().getName()).isEqualTo("Có ga");
+    }
+
+    @Test
+    @DisplayName("Row 13: Trùng SKU trong file: Hạ Cấp 3 về Cấp 1 -> Không lỗi dòng, không tạo mới, DB thực sự cập nhật Cấp 1")
+    void executeImport_Row13_DuplicateSkuInFile_DowngradeLevel3ToLevel1_SavesLevel1() throws IOException {
+        // Dòng 1: Cấp 3 (Có ga), Dòng 2: Cấp 1 (Đồ uống)
+        List<List<Object>> rows = List.of(
+                List.of(1, "SP-COCA-330", "Coca lon 330ml", "Lon", "Đồ uống", "Nước giải khát", "Có ga", "Thùng 24", 200000, "893", "ACTIVE", "Dòng 1 cấp 3"),
+                List.of(2, "SP-COCA-330", "Coca lon 330ml", "Lon", "Đồ uống", "", "", "Thùng 24", 210000, "893", "ACTIVE", "Dòng 2 hạ về cấp 1")
+        );
+
+        byte[] excelBytes = createHierarchyTestExcelBytes(rows);
+        MockMultipartFile file = new MockMultipartFile("file", "trung_sku_ha_cap_1.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(productRepository.findExistingSkus(anyCollection())).thenReturn(Set.of());
+        when(productRepository.findBySkuIn(anyCollection())).thenReturn(List.of());
+
+        // 1. Kiểm tra Preview: 0 lỗi, dòng 2 action="UPDATE", levelChanged=true, categoryLevel=1
+        ProductImportPreviewResponse preview = productExcelImportService.previewImport(file);
+        assertThat(preview.getTotalRows()).isEqualTo(2);
+        assertThat(preview.getValidRows()).isEqualTo(2);
+        assertThat(preview.getInvalidRows()).isEqualTo(0);
+
+        ProductImportRowDto row2 = preview.getRows().get(1);
+        assertThat(row2.isValid()).isTrue();
+        assertThat(row2.getAction()).isEqualTo("UPDATE");
+        assertThat(row2.isLevelChanged()).isTrue();
+        assertThat(row2.getCategoryLevel()).isEqualTo(1);
+        assertThat(row2.getCategoryPath()).isEqualTo("Đồ uống");
+
+        // 2. Kiểm tra Execute: successCount=1, errorCount=0
+        ProductImportSummaryResponse summary = productExcelImportService.executeImport(file);
+        assertThat(summary.getSuccessCount()).isEqualTo(1);
+        assertThat(summary.getErrorCount()).isEqualTo(0);
+
+        // 3. Kiểm tra sản phẩm được lưu: cấp cây thực sự là Cấp 1 (level=1)
+        ArgumentCaptor<List<Product>> captor = ArgumentCaptor.forClass(List.class);
+        verify(productRepository, atLeastOnce()).saveAll(captor.capture());
+
+        List<Product> allSaved = captor.getAllValues().stream().flatMap(List::stream).toList();
+        Product saved = allSaved.stream().filter(p -> "SP-COCA-330".equals(p.getSku())).findFirst().orElseThrow();
+        assertThat(saved.getProductCategory()).isNotNull();
+        assertThat(saved.getProductCategory().getLevel()).isEqualTo(1);
+        assertThat(saved.getProductCategory().getName()).isEqualTo("Đồ uống");
+        assertThat(saved.getCategory()).isEqualTo("Đồ uống");
+    }
+
+    @Test
+    @DisplayName("Row 15: Tạo dữ liệu ban đầu ở Cấp 1 lưu đúng level 1, và đổi sang Cấp 3 cập nhật đúng level 3")
+    void executeImport_Row15_ProductInDbLevel1_UpdatesToLevel3() throws IOException {
+        // 1. Tạo dữ liệu ban đầu ở Cấp 1
+        List<List<Object>> rowsInit = List.of(
+                List.of(1, "SP-TIEU-01", "Hạt tiêu đen", "Hộp", "Gia vị", "", "", "Hộp 100g", 50000, "893", "ACTIVE", "Gia vị cấp 1")
+        );
+        byte[] bytesInit = createHierarchyTestExcelBytes(rowsInit);
+        MockMultipartFile fileInit = new MockMultipartFile("file", "tao_cap_1.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", bytesInit);
+
+        when(productRepository.findExistingSkus(anyCollection())).thenReturn(Set.of());
+        when(productRepository.findBySkuIn(anyCollection())).thenReturn(List.of());
+
+        ProductImportSummaryResponse summaryInit = productExcelImportService.executeImport(fileInit);
+        assertThat(summaryInit.getSuccessCount()).isEqualTo(1);
+
+        ArgumentCaptor<List<Product>> captorInit = ArgumentCaptor.forClass(List.class);
+        verify(productRepository, atLeastOnce()).saveAll(captorInit.capture());
+
+        Product initialProduct = captorInit.getAllValues().stream().flatMap(List::stream)
+                .filter(p -> "SP-TIEU-01".equals(p.getSku())).findFirst().orElseThrow();
+        assertThat(initialProduct.getProductCategory()).isNotNull();
+        assertThat(initialProduct.getProductCategory().getLevel()).isEqualTo(1);
+        assertThat(initialProduct.getProductCategory().getName()).isEqualTo("Gia vị");
+
+        // 2. Sản phẩm ĐÃ CÓ trong DB ở Cấp 1 -> Import file đổi thành Cấp 3 (Ghi đè, không tạo mới, DB cập nhật Cấp 3)
+        List<List<Object>> rowsUpgrade = List.of(
+                List.of(1, "SP-TIEU-01", "Hạt tiêu đen xay", "Hộp", "Gia vị", "Hạt tiêu", "Tiêu đen xay", "Hộp 100g", 55000, "893", "ACTIVE", "Đổi sang cấp 3")
+        );
+        byte[] bytesUpgrade = createHierarchyTestExcelBytes(rowsUpgrade);
+        MockMultipartFile fileUpgrade = new MockMultipartFile("file", "doi_sang_cap_3.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", bytesUpgrade);
+
+        when(productRepository.findExistingSkus(anyCollection())).thenReturn(Set.of("SP-TIEU-01"));
+        when(productRepository.findBySkuIn(anyCollection())).thenReturn(List.of(initialProduct));
+
+        ProductImportSummaryResponse summaryUpgrade = productExcelImportService.executeImport(fileUpgrade);
+        assertThat(summaryUpgrade.getSuccessCount()).isEqualTo(1);
+        assertThat(summaryUpgrade.getUpdatedCount()).isEqualTo(1);
+        assertThat(summaryUpgrade.getCreatedCount()).isEqualTo(0);
+        assertThat(summaryUpgrade.getErrorCount()).isEqualTo(0);
+
+        // CSDL thực sự chuyển sang Cấp 3 (level=3)
+        assertThat(initialProduct.getProductCategory()).isNotNull();
+        assertThat(initialProduct.getProductCategory().getLevel()).isEqualTo(3);
+        assertThat(initialProduct.getProductCategory().getName()).isEqualTo("Tiêu đen xay");
+        assertThat(initialProduct.getCategory()).isEqualTo("Tiêu đen xay");
+    }
+
+    @Test
+    @DisplayName("Row 16: Sản phẩm ĐÃ CÓ trong DB ở Cấp 3 -> Import file hạ về Cấp 1 -> Ghi đè, DB cập nhật Cấp 1")
+    void executeImport_Row16_ExistingProductLevel3_DowngradesToLevel1_SavesLevel1() throws IOException {
+        ProductCategory catL1 = ProductCategory.builder().id(10L).name("Gia vị").level(1).build();
+        ProductCategory catL2 = ProductCategory.builder().id(20L).name("Hạt tiêu").level(2).parent(catL1).build();
+        ProductCategory catL3 = ProductCategory.builder().id(30L).name("Tiêu đen xay").level(3).parent(catL2).build();
+
+        Product existingProduct = Product.builder()
+                .id(88L)
+                .sku("SP-TIEU-01")
+                .name("Tiêu đen xay cũ")
+                .baseUnit("Hộp")
+                .category("Tiêu đen xay")
+                .productCategory(catL3)
+                .costPrice(BigDecimal.valueOf(50000))
+                .status("ACTIVE")
+                .build();
+
+        // Import file hạ về Cấp 1: Ngành hàng="Gia vị", Nhóm hàng="", Phân nhóm=""
+        List<List<Object>> rows = List.of(
+                List.of(1, "SP-TIEU-01", "Hạt tiêu Gia vị Cấp 1", "Hộp", "Gia vị", "", "", "Hộp 100g", 52000, "893", "ACTIVE", "Hạ về cấp 1")
+        );
+        byte[] excelBytes = createHierarchyTestExcelBytes(rows);
+        MockMultipartFile file = new MockMultipartFile("file", "ha_ve_cap_1.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(productRepository.findExistingSkus(anyCollection())).thenReturn(Set.of("SP-TIEU-01"));
+        when(productRepository.findBySkuIn(anyCollection())).thenReturn(List.of(existingProduct));
+
+        ProductImportSummaryResponse summary = productExcelImportService.executeImport(file);
+
+        assertThat(summary.getSuccessCount()).isEqualTo(1);
+        assertThat(summary.getUpdatedCount()).isEqualTo(1);
+        assertThat(summary.getCreatedCount()).isEqualTo(0);
+        assertThat(summary.getErrorCount()).isEqualTo(0);
+
+        // Trong CSDL sản phẩm được gán vào Cấp 1 (level=1)
+        assertThat(existingProduct.getProductCategory()).isNotNull();
+        assertThat(existingProduct.getProductCategory().getLevel()).isEqualTo(1);
+        assertThat(existingProduct.getProductCategory().getName()).isEqualTo("Gia vị");
+        assertThat(existingProduct.getCategory()).isEqualTo("Gia vị");
     }
 }
