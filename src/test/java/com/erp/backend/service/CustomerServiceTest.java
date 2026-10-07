@@ -4,6 +4,7 @@ import com.erp.backend.dto.customer.*;
 import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.CustomerAssignmentHistoryRepository;
+import com.erp.backend.repository.CustomerDeliveryAddressRepository;
 import com.erp.backend.repository.CustomerRepository;
 import com.erp.backend.repository.RegionRepository;
 import com.erp.backend.repository.UserRepository;
@@ -35,6 +36,7 @@ class CustomerServiceTest {
     @Mock private RegionRepository regionRepository;
     @Mock private UserRepository userRepository;
     @Mock private AuditLogService auditLogService;
+    @Mock private CustomerDeliveryAddressRepository addressRepository;
 
     @InjectMocks private CustomerService service;
 
@@ -48,6 +50,9 @@ class CustomerServiceTest {
         lenient().when(regionRepository.findById(1L)).thenReturn(Optional.of(region(1, "ACTIVE")));
         lenient().when(userRepository.getReferenceById(anyLong()))
                 .thenAnswer(inv -> user((Long) inv.getArgument(0), "ACTIVE", RoleName.ROLE_ADMIN));
+        lenient().when(addressRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        lenient().when(addressRepository.findByCustomer_IdAndStatusOrderByDefaultAddressDescIdAsc(any(), any()))
+                .thenReturn(List.of());
     }
 
     private CreateCustomerRequest newRequest(String code) {
