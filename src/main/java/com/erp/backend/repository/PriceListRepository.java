@@ -32,6 +32,12 @@ public interface PriceListRepository extends JpaRepository<PriceList, Long>, Jpa
             + "ORDER BY p.startDate DESC, p.version DESC, p.id DESC")
     java.util.List<PriceList> findAllEffective(@Param("date") java.time.LocalDate date);
 
+    @Query("SELECT p FROM PriceList p WHERE p.status = 'ACTIVE' AND p.customerGroup = :customerGroup "
+            + "AND p.startDate <= :date AND (p.endDate IS NULL OR p.endDate >= :date) "
+            + "ORDER BY p.startDate DESC, p.version DESC, p.id DESC")
+    java.util.List<PriceList> findEffectiveByCustomerGroup(@Param("customerGroup") com.erp.backend.entity.CustomerGroup customerGroup,
+                                                          @Param("date") java.time.LocalDate date);
+
     /** Khoá dòng bảng giá khi sửa để 2 người sửa cùng lúc không ghi đè nhau. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT p FROM PriceList p WHERE p.id = :id")

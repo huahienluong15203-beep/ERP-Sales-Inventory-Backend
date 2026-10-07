@@ -25,4 +25,17 @@ public interface PriceListItemRepository extends JpaRepository<PriceListItem, Lo
                                       @Param("sku") String sku,
                                       @Param("date") LocalDate date,
                                       Pageable pageable);
+
+    /**
+     * Lấy các sản phẩm trong bảng giá, kèm lọc nhanh theo mã SKU hoặc tên sản phẩm.
+     */
+    @Query("SELECT i FROM PriceListItem i JOIN FETCH i.product prod "
+            + "WHERE i.priceList.id = :priceListId "
+            + "AND (:keyword IS NULL OR :keyword = '' "
+            + "     OR UPPER(i.productSku) LIKE UPPER(CONCAT('%', :keyword, '%')) "
+            + "     OR UPPER(i.productName) LIKE UPPER(CONCAT('%', :keyword, '%'))) "
+            + "ORDER BY i.productSku ASC")
+    List<PriceListItem> findByPriceListIdAndKeyword(@Param("priceListId") Long priceListId,
+                                                   @Param("keyword") String keyword,
+                                                   Pageable pageable);
 }
