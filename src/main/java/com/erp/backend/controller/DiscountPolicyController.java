@@ -72,6 +72,14 @@ public class DiscountPolicyController {
         return discountPolicyService.changeStatus(id, status, actor);
     }
 
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER')")
+    public ResponseEntity<Void> delete(@PathVariable Long id,
+                                       @AuthenticationPrincipal UserDetailsImpl actor) {
+        discountPolicyService.delete(id, actor);
+        return ResponseEntity.noContent().build();
+    }
+
     /** Tính chiết khấu cho 1 dòng hàng. Body: {"productSku":"SP-COCA","quantity":120,"unitPrice":10000} */
     @PostMapping("/calculate")
     public DiscountCalculationResponse calculate(@RequestBody DiscountCalculationRequest request) {

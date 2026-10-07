@@ -38,6 +38,7 @@ class OrderDraftServiceTest {
     @Mock private CustomerDeliveryAddressRepository addressRepository;
     @Mock private ProductRepository productRepository;
     @Mock private PriceListItemRepository priceItemRepository;
+    @Mock private PriceListRepository priceListRepository;
     @Mock private DiscountPolicyService discountPolicyService;
     @Mock private CustomerService customerService;
 
@@ -66,9 +67,9 @@ class OrderDraftServiceTest {
         lenient().when(priceItemRepository.findEffective(eq(CustomerGroup.DEALER_LEVEL_1), eq("SP-COCA"), any(), any(Pageable.class)))
                 .thenReturn(List.of(PriceListItem.builder().priceList(priceList).product(coca).productSku("SP-COCA")
                         .productName("Coca lon").price(new BigDecimal("10000")).floorPrice(new BigDecimal("9000")).build()));
-        lenient().when(discountPolicyService.calculate(any(Product.class), any(), any(), any())).thenAnswer(inv -> {
-            BigDecimal qty = inv.getArgument(1);
-            BigDecimal price = inv.getArgument(2);
+        lenient().when(discountPolicyService.calculate(any(), any(Product.class), any(), any(), any())).thenAnswer(inv -> {
+            BigDecimal qty = inv.getArgument(2);
+            BigDecimal price = inv.getArgument(3);
             BigDecimal gross = price.multiply(qty).setScale(2, RoundingMode.HALF_UP);
             // giả lập: từ 96 lon giảm 5%
             BigDecimal discount = qty.compareTo(new BigDecimal("96")) >= 0
@@ -288,6 +289,8 @@ class OrderDraftServiceTest {
     void productOptions() {
         when(productRepository.findByNameContainingIgnoreCaseOrSkuContainingIgnoreCase(eq("coca"), eq("coca"), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(coca)));
+        when(productRepository.findByNameContainingIgnoreCaseOrSkuContainingIgnoreCase(eq("c"), eq("c"), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
 
         List<ProductOptionResponse> res = service.productOptions(6L, "coca", rep);
 

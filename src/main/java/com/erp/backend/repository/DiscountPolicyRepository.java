@@ -22,7 +22,7 @@ public interface DiscountPolicyRepository extends JpaRepository<DiscountPolicy, 
 
     boolean existsByCodeIgnoreCaseAndIdNot(String code, Long id);
 
-    /** Chính sách đang hiệu lực áp cho một sản phẩm hoặc cho một trong các nhóm hàng chứa sản phẩm đó. */
+    /** Chính sách đang hiệu lực áp cho một sản phẩm hoặc cho một trong các nhóm hàng chứa sản phẩm đó (cho tất cả các nhóm). */
     @Query("SELECT DISTINCT p FROM DiscountPolicy p LEFT JOIN FETCH p.tiers "
             + "WHERE p.status = 'ACTIVE' AND p.startDate <= :date AND (p.endDate IS NULL OR p.endDate >= :date) "
             + "AND ((p.scope = 'PRODUCT' AND p.product.id = :productId) "
@@ -30,4 +30,15 @@ public interface DiscountPolicyRepository extends JpaRepository<DiscountPolicy, 
     List<DiscountPolicy> findEffective(@Param("productId") Long productId,
                                        @Param("categoryIds") Collection<Long> categoryIds,
                                        @Param("date") LocalDate date);
+
+    /** Chính sách đang hiệu lực áp cho nhóm đại lý cụ thể hoặc áp dụng chung (customerGroup IS NULL). */
+    @Query("SELECT DISTINCT p FROM DiscountPolicy p LEFT JOIN FETCH p.tiers "
+            + "WHERE p.status = 'ACTIVE' AND p.startDate <= :date AND (p.endDate IS NULL OR p.endDate >= :date) "
+            + "AND (p.customerGroup IS NULL OR p.customerGroup = :customerGroup) "
+            + "AND ((p.scope = 'PRODUCT' AND p.product.id = :productId) "
+            + "OR (p.scope = 'CATEGORY' AND p.category.id IN :categoryIds))")
+    List<DiscountPolicy> findEffectiveForGroup(@Param("productId") Long productId,
+                                               @Param("categoryIds") Collection<Long> categoryIds,
+                                               @Param("customerGroup") com.erp.backend.entity.CustomerGroup customerGroup,
+                                               @Param("date") LocalDate date);
 }

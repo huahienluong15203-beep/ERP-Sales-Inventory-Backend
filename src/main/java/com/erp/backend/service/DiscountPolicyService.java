@@ -139,6 +139,14 @@ public class DiscountPolicyService {
         return toResponse(saved);
     }
 
+    @Transactional
+    public void delete(Long id, UserDetailsImpl actor) {
+        DiscountPolicy policy = findPolicy(id);
+        String before = summary(policy);
+        audit("DELETE_DISCOUNT_POLICY", policy, before, null, actor);
+        policyRepository.delete(policy);
+    }
+
     // ======================= TÍNH CHIẾT KHẤU =======================
 
     @Transactional(readOnly = true)
@@ -150,14 +158,22 @@ public class DiscountPolicyService {
         if (req.getUnitPrice() == null || req.getUnitPrice().compareTo(BigDecimal.ZERO) < 0) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_UNIT_PRICE", "Đơn giá không được để trống hoặc âm", "unitPrice");
         }
-        return calculate(product, req.getQuantity(), req.getUnitPrice(),
+        CustomerGroup group = parseCustomerGroup(req.getCustomerGroup());
+        return calculate(group, product, req.getQuantity(), req.getUnitPrice(),
                 req.getDate() != null ? req.getDate() : LocalDate.now(VN_ZONE));
     }
 
-    /** Dùng lại khi khởi tạo đơn hàng (S3-09). */
     @Transactional(readOnly = true)
     public DiscountCalculationResponse calculate(Product product, BigDecimal quantity, BigDecimal unitPrice, LocalDate date) {
-        List<DiscountPolicy> policies = policyRepository.findEffective(product.getId(), categoryAncestors(product), date);
+        return calculate(null, product, quantity, unitPrice, date);
+    }
+
+    /** Dùng lại khi khởi tạo đơn hàng (S3-09) và tra cứu chiết khấu. */
+    @Transactional(readOnly = true)
+    public DiscountCalculationResponse calculate(CustomerGroup customerGroup, Product product, BigDecimal quantity, BigDecimal unitPrice, LocalDate date) {
+        List<DiscountPolicy> policies = (customerGroup != null)
+                ? policyRepository.findEffectiveForGroup(product.getId(), categoryAncestors(product), customerGroup, date)
+                : policyRepository.findEffective(product.getId(), categoryAncestors(product), date);
 
         List<Candidate> candidates = new ArrayList<>();
         for (DiscountPolicy p : policies) {
@@ -171,19 +187,23 @@ public class DiscountPolicyService {
                     ? unitPrice.multiply(tier.get().getDiscountValue()).divide(HUNDRED, 2, RoundingMode.HALF_UP)
                     : tier.get().getDiscountValue().min(unitPrice);
             BigDecimal amount = perUnit.multiply(quantity).setScale(2, RoundingMode.HALF_UP);
-            candidates.add(new Candidate(p.getId(), p.getCode(), p.getName(), p.getScope(), p.getDiscountType(),
+            candidates.add(new Candidate(p.getId(), p.getCode(), p.getName(), p.getScope(),
+                    p.getCustomerGroup() != null ? p.getCustomerGroup().name() : null,
+                    p.getDiscountType(),
                     tier.get().getMinQuantity(), tier.get().getDiscountValue(), perUnit, amount));
         }
 
-        candidates.sort(Comparator.comparing(Candidate::discountAmount).reversed()
+        // Bỏ quy tắc có lợi nhất cho khách hàng: ưu tiên chính sách nhóm cụ thể > tất cả nhóm, theo SKU > nhóm hàng, ID mới nhất
+        candidates.sort(Comparator
+                .comparing((Candidate c) -> c.customerGroup() != null ? 0 : 1)
                 .thenComparing(c -> DiscountPolicy.SCOPE_PRODUCT.equals(c.scope()) ? 0 : 1)
-                .thenComparing(Candidate::policyId));
-        Candidate best = candidates.isEmpty() ? null : candidates.get(0);
+                .thenComparing(Candidate::policyId, Comparator.reverseOrder()));
+        Candidate chosen = candidates.isEmpty() ? null : candidates.get(0);
 
         BigDecimal gross = unitPrice.multiply(quantity).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal discount = best == null ? BigDecimal.ZERO.setScale(2) : best.discountAmount();
+        BigDecimal discount = chosen == null ? BigDecimal.ZERO.setScale(2) : chosen.discountAmount();
         return new DiscountCalculationResponse(product.getId(), product.getSku(), quantity, unitPrice,
-                gross, discount, gross.subtract(discount), best, candidates);
+                gross, discount, gross.subtract(discount), chosen, candidates);
     }
 
     // ======================= HÀM PHỤ =======================
@@ -230,6 +250,7 @@ public class DiscountPolicyService {
         List<DiscountTierRequest> tiers = validateTiers(req.getTiers(), type);
         policy.setName(req.getName().trim());
         policy.setScope(scope);
+        policy.setCustomerGroup(parseCustomerGroup(req.getCustomerGroup()));
         policy.setDiscountType(type);
         policy.setStartDate(req.getStartDate());
         policy.setEndDate(req.getEndDate());
@@ -242,7 +263,7 @@ public class DiscountPolicyService {
     }
 
     /**
-     * Bậc phải có ít nhất 1; số lượng tối thiểu > 0 và không trùng; mức chiết khấu > 0 (phần trăm tối đa 100);
+     * Bậc phải có ít nhất 1; số lượng tối thiểu > 0 và không trùng; mức chiết khấu từ 0% đến 99%;
      * mua nhiều hơn thì mức chiết khấu không được thấp hơn bậc dưới.
      */
     private List<DiscountTierRequest> validateTiers(List<DiscountTierRequest> tiers, String type) {
@@ -254,13 +275,13 @@ public class DiscountPolicyService {
                 throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_TIER_QUANTITY",
                         "Số lượng tối thiểu của mỗi bậc phải lớn hơn 0", "tiers");
             }
-            if (t.getDiscountValue() == null || t.getDiscountValue().compareTo(BigDecimal.ZERO) <= 0) {
+            if (t.getDiscountValue() == null || t.getDiscountValue().compareTo(BigDecimal.ZERO) < 0) {
                 throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_TIER_VALUE",
-                        "Mức chiết khấu của mỗi bậc phải lớn hơn 0", "tiers");
+                        "Mức chiết khấu của mỗi bậc không được âm", "tiers");
             }
-            if (DiscountPolicy.TYPE_PERCENT.equals(type) && t.getDiscountValue().compareTo(HUNDRED) > 0) {
+            if (DiscountPolicy.TYPE_PERCENT.equals(type) && t.getDiscountValue().compareTo(new BigDecimal("99")) > 0) {
                 throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_TIER_VALUE",
-                        "Chiết khấu phần trăm không được vượt quá 100%", "tiers");
+                        "Chiết khấu phần trăm chỉ được từ 0% đến 99%", "tiers");
             }
             if (t.getMinQuantity().scale() > 4 || t.getDiscountValue().scale() > 2) {
                 throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_TIER_SCALE",
@@ -338,9 +359,23 @@ public class DiscountPolicyService {
                 oldValue, newValue, "Chính sách chiết khấu " + p.getCode(), actor);
     }
 
+    private CustomerGroup parseCustomerGroup(String value) {
+        if (!StringUtils.hasText(value) || "ALL".equalsIgnoreCase(value.trim())) {
+            return null;
+        }
+        try {
+            return CustomerGroup.valueOf(value.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_CUSTOMER_GROUP",
+                    "Nhóm khách hàng không hợp lệ: " + value, "customerGroup");
+        }
+    }
+
     private static String summary(DiscountPolicy p) {
         StringBuilder sb = new StringBuilder();
-        sb.append(p.getName()).append(" | ").append(p.getScope()).append(" | ").append(p.getDiscountType())
+        sb.append(p.getName()).append(" | ").append(p.getScope()).append(" | ")
+                .append(p.getCustomerGroup() != null ? p.getCustomerGroup().getLabel() : "Tất cả nhóm").append(" | ")
+                .append(p.getDiscountType())
                 .append(" | ").append(p.getStartDate()).append(" → ").append(p.getEndDate() != null ? p.getEndDate() : "không thời hạn")
                 .append(" | bậc:");
         p.getTiers().forEach(t -> sb.append(" ≥").append(t.getMinQuantity().stripTrailingZeros().toPlainString())
@@ -351,10 +386,13 @@ public class DiscountPolicyService {
     DiscountPolicyResponse toResponse(DiscountPolicy p) {
         Product product = p.getProduct();
         ProductCategory category = p.getCategory();
+        String groupName = p.getCustomerGroup() != null ? p.getCustomerGroup().name() : "ALL";
+        String groupLabel = p.getCustomerGroup() != null ? p.getCustomerGroup().getLabel() : "Tất cả nhóm đại lý";
         return new DiscountPolicyResponse(p.getId(), p.getCode(), p.getName(), p.getScope(),
                 product != null ? product.getId() : null, product != null ? product.getSku() : null,
                 product != null ? product.getName() : null,
                 category != null ? category.getId() : null, category != null ? category.getName() : null,
+                groupName, groupLabel,
                 p.getDiscountType(), p.getStartDate(), p.getEndDate(), p.getStatus(), p.getNote(),
                 p.getTiers().stream().map(t -> new DiscountTierResponse(t.getId(), t.getMinQuantity(), t.getDiscountValue())).toList(),
                 p.getCreatedAt(), p.getUpdatedAt());

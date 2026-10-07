@@ -20,6 +20,7 @@ public class DiscountPolicyRequest {
     private String productSku;
     private Long categoryId;
     private String discountType;
+    private String customerGroup;
     private LocalDate startDate;
     private LocalDate endDate;
     private String note;
