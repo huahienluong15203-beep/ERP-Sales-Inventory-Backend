@@ -4,7 +4,9 @@ import com.erp.backend.dto.product.ProductImportPreviewResponse;
 import com.erp.backend.dto.product.ProductImportRowDto;
 import com.erp.backend.dto.product.ProductImportSummaryResponse;
 import com.erp.backend.entity.Product;
+import com.erp.backend.entity.ProductCategory;
 import com.erp.backend.exception.BusinessException;
+import com.erp.backend.repository.ProductCategoryRepository;
 import com.erp.backend.repository.ProductRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -19,6 +21,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
+import java.text.Normalizer;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.regex.Pattern;
@@ -31,6 +34,8 @@ import java.util.stream.Collectors;
  * - Xem trước và báo lỗi theo từng dòng trước khi nhập.
  * - SKU đã tồn tại thì CẬP NHẬT thay vì tạo mới, có đánh dấu rõ ràng trong bản xem trước (AC2).
  * - Tối ưu hóa hiệu năng, xử lý mượt mà danh mục lớn lên tới 5.000 SKU.
+ * - Bổ sung cây phân cấp ngành hàng / nhóm hàng / phân nhóm và tự động gán vào cây (Phần 3).
+ * - Ghi đè (đổi cấp cây phân cấp) khi sản phẩm trùng thông tin thay vì báo lỗi dòng (Phần 4).
  */
 @Service
 @RequiredArgsConstructor
@@ -38,6 +43,7 @@ import java.util.stream.Collectors;
 public class ProductExcelImportService {
 
     private final ProductRepository productRepository;
+    private final ProductCategoryRepository productCategoryRepository;
 
     private static final Pattern SKU_PATTERN = Pattern.compile("^[a-zA-Z0-9._\\-\\s/]{2,50}$");
     private static final int BATCH_SIZE = 500;
@@ -78,7 +84,9 @@ public class ProductExcelImportService {
                     "Mã SKU (*)",
                     "Tên sản phẩm (*)",
                     "Đơn vị tính cơ sở (*)",
-                    "Nhóm hàng",
+                    "Ngành hàng (Cấp 1)",
+                    "Nhóm hàng (Cấp 2)",
+                    "Phân nhóm (Cấp 3)",
                     "Quy cách đóng gói",
                     "Giá vốn (VNĐ)",
                     "Mã vạch (Barcode)",
@@ -94,13 +102,13 @@ public class ProductExcelImportService {
                 cell.setCellStyle(headerStyle);
             }
 
-            // Dữ liệu mẫu minh họa
+            // Dữ liệu mẫu minh họa có đầy đủ 3 cấp cây phân cấp nhóm hàng
             Object[][] sampleData = {
-                    {1, "SP-COCA-330", "Nước ngọt Coca-Cola lon 330ml", "Lon", "Nước giải khát có gas", "Thùng 24 lon", 210000, "8934567890123", "ACTIVE", "Nước giải khát Coca-Cola chính hãng"},
-                    {2, "SP-PEPSI-330", "Nước ngọt Pepsi lon 330ml", "Lon", "Nước giải khát có gas", "Thùng 24 lon", 205000, "8934567890124", "ACTIVE", "Nước ngọt vị Cola truyền thống"},
-                    {3, "SP-HEINEKEN-CAN", "Bia Heineken lon 330ml", "Lon", "Bia & Đồ uống có cồn", "Thùng 24 lon", 410000, "8934567890125", "ACTIVE", "Bia cao cấp Hà Lan"},
-                    {4, "SP-AQUAFINA-500", "Nước tinh khiết Aquafina 500ml", "Chai", "Nước tinh khiết", "Lốc 6 chai", 30000, "8934567890126", "ACTIVE", "Nước uống đóng chai tiệt trùng"},
-                    {5, "SP-RED-BULL-250", "Nước tăng lực Red Bull lon 250ml", "Lon", "Nước tăng lực", "Khay 24 lon", 250000, "8934567890127", "ACTIVE", "Nước tăng lực bò húc Thái Lan"}
+                    {1, "SP-COCA-330", "Nước ngọt Coca-Cola lon 330ml", "Lon", "Đồ uống", "Nước giải khát", "Có ga", "Thùng 24 lon", 210000, "8934567890123", "ACTIVE", "Nước giải khát Coca-Cola chính hãng"},
+                    {2, "SP-PEPSI-330", "Nước ngọt Pepsi lon 330ml", "Lon", "Đồ uống", "Nước giải khát", "Có ga", "Thùng 24 lon", 205000, "8934567890124", "ACTIVE", "Nước ngọt vị Cola truyền thống"},
+                    {3, "SP-HEINEKEN-CAN", "Bia Heineken lon 330ml", "Lon", "Đồ uống", "Bia & Đồ uống có cồn", "Bia lon", "Thùng 24 lon", 410000, "8934567890125", "ACTIVE", "Bia cao cấp Hà Lan"},
+                    {4, "SP-AQUAFINA-500", "Nước tinh khiết Aquafina 500ml", "Chai", "Đồ uống", "Nước tinh khiết", "Nước suối", "Lốc 6 chai", 30000, "8934567890126", "ACTIVE", "Nước uống đóng chai tiệt trùng"},
+                    {5, "SP-RED-BULL-250", "Nước tăng lực Red Bull lon 250ml", "Lon", "Đồ uống", "Nước tăng lực", "Tăng lực lon", "Khay 24 lon", 250000, "8934567890127", "ACTIVE", "Nước tăng lực bò húc Thái Lan"}
             };
 
             for (int r = 0; r < sampleData.length; r++) {
@@ -119,7 +127,7 @@ public class ProductExcelImportService {
             }
 
             // Đặt độ rộng cột vừa vặn
-            int[] colWidths = {8, 22, 38, 20, 25, 22, 18, 22, 28, 35};
+            int[] colWidths = {8, 22, 38, 20, 25, 25, 25, 22, 18, 22, 28, 35};
             for (int i = 0; i < colWidths.length; i++) {
                 sheet1.setColumnWidth(i, colWidths[i] * 256);
             }
@@ -134,17 +142,22 @@ public class ProductExcelImportService {
             List<String> guidelines = List.of(
                     "1. Các cột có dấu (*) là thông tin bắt buộc phải có dữ liệu.",
                     "2. Mã SKU (*): Mã nhận diện duy nhất của sản phẩm trong hệ thống (2 - 50 ký tự).",
-                    "3. QUY TẮC CẬP NHẬT SKU (S2-08 AC2):",
-                    "   - Nếu Mã SKU CHƯA TỒN TẠI trong hệ thống -> Hệ thống sẽ TẠO MỚI (đánh dấu: CREATE).",
-                    "   - Nếu Mã SKU ĐÃ TỒN TẠI trong hệ thống -> Hệ thống sẽ CẬP NHẬT thông tin mới từ tệp Excel (đánh dấu: UPDATE).",
-                    "4. Tên sản phẩm (*): Tên hiển thị đầy đủ của mặt hàng (tối đa 200 ký tự).",
-                    "5. Đơn vị tính cơ sở (*): Đơn vị nhỏ nhất phục vụ theo dõi tồn kho và xuất nhập hàng (vd: Lon, Chai, Hộp, Gói, Cái, Kg...).",
-                    "6. Quy cách đóng gói: Diễn giải cách đóng thùng/lốc phục vụ quy đổi đơn vị (vd: Thùng 24 lon, Thùng 12 hộp).",
-                    "7. Giá vốn (VNĐ): Là số tiền >= 0. Nếu để trống, hệ thống mặc định giá vốn là 0 VNĐ.",
-                    "8. Mã vạch: Mã vạch sản phẩm (EAN-13, Barcode...) dùng khi quét máy quét mã vạch (tùy chọn).",
-                    "9. Trạng thái: ACTIVE (Đang kinh doanh) hoặc INACTIVE (Ngừng kinh doanh). Mặc định là ACTIVE nếu để trống.",
-                    "10. Hệ thống hỗ trợ xử lý mượt mà lên tới 5.000 mã hàng mỗi lần nhập.",
-                    "11. Các dòng có dữ liệu lỗi sẽ được báo cáo chi tiết và bỏ qua, những dòng hợp lệ vẫn sẽ được nhập/cập nhật thành công."
+                    "3. CÂY PHÂN CẤP NHÓM HÀNG (S2-06 & S2-08):",
+                    "   - Cột 'Ngành hàng (Cấp 1)': Cấp gốc cao nhất của danh mục hàng (vd: Đồ uống, Bánh kẹo, Gia vị...).",
+                    "   - Cột 'Nhóm hàng (Cấp 2)': Nhóm hàng trực thuộc ngành hàng (vd: Nước giải khát, Bia & Đồ uống có cồn...).",
+                    "   - Cột 'Phân nhóm (Cấp 3)': Phân nhóm chi tiết (vd: Có ga, Nước suối...).",
+                    "   - Dữ liệu sẽ tự động đồng bộ và hiển thị trên Cây phân cấp (trang Quản lý nhóm hàng), không cần chọn thủ công từng sản phẩm.",
+                    "4. QUY TẮC CẬP NHẬT & GHI ĐÈ CẤP CÂY PHÂN CẤP (AC2 & AC4):",
+                    "   - Nếu Mã SKU chưa tồn tại trong hệ thống -> Hệ thống sẽ TẠO MỚI và gán vào nhánh cây phân cấp tương ứng.",
+                    "   - Nếu Mã SKU đã tồn tại (hoặc lặp lại trong tệp) nhưng khác cấp cây -> Tự động GHI ĐÈ, đổi level cây phân cấp của sản phẩm thay vì báo lỗi dòng.",
+                    "5. Tên sản phẩm (*): Tên hiển thị đầy đủ của mặt hàng (tối đa 200 ký tự).",
+                    "6. Đơn vị tính cơ sở (*): Đơn vị nhỏ nhất phục vụ theo dõi tồn kho và xuất nhập hàng (vd: Lon, Chai, Hộp, Gói, Cái, Kg...).",
+                    "7. Quy cách đóng gói: Diễn giải cách đóng thùng/lốc phục vụ quy đổi đơn vị (vd: Thùng 24 lon, Thùng 12 hộp).",
+                    "8. Giá vốn (VNĐ): Là số tiền >= 0. Nếu để trống, hệ thống mặc định giá vốn là 0 VNĐ (sản phẩm cập nhật sẽ giữ nguyên giá cũ).",
+                    "9. Mã vạch: Mã vạch sản phẩm (EAN-13, Barcode...) dùng khi quét máy quét mã vạch (tùy chọn).",
+                    "10. Trạng thái: ACTIVE (Đang kinh doanh) hoặc INACTIVE (Ngừng kinh doanh). Mặc định là ACTIVE nếu để trống.",
+                    "11. Hệ thống hỗ trợ xử lý mượt mà lên tới 5.000 mã hàng mỗi lần nhập theo cơ chế Batch.",
+                    "12. Các dòng có dữ liệu lỗi sẽ được báo cáo chi tiết và bỏ qua, những dòng hợp lệ vẫn sẽ được nhập/cập nhật thành công."
             );
 
             for (int i = 0; i < guidelines.size(); i++) {
@@ -232,19 +245,34 @@ public class ProductExcelImportService {
         Map<String, Product> existingProductMap = productRepository.findBySkuIn(skusToProcess).stream()
                 .collect(Collectors.toMap(p -> p.getSku().toUpperCase(), p -> p, (p1, p2) -> p1));
 
+        // Nạp và cache cây nhóm hàng để tra cứu hoặc tự tạo nhánh phân cấp (Phần 3)
+        Map<String, ProductCategory> categoryCache = new HashMap<>();
+        List<ProductCategory> existingCategories = productCategoryRepository.findAllByOrderByLevelAscNameAsc();
+        for (ProductCategory c : existingCategories) {
+            Long parentId = c.getParent() != null ? c.getParent().getId() : null;
+            categoryCache.put(c.getLevel() + ":" + (parentId == null ? "null" : parentId) + ":" + c.getName().trim().toLowerCase(), c);
+            categoryCache.put("code:" + c.getCode().toUpperCase(), c);
+            categoryCache.putIfAbsent("name:" + c.getName().trim().toLowerCase(), c);
+        }
+
         int createdCount = 0;
         int updatedCount = 0;
-        List<Product> productsToSave = new ArrayList<>();
+        Map<String, Product> productsToSaveMap = new LinkedHashMap<>();
 
         for (ProductImportRowDto row : validRows) {
             String skuKey = row.getSku().trim().toUpperCase();
             Product product = existingProductMap.get(skuKey);
 
+            ProductCategory targetCategory = resolveOrCreateCategory(row.getDepartment(), row.getCategory(), row.getSubCategory(), categoryCache);
+
             if (product != null) {
-                // S2-08 AC2: SKU đã tồn tại -> CẬP NHẬT
+                // S2-08 AC2 & Phần 4: SKU đã tồn tại hoặc dòng sau trong file trùng SKU -> CẬP NHẬT / GHI ĐÈ (đổi level cây phân cấp)
                 product.setName(row.getName().trim());
                 product.setBaseUnit(row.getBaseUnit().trim());
-                if (StringUtils.hasText(row.getCategory())) {
+                if (targetCategory != null) {
+                    product.setProductCategory(targetCategory);
+                    product.setCategory(targetCategory.getName());
+                } else if (StringUtils.hasText(row.getCategory())) {
                     product.setCategory(row.getCategory().trim());
                 }
                 if (StringUtils.hasText(row.getPackaging())) {
@@ -264,15 +292,19 @@ public class ProductExcelImportService {
                 if (StringUtils.hasText(row.getDescription())) {
                     product.setDescription(row.getDescription().trim());
                 }
-                productsToSave.add(product);
-                updatedCount++;
+
+                if (!productsToSaveMap.containsKey(skuKey)) {
+                    updatedCount++;
+                }
+                productsToSaveMap.put(skuKey, product);
             } else {
-                // S2-08 AC2: SKU chưa có -> TẠO MỚI (chuẩn hóa SKU chữ hoa)
+                // S2-08 AC2: SKU chưa có -> TẠO MỚI (chuẩn hóa SKU chữ hoa, gán trực tiếp vào cây phân cấp)
                 Product newProd = Product.builder()
-                        .sku(row.getSku().trim().toUpperCase())
+                        .sku(skuKey)
                         .name(row.getName().trim())
                         .baseUnit(row.getBaseUnit().trim())
-                        .category(StringUtils.hasText(row.getCategory()) ? row.getCategory().trim() : null)
+                        .productCategory(targetCategory)
+                        .category(targetCategory != null ? targetCategory.getName() : (StringUtils.hasText(row.getCategory()) ? row.getCategory().trim() : null))
                         .packaging(StringUtils.hasText(row.getPackaging()) ? row.getPackaging().trim() : null)
                         .costPrice(row.getCostPrice() != null ? row.getCostPrice() : BigDecimal.ZERO)
                         .barcode(StringUtils.hasText(row.getBarcode()) ? row.getBarcode().trim() : null)
@@ -280,13 +312,14 @@ public class ProductExcelImportService {
                         .description(StringUtils.hasText(row.getDescription()) ? row.getDescription().trim() : null)
                         .build();
 
-                productsToSave.add(newProd);
-                existingProductMap.put(skuKey, newProd); // Cập nhật map để nếu lặp lại trong file thì không bị insert 2 lần
+                productsToSaveMap.put(skuKey, newProd);
+                existingProductMap.put(skuKey, newProd); // Cập nhật map để nếu lặp lại trong file thì ghi đè (Phần 4)
                 createdCount++;
             }
         }
 
         // Lưu trữ theo batch tối ưu hiệu năng với danh mục lớn 5.000 SKU
+        List<Product> productsToSave = new ArrayList<>(productsToSaveMap.values());
         for (int i = 0; i < productsToSave.size(); i += BATCH_SIZE) {
             int end = Math.min(i + BATCH_SIZE, productsToSave.size());
             productRepository.saveAll(productsToSave.subList(i, end));
@@ -329,18 +362,63 @@ public class ProductExcelImportService {
                 throw BusinessException.badRequest("NO_DATA_ROW", "Tệp Excel không có dòng dữ liệu nào sau dòng tiêu đề.");
             }
 
-            // Thu thập trước tất cả SKU trong file để kiểm tra trùng trong DB qua 1 lần query (chuẩn hóa UPPERCASE để không phân biệt hoa thường)
+            // Phát hiện vị trí các cột động dựa trên tiêu đề dòng 0
+            Row headerRow = sheet.getRow(0);
+            int colSku = 1;
+            int colName = 2;
+            int colBaseUnit = 3;
+            int colDepartment = -1;
+            int colCategory = 4;
+            int colSubCategory = -1;
+            int colPackaging = 5;
+            int colCostPrice = 6;
+            int colBarcode = 7;
+            int colStatus = 8;
+            int colDescription = 9;
+
+            if (headerRow != null) {
+                for (int c = 0; c < headerRow.getLastCellNum(); c++) {
+                    Cell cell = headerRow.getCell(c);
+                    if (cell == null) continue;
+                    String title = clean(formatter.formatCellValue(cell)).toLowerCase();
+                    if (title.contains("sku")) {
+                        colSku = c;
+                    } else if (title.contains("tên") && !title.contains("nhóm")) {
+                        colName = c;
+                    } else if (title.contains("đơn vị") || title.contains("dvt")) {
+                        colBaseUnit = c;
+                    } else if (title.contains("ngành") || title.contains("cấp 1")) {
+                        colDepartment = c;
+                    } else if (title.contains("phân nhóm") || title.contains("cấp 3")) {
+                        colSubCategory = c;
+                    } else if (title.contains("nhóm") || title.contains("cấp 2")) {
+                        colCategory = c;
+                    } else if (title.contains("quy cách") || title.contains("đóng gói")) {
+                        colPackaging = c;
+                    } else if (title.contains("giá")) {
+                        colCostPrice = c;
+                    } else if (title.contains("vạch") || title.contains("barcode")) {
+                        colBarcode = c;
+                    } else if (title.contains("trạng thái")) {
+                        colStatus = c;
+                    } else if (title.contains("mô tả") || title.contains("ghi chú")) {
+                        colDescription = c;
+                    }
+                }
+            }
+
+            // Thu thập trước tất cả SKU trong file để kiểm tra trùng trong DB qua 1 lần query (Bulk query)
             List<String> skusInFile = new ArrayList<>();
             for (int r = 1; r <= lastRowNum; r++) {
                 Row row = sheet.getRow(r);
                 if (row == null || isRowEmpty(row, formatter)) continue;
-                String sku = clean(formatter.formatCellValue(row.getCell(1)));
+                String sku = colSku >= 0 ? clean(formatter.formatCellValue(row.getCell(colSku))) : "";
                 if (StringUtils.hasText(sku)) {
                     skusInFile.add(sku.trim().toUpperCase());
                 }
             }
 
-            // Truy vấn 1 lần duy nhất danh sách các SKU đã tồn tại trong DB không phân biệt hoa thường (Bulk query)
+            // Truy vấn 1 lần duy nhất danh sách các SKU đã tồn tại trong DB không phân biệt hoa thường
             Set<String> existingSkusInDb = skusInFile.isEmpty() ? Set.of() :
                     productRepository.findExistingSkus(skusInFile).stream()
                             .map(String::toUpperCase)
@@ -354,18 +432,54 @@ public class ProductExcelImportService {
                     continue;
                 }
 
-                int rowNumber = r + 1; // Số dòng thực tế trên Excel (bắt đầu từ 1, dòng 1 là header)
+                int rowNumber = r + 1; // Số dòng thực tế trên Excel
                 List<String> errors = new ArrayList<>();
 
-                String sku = clean(formatter.formatCellValue(row.getCell(1)));
-                String name = clean(formatter.formatCellValue(row.getCell(2)));
-                String baseUnit = clean(formatter.formatCellValue(row.getCell(3)));
-                String category = clean(formatter.formatCellValue(row.getCell(4)));
-                String packaging = clean(formatter.formatCellValue(row.getCell(5)));
-                String rawCostPrice = clean(formatter.formatCellValue(row.getCell(6)));
-                String barcode = clean(formatter.formatCellValue(row.getCell(7)));
-                String rawStatus = clean(formatter.formatCellValue(row.getCell(8)));
-                String description = clean(formatter.formatCellValue(row.getCell(9)));
+                String sku = colSku >= 0 ? clean(formatter.formatCellValue(row.getCell(colSku))) : "";
+                String name = colName >= 0 ? clean(formatter.formatCellValue(row.getCell(colName))) : "";
+                String baseUnit = colBaseUnit >= 0 ? clean(formatter.formatCellValue(row.getCell(colBaseUnit))) : "";
+                String rawDepartment = colDepartment >= 0 ? clean(formatter.formatCellValue(row.getCell(colDepartment))) : "";
+                String rawCategory = colCategory >= 0 ? clean(formatter.formatCellValue(row.getCell(colCategory))) : "";
+                String rawSubCategory = colSubCategory >= 0 ? clean(formatter.formatCellValue(row.getCell(colSubCategory))) : "";
+                String packaging = colPackaging >= 0 ? clean(formatter.formatCellValue(row.getCell(colPackaging))) : "";
+                String rawCostPrice = colCostPrice >= 0 ? clean(formatter.formatCellValue(row.getCell(colCostPrice))) : "";
+                String barcode = colBarcode >= 0 ? clean(formatter.formatCellValue(row.getCell(colBarcode))) : "";
+                String rawStatus = colStatus >= 0 ? clean(formatter.formatCellValue(row.getCell(colStatus))) : "";
+                String description = colDescription >= 0 ? clean(formatter.formatCellValue(row.getCell(colDescription))) : "";
+
+                // Xử lý phân cấp ngành hàng - nhóm hàng - phân nhóm
+                String department = rawDepartment;
+                String category = rawCategory;
+                String subCategory = rawSubCategory;
+
+                // Nếu người dùng gộp dạng "Đồ uống > Nước giải khát > Có ga" trong ô nhóm hàng
+                if (!StringUtils.hasText(department) && !StringUtils.hasText(subCategory) && StringUtils.hasText(category)) {
+                    if (category.contains(">") || category.contains("/")) {
+                        String[] parts = category.split("[>/]");
+                        if (parts.length >= 3) {
+                            department = parts[0].trim();
+                            category = parts[1].trim();
+                            subCategory = parts[2].trim();
+                        } else if (parts.length == 2) {
+                            department = parts[0].trim();
+                            category = parts[1].trim();
+                        }
+                    }
+                }
+
+                List<String> pathParts = new ArrayList<>();
+                if (StringUtils.hasText(department)) pathParts.add(department);
+                if (StringUtils.hasText(category)) pathParts.add(category);
+                if (StringUtils.hasText(subCategory)) pathParts.add(subCategory);
+
+                String categoryPath = String.join(" > ", pathParts);
+                int categoryLevel = pathParts.isEmpty() ? 1 : pathParts.size();
+                String displayCategory = StringUtils.hasText(subCategory) ? subCategory :
+                        (StringUtils.hasText(category) ? category : department);
+
+                boolean isUpdate = false;
+                String action = "CREATE";
+                boolean levelChanged = false;
 
                 // 1. Kiểm tra Mã SKU (*)
                 if (!StringUtils.hasText(sku)) {
@@ -376,8 +490,15 @@ public class ProductExcelImportService {
                     errors.add("Mã SKU chứa ký tự không hợp lệ. Chỉ chấp nhận chữ cái, số, gạch ngang, gạch dưới, dấu chấm.");
                 } else {
                     String skuUpper = sku.trim().toUpperCase();
+                    // S2-08 & Phần 4: Nếu SKU đã tồn tại trong DB hoặc lặp lại trong file -> Đổi thành UPDATE / Ghi đè cấp cây thay vì báo lỗi dòng
                     if (!seenSkusInFile.add(skuUpper)) {
-                        errors.add("Mã SKU '" + sku + "' bị trùng lặp nhiều lần trong chính tệp Excel này.");
+                        isUpdate = true;
+                        action = "UPDATE";
+                        levelChanged = true;
+                    } else if (existingSkusInDb.contains(skuUpper)) {
+                        isUpdate = true;
+                        action = "UPDATE";
+                        levelChanged = true;
                     }
                 }
 
@@ -396,7 +517,7 @@ public class ProductExcelImportService {
                 }
 
                 // S208-01: Kiểm tra độ dài các trường văn bản theo CSDL
-                if (StringUtils.hasText(category) && category.length() > 100) {
+                if (StringUtils.hasText(displayCategory) && displayCategory.length() > 100) {
                     errors.add("Nhóm hàng không được vượt quá 100 ký tự.");
                 }
                 if (StringUtils.hasText(packaging) && packaging.length() > 100) {
@@ -436,23 +557,18 @@ public class ProductExcelImportService {
                     }
                 }
 
-                // 6. S2-08 AC2 & S208-02: Xác định hành động (CREATE vs UPDATE) không phân biệt hoa thường
-                boolean isUpdate = false;
-                String action = "CREATE";
-                if (StringUtils.hasText(sku)) {
-                    if (existingSkusInDb.contains(sku.trim().toUpperCase())) {
-                        isUpdate = true;
-                        action = "UPDATE";
-                    }
-                }
-
                 boolean valid = errors.isEmpty();
 
                 result.add(ProductImportRowDto.builder()
                         .rowNumber(rowNumber)
                         .sku(sku)
                         .name(name)
-                        .category(category)
+                        .category(displayCategory)
+                        .department(department)
+                        .subCategory(subCategory)
+                        .categoryPath(categoryPath)
+                        .categoryLevel(categoryLevel)
+                        .levelChanged(levelChanged)
                         .baseUnit(baseUnit)
                         .packaging(packaging)
                         .costPrice(costPrice)
@@ -474,6 +590,122 @@ public class ProductExcelImportService {
         return result;
     }
 
+    /**
+     * Tự động tìm kiếm hoặc khởi tạo nhánh phân cấp ngành hàng - nhóm hàng - phân nhóm (Phần 3 & Phần 4).
+     */
+    private ProductCategory resolveOrCreateCategory(String department, String category, String subCategory,
+                                                    Map<String, ProductCategory> categoryCache) {
+        if (!StringUtils.hasText(department) && !StringUtils.hasText(category) && !StringUtils.hasText(subCategory)) {
+            return null;
+        }
+
+        ProductCategory currentParent = null;
+
+        // 1. Cấp 1: Ngành hàng
+        if (StringUtils.hasText(department)) {
+            String deptKey = "1:null:" + department.trim().toLowerCase();
+            ProductCategory deptCat = categoryCache.get(deptKey);
+            if (deptCat == null) {
+                deptCat = categoryCache.get("name:" + department.trim().toLowerCase());
+            }
+            if (deptCat == null) {
+                String code = generateUniqueCategoryCode(department, 1, categoryCache);
+                deptCat = ProductCategory.builder()
+                        .name(department.trim())
+                        .code(code)
+                        .level(1)
+                        .parent(null)
+                        .build();
+                deptCat = productCategoryRepository.save(deptCat);
+                categoryCache.put(deptKey, deptCat);
+                categoryCache.put("code:" + deptCat.getCode().toUpperCase(), deptCat);
+                categoryCache.put("name:" + deptCat.getName().trim().toLowerCase(), deptCat);
+            }
+            currentParent = deptCat;
+        }
+
+        // 2. Cấp 2: Nhóm hàng
+        if (StringUtils.hasText(category)) {
+            Long parentId = currentParent != null ? currentParent.getId() : null;
+            String catKey = "2:" + (parentId == null ? "null" : parentId) + ":" + category.trim().toLowerCase();
+            ProductCategory catNode = categoryCache.get(catKey);
+            if (catNode == null && currentParent == null) {
+                catNode = categoryCache.get("name:" + category.trim().toLowerCase());
+            }
+            if (catNode == null) {
+                int level = currentParent != null ? currentParent.getLevel() + 1 : (StringUtils.hasText(department) ? 2 : 1);
+                String code = generateUniqueCategoryCode(category, level, categoryCache);
+                catNode = ProductCategory.builder()
+                        .name(category.trim())
+                        .code(code)
+                        .level(level)
+                        .parent(currentParent)
+                        .build();
+                catNode = productCategoryRepository.save(catNode);
+                categoryCache.put(catKey, catNode);
+                categoryCache.put("code:" + catNode.getCode().toUpperCase(), catNode);
+                categoryCache.put("name:" + catNode.getName().trim().toLowerCase(), catNode);
+            }
+            currentParent = catNode;
+        }
+
+        // 3. Cấp 3: Phân nhóm
+        if (StringUtils.hasText(subCategory)) {
+            Long parentId = currentParent != null ? currentParent.getId() : null;
+            String subKey = "3:" + (parentId == null ? "null" : parentId) + ":" + subCategory.trim().toLowerCase();
+            ProductCategory subNode = categoryCache.get(subKey);
+            if (subNode == null && currentParent == null) {
+                subNode = categoryCache.get("name:" + subCategory.trim().toLowerCase());
+            }
+            if (subNode == null) {
+                int level = currentParent != null ? currentParent.getLevel() + 1 : 1;
+                String code = generateUniqueCategoryCode(subCategory, level, categoryCache);
+                subNode = ProductCategory.builder()
+                        .name(subCategory.trim())
+                        .code(code)
+                        .level(level)
+                        .parent(currentParent)
+                        .build();
+                subNode = productCategoryRepository.save(subNode);
+                categoryCache.put(subKey, subNode);
+                categoryCache.put("code:" + subNode.getCode().toUpperCase(), subNode);
+                categoryCache.put("name:" + subNode.getName().trim().toLowerCase(), subNode);
+            }
+            currentParent = subNode;
+        }
+
+        return currentParent;
+    }
+
+    private String generateUniqueCategoryCode(String name, int level, Map<String, ProductCategory> categoryCache) {
+        String baseSlug = slugify(name);
+        if (baseSlug.length() > 22) {
+            baseSlug = baseSlug.substring(0, 22);
+        }
+        String code = baseSlug;
+        int counter = 1;
+        while (categoryCache.containsKey("code:" + code.toUpperCase()) || productCategoryRepository.existsByCodeIgnoreCase(code)) {
+            code = baseSlug + "-" + counter++;
+            if (code.length() > 30) {
+                code = "CAT-" + (System.currentTimeMillis() % 1000000);
+                break;
+            }
+        }
+        return code;
+    }
+
+    private String slugify(String input) {
+        if (!StringUtils.hasText(input)) return "CAT";
+        String unaccented = Normalizer.normalize(input, Normalizer.Form.NFD)
+                .replaceAll("\\p{InCombiningDiacriticalMarks}+", "")
+                .replace('đ', 'd').replace('Đ', 'D');
+        String slug = unaccented.toUpperCase().replaceAll("[^A-Z0-9]+", "-").replaceAll("^-+|-+$", "");
+        if (slug.length() > 25) {
+            slug = slug.substring(0, 25);
+        }
+        return slug.isBlank() ? "CAT" : slug;
+    }
+
     private void validateFile(MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw BusinessException.badRequest("FILE_EMPTY", "Vui lòng chọn tệp Excel để tải lên.");
@@ -485,7 +717,7 @@ public class ProductExcelImportService {
     }
 
     private boolean isRowEmpty(Row row, DataFormatter formatter) {
-        for (int c = 1; c <= 9; c++) {
+        for (int c = 1; c <= 11; c++) {
             Cell cell = row.getCell(c);
             if (cell != null && StringUtils.hasText(formatter.formatCellValue(cell))) {
                 return false;
