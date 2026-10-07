@@ -47,6 +47,7 @@ public class CustomerService {
     private final AuditLogService auditLogService;
     private final CustomerDeliveryAddressRepository addressRepository;
     private final PriceListRepository priceListRepository;
+    private final SalesOrderRepository orderRepository;
 
     // ======================= S3-08: TÌM KIẾM / XEM =======================
 
@@ -186,7 +187,7 @@ public class CustomerService {
     }
 
     /**
-     * Đại lý không xoá cứng: chỉ chuyển "Ngừng giao dịch" (bắt buộc lý do) hoặc "Đang giao dịch" trở lại.
+     * Ngừng giao dịch (bắt buộc lý do) hoặc giao dịch lại. Đại lý đã có giao dịch chỉ dùng cách này thay cho xoá.
      */
     @Transactional
     public CustomerResponse changeStatus(Long id, ChangeCustomerStatusRequest req, UserDetailsImpl actor) {
@@ -208,6 +209,54 @@ public class CustomerService {
         customer.setStatus(newStatus);
         customer.setStatusReason(INACTIVE.equals(newStatus) ? reason : null);
         return toResponse(customerRepository.save(customer));
+    }
+
+    /**
+     * Xoá hồ sơ đại lý (Admin, Kế toán công nợ).
+     * Quy tắc 8: đại lý đã phát sinh giao dịch (có đơn hàng, kể cả đơn nháp) thì KHÔNG xoá được,
+     * chỉ chuyển "Ngừng giao dịch" để giữ lịch sử. Đại lý chưa có giao dịch (vd tạo nhầm) thì xoá hẳn
+     * cùng điểm giao và lịch sử phân công, ghi nhật ký kèm lý do và thông tin trước khi xoá.
+     */
+    @Transactional
+    public void delete(Long id, DeleteCustomerRequest req, UserDetailsImpl actor) {
+        String reason = blankToNull(req != null ? req.getReason() : null);
+        if (reason == null) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "REASON_REQUIRED",
+                    "Vui lòng nhập lý do xoá đại lý", "reason");
+        }
+
+        Customer customer = customerRepository.findByIdForUpdate(id)
+                .orElseThrow(() -> BusinessException.notFound("Không tìm thấy đại lý"));
+
+        if (orderRepository.existsByCustomer_Id(id)) {
+            throw new BusinessException(HttpStatus.CONFLICT, "CUSTOMER_HAS_TRANSACTIONS",
+                    "Đại lý " + customer.getCode() + " đã phát sinh đơn hàng nên không xoá được. "
+                            + "Hãy chuyển sang \"Ngừng giao dịch\" để giữ lịch sử.", null);
+        }
+
+        String oldValue = String.format("{\"code\":\"%s\",\"name\":\"%s\",\"taxCode\":\"%s\",\"customerGroup\":\"%s\"}",
+                jsonSafe(customer.getCode()), jsonSafe(customer.getName()), jsonSafe(customer.getTaxCode()),
+                customer.getCustomerGroup() != null ? customer.getCustomerGroup().name() : "");
+
+        addressRepository.deleteByCustomer_Id(id);
+        historyRepository.deleteByCustomer_Id(id);
+        customerRepository.delete(customer);
+
+        auditLogService.record(
+                AuditModule.CUSTOMER,
+                "DELETE_CUSTOMER",
+                "CUSTOMER",
+                id,
+                customer.getCode(),
+                oldValue,
+                null,
+                reason,
+                actor);
+        markAuditLogged();
+    }
+
+    private static String jsonSafe(String value) {
+        return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     // ======================= S3-05: HẠN MỨC CÔNG NỢ & SỐ NGÀY NỢ =======================

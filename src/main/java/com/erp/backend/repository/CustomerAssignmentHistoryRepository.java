@@ -10,4 +10,7 @@ import java.util.List;
 public interface CustomerAssignmentHistoryRepository extends JpaRepository<CustomerAssignmentHistory, Long> {
 
     List<CustomerAssignmentHistory> findByCustomer_IdOrderByChangedAtDescIdDesc(Long customerId);
+
+    /** Dọn lịch sử phân công khi xoá hồ sơ đại lý chưa phát sinh giao dịch. */
+    void deleteByCustomer_Id(Long customerId);
 }

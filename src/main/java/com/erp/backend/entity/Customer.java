@@ -10,7 +10,8 @@ import java.time.LocalDateTime;
 /**
  * S3-03: Hồ sơ đại lý (khách hàng mua sỉ).
  * - Mã đại lý là duy nhất, không đổi sau khi tạo.
- * - Không xoá cứng: chỉ chuyển trạng thái INACTIVE (ngừng giao dịch).
+ * - Đã phát sinh giao dịch thì không xoá cứng, chỉ chuyển INACTIVE (ngừng giao dịch);
+ *   chưa có giao dịch (vd tạo nhầm) thì Admin / Kế toán xoá được (CustomerService.delete).
  * S3-06: Mỗi đại lý có một nhân viên kinh doanh phụ trách chính (salesRep).
  */
 @Entity

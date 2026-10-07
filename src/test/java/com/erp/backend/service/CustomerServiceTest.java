@@ -9,6 +9,7 @@ import com.erp.backend.repository.CustomerDeliveryAddressRepository;
 import com.erp.backend.repository.CustomerRepository;
 import com.erp.backend.repository.PriceListRepository;
 import com.erp.backend.repository.RegionRepository;
+import com.erp.backend.repository.SalesOrderRepository;
 import com.erp.backend.repository.UserRepository;
 import com.erp.backend.security.UserDetailsImpl;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,6 +41,7 @@ class CustomerServiceTest {
     @Mock private AuditLogService auditLogService;
     @Mock private CustomerDeliveryAddressRepository addressRepository;
     @Mock private PriceListRepository priceListRepository;
+    @Mock private SalesOrderRepository orderRepository;
 
     @InjectMocks private CustomerService service;
 
@@ -692,5 +694,64 @@ class CustomerServiceTest {
         assertThatThrownBy(() -> service.assertCanCreateOrder(c))
                 .isInstanceOf(BusinessException.class)
                 .extracting("code").isEqualTo("CUSTOMER_TRANSACTION_LOCKED");
+    }
+
+    // ======================= XOÁ HỒ SƠ ĐẠI LÝ =======================
+
+    private static DeleteCustomerRequest deleteReq(String reason) {
+        DeleteCustomerRequest r = new DeleteCustomerRequest();
+        r.setReason(reason);
+        return r;
+    }
+
+    @Test
+    @DisplayName("Xoá đại lý: thiếu lý do -> 400, không xoá gì")
+    void delete_withoutReason_rejected() {
+        assertThatThrownBy(() -> service.delete(1L, deleteReq("  "), accountant))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("REASON_REQUIRED");
+        verify(customerRepository, never()).delete(any(Customer.class));
+    }
+
+    @Test
+    @DisplayName("Xoá đại lý đã có đơn hàng -> 409, giữ nguyên hồ sơ (quy tắc 8)")
+    void delete_withOrders_conflict() {
+        when(customerRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(customer(1, null)));
+        when(orderRepository.existsByCustomer_Id(1L)).thenReturn(true);
+
+        assertThatThrownBy(() -> service.delete(1L, deleteReq("Tạo nhầm"), accountant))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> {
+                    assertThat(((BusinessException) e).getCode()).isEqualTo("CUSTOMER_HAS_TRANSACTIONS");
+                    assertThat(((BusinessException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                });
+        verify(customerRepository, never()).delete(any(Customer.class));
+        verify(addressRepository, never()).deleteByCustomer_Id(anyLong());
+    }
+
+    @Test
+    @DisplayName("Xoá đại lý chưa có giao dịch -> xoá điểm giao, lịch sử phân công, hồ sơ và ghi nhật ký")
+    void delete_noTransactions_deletedAndAudited() {
+        Customer c = customer(1, null);
+        when(customerRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(c));
+        when(orderRepository.existsByCustomer_Id(1L)).thenReturn(false);
+
+        service.delete(1L, deleteReq("Tạo nhầm hồ sơ"), accountant);
+
+        verify(addressRepository).deleteByCustomer_Id(1L);
+        verify(historyRepository).deleteByCustomer_Id(1L);
+        verify(customerRepository).delete(c);
+        verify(auditLogService).record(eq(AuditModule.CUSTOMER), eq("DELETE_CUSTOMER"), eq("CUSTOMER"), eq(1L),
+                eq(c.getCode()), contains(c.getCode()), isNull(), eq("Tạo nhầm hồ sơ"), eq(accountant));
+    }
+
+    @Test
+    @DisplayName("Xoá đại lý không tồn tại -> 404")
+    void delete_notFound() {
+        when(customerRepository.findByIdForUpdate(99L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.delete(99L, deleteReq("x"), accountant))
+                .isInstanceOf(BusinessException.class)
+                .extracting("status").isEqualTo(HttpStatus.NOT_FOUND);
     }
 }
