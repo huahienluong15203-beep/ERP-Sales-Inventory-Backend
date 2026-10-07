@@ -1,6 +1,7 @@
 package com.erp.backend.repository;
 
 import com.erp.backend.entity.Customer;
+import com.erp.backend.entity.User;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -45,4 +46,7 @@ public interface CustomerRepository extends JpaRepository<Customer, Long>, JpaSp
     @Override
     @EntityGraph(attributePaths = {"region", "salesRep"})
     Page<Customer> findAll(Specification<Customer> spec, Pageable pageable);
+
+    @Query("select distinct c.salesRep from Customer c where c.salesRep is not null")
+    List<User> findDistinctSalesRepsWithCustomers();
 }

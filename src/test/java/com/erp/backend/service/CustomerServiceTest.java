@@ -1,6 +1,7 @@
 package com.erp.backend.service;
 
 import com.erp.backend.dto.customer.*;
+import com.erp.backend.dto.user.RefItem;
 import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.CustomerAssignmentHistoryRepository;
@@ -410,6 +411,51 @@ class CustomerServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting("code").isEqualTo("NO_CUSTOMERS_TO_TRANSFER");
         verify(historyRepository, never()).saveAll(anyList());
+    }
+
+    @Test
+    @DisplayName("S3-06: Chuyển giao sang Quản lý kinh doanh (ROLE_SALES_MANAGER) thành công")
+    void transfer_toSalesManager_success() {
+        User leaving = salesRep(7);
+        User salesManager = user(2, "ACTIVE", RoleName.ROLE_SALES_MANAGER);
+        Customer c1 = customer(1, leaving);
+        when(userRepository.findById(7L)).thenReturn(Optional.of(leaving));
+        when(userRepository.findById(2L)).thenReturn(Optional.of(salesManager));
+        when(customerRepository.findBySalesRepIdForUpdate(7L)).thenReturn(List.of(c1));
+
+        TransferCustomersRequest req = new TransferCustomersRequest();
+        req.setFromSalesRepId(7L);
+        req.setToSalesRepId(2L);
+        req.setReason("Bàn giao tạm cho quản lý");
+
+        TransferCustomersResponse res = service.transfer(req, manager);
+
+        assertThat(res.transferredCount()).isEqualTo(1);
+        assertThat(c1.getSalesRep()).isSameAs(salesManager);
+    }
+
+    @Test
+    @DisplayName("S3-06: getFormOptions bao gồm cả nhân viên kinh doanh và quản lý kinh doanh")
+    void getFormOptions_includesBothSalesRoles() {
+        User rep = user(4, "ACTIVE", RoleName.ROLE_SALES_REP);
+        rep.setFullName("Lê Văn Bán Hàng");
+        User mgr = user(2, "ACTIVE", RoleName.ROLE_SALES_MANAGER);
+        mgr.setFullName("Trần Quản Lý");
+        User leavingWithCustomers = user(7, "LOCKED", RoleName.ROLE_SALES_REP);
+        leavingWithCustomers.setFullName("Nguyễn Đã Nghỉ");
+
+        when(regionRepository.findByStatusOrderByNameAsc("ACTIVE")).thenReturn(List.of());
+        when(userRepository.findDistinctByRoles_NameInAndStatusOrderByFullNameAsc(
+                List.of(RoleName.ROLE_SALES_REP, RoleName.ROLE_SALES_MANAGER), "ACTIVE"))
+                .thenReturn(List.of(rep, mgr));
+        when(customerRepository.findDistinctSalesRepsWithCustomers())
+                .thenReturn(List.of(leavingWithCustomers));
+
+        CustomerFormOptionsResponse res = service.getFormOptions();
+
+        assertThat(res.salesReps()).hasSize(3);
+        assertThat(res.salesReps().stream().map(RefItem::name).toList())
+                .containsExactly("Lê Văn Bán Hàng", "Nguyễn Đã Nghỉ", "Trần Quản Lý");
     }
 
     // ======================= S3-05: TESTS HẠN MỨC CÔNG NỢ =======================

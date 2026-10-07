@@ -34,4 +34,6 @@ public interface UserRepository extends JpaRepository<User, Long>, JpaSpecificat
 
     // S3-06: Danh sách nhân viên kinh doanh đang hoạt động để chọn người phụ trách đại lý
     List<User> findDistinctByRoles_NameAndStatusOrderByFullNameAsc(RoleName roleName, String status);
+
+    List<User> findDistinctByRoles_NameInAndStatusOrderByFullNameAsc(java.util.Collection<RoleName> roleNames, String status);
 }
