@@ -563,7 +563,7 @@ public class ProductExcelImportService {
                         .rowNumber(rowNumber)
                         .sku(sku)
                         .name(name)
-                        .category(displayCategory)
+                        .category(category)
                         .department(department)
                         .subCategory(subCategory)
                         .categoryPath(categoryPath)
@@ -606,7 +606,10 @@ public class ProductExcelImportService {
             String deptKey = "1:null:" + department.trim().toLowerCase();
             ProductCategory deptCat = categoryCache.get(deptKey);
             if (deptCat == null) {
-                deptCat = categoryCache.get("name:" + department.trim().toLowerCase());
+                ProductCategory byName = categoryCache.get("name:" + department.trim().toLowerCase());
+                if (byName != null && byName.getLevel() != null && byName.getLevel() == 1) {
+                    deptCat = byName;
+                }
             }
             if (deptCat == null) {
                 String code = generateUniqueCategoryCode(department, 1, categoryCache);
@@ -626,11 +629,21 @@ public class ProductExcelImportService {
 
         // 2. Cấp 2: Nhóm hàng
         if (StringUtils.hasText(category)) {
+            // Nếu người dùng nhập lặp lại tên ngành hàng vào ô nhóm hàng và không có phân nhóm -> giữ nguyên Cấp 1
+            if (currentParent != null && currentParent.getLevel() == 1
+                    && category.trim().equalsIgnoreCase(currentParent.getName().trim())
+                    && !StringUtils.hasText(subCategory)) {
+                return currentParent;
+            }
+
             Long parentId = currentParent != null ? currentParent.getId() : null;
             String catKey = "2:" + (parentId == null ? "null" : parentId) + ":" + category.trim().toLowerCase();
             ProductCategory catNode = categoryCache.get(catKey);
             if (catNode == null && currentParent == null) {
-                catNode = categoryCache.get("name:" + category.trim().toLowerCase());
+                ProductCategory byName = categoryCache.get("name:" + category.trim().toLowerCase());
+                if (byName != null && byName.getLevel() != null && byName.getLevel() == 1) {
+                    catNode = byName;
+                }
             }
             if (catNode == null) {
                 int level = currentParent != null ? currentParent.getLevel() + 1 : (StringUtils.hasText(department) ? 2 : 1);
@@ -655,7 +668,10 @@ public class ProductExcelImportService {
             String subKey = "3:" + (parentId == null ? "null" : parentId) + ":" + subCategory.trim().toLowerCase();
             ProductCategory subNode = categoryCache.get(subKey);
             if (subNode == null && currentParent == null) {
-                subNode = categoryCache.get("name:" + subCategory.trim().toLowerCase());
+                ProductCategory byName = categoryCache.get("name:" + subCategory.trim().toLowerCase());
+                if (byName != null && byName.getLevel() != null && byName.getLevel() == 1) {
+                    subNode = byName;
+                }
             }
             if (subNode == null) {
                 int level = currentParent != null ? currentParent.getLevel() + 1 : 1;
