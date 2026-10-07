@@ -286,7 +286,7 @@ public class OrderDraftService {
         PriceListItem price = findPrice(customer, product, today)
                 .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST, "NO_EFFECTIVE_PRICE",
                         prefix + noPriceMessage(customer, product), "lines"));
-        DiscountCalculationResponse discount = discountPolicyService.calculate(product, baseQuantity, price.getPrice(), today);
+        DiscountCalculationResponse discount = discountPolicyService.calculate(customer.getCustomerGroup(), product, baseQuantity, price.getPrice(), today);
 
         return SalesOrderLine.builder()
                 .lineNo(lineNo)

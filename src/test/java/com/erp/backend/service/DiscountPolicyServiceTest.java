@@ -152,8 +152,8 @@ class DiscountPolicyServiceTest {
     }
 
     @Test
-    @DisplayName("S3-01: Nhiều chính sách -> chọn chính sách có lợi nhất cho khách, không cộng dồn")
-    void calculate_bestPolicyWins() {
+    @DisplayName("S3-01: Nhiều chính sách -> ưu tiên chính sách riêng theo SKU trước chính sách theo nhóm hàng")
+    void calculate_prefersProductScopeOverCategory() {
         when(policyRepository.findEffective(eq(10L), anyCollection(), eq(day))).thenReturn(List.of(
                 policy(1, "PRODUCT", "PERCENT", "96", "5"),            // 500đ/lon -> 60.000
                 policy(2, "CATEGORY", "AMOUNT_PER_UNIT", "100", "600") // 600đ/lon -> 72.000
@@ -161,8 +161,8 @@ class DiscountPolicyServiceTest {
 
         DiscountCalculationResponse res = service.calculate(coca, new BigDecimal("120"), new BigDecimal("10000"), day);
 
-        assertThat(res.applied().policyId()).isEqualTo(2L);
-        assertThat(res.discountAmount()).isEqualByComparingTo("72000");
+        assertThat(res.applied().policyId()).isEqualTo(1L);
+        assertThat(res.discountAmount()).isEqualByComparingTo("60000");
         assertThat(res.candidates()).hasSize(2);
     }
 
