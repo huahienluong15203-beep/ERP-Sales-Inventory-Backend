@@ -4,7 +4,9 @@ import com.erp.backend.dto.product.ProductImportPreviewResponse;
 import com.erp.backend.dto.product.ProductImportRowDto;
 import com.erp.backend.dto.product.ProductImportSummaryResponse;
 import com.erp.backend.entity.Product;
+import com.erp.backend.entity.ProductCategory;
 import com.erp.backend.exception.BusinessException;
+import com.erp.backend.repository.ProductCategoryRepository;
 import com.erp.backend.repository.ProductRepository;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -39,8 +41,23 @@ class ProductExcelImportServiceTest {
     @Mock
     private ProductRepository productRepository;
 
+    @Mock
+    private ProductCategoryRepository productCategoryRepository;
+
     @InjectMocks
     private ProductExcelImportService productExcelImportService;
+
+    @BeforeEach
+    void setUp() {
+        lenient().when(productCategoryRepository.findAllByOrderByLevelAscNameAsc()).thenReturn(Collections.emptyList());
+        lenient().when(productCategoryRepository.save(any(ProductCategory.class))).thenAnswer(inv -> {
+            ProductCategory c = inv.getArgument(0);
+            if (c.getId() == null) {
+                c.setId(100L + (long) (Math.random() * 1000));
+            }
+            return c;
+        });
+    }
 
     private byte[] createTestExcelBytes(List<List<Object>> dataRows) throws IOException {
         try (Workbook wb = new XSSFWorkbook(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
@@ -76,7 +93,7 @@ class ProductExcelImportServiceTest {
     }
 
     @Test
-    @DisplayName("S2-08 AC1: Tạo tệp mẫu Excel chuẩn có đủ 2 sheet và hướng dẫn")
+    @DisplayName("S2-08 AC1 / Phần 3: Tạo tệp mẫu Excel chuẩn có đủ 2 sheet, 3 cấp cây phân cấp và hướng dẫn")
     void generateTemplate_Success() throws IOException {
         byte[] bytes = productExcelImportService.generateTemplate();
 
@@ -93,6 +110,9 @@ class ProductExcelImportServiceTest {
             assertThat(header.getCell(1).getStringCellValue()).contains("Mã SKU");
             assertThat(header.getCell(2).getStringCellValue()).contains("Tên sản phẩm");
             assertThat(header.getCell(3).getStringCellValue()).contains("Đơn vị tính cơ sở");
+            assertThat(header.getCell(4).getStringCellValue()).contains("Ngành hàng");
+            assertThat(header.getCell(5).getStringCellValue()).contains("Nhóm hàng");
+            assertThat(header.getCell(6).getStringCellValue()).contains("Phân nhóm");
         }
     }
 
@@ -403,5 +423,137 @@ class ProductExcelImportServiceTest {
         // Giá vốn và Trạng thái giữ nguyên giá trị cũ, KHÔNG bị ghi đè thành 0 và ACTIVE
         assertThat(existingProduct.getCostPrice()).isEqualByComparingTo("210000");
         assertThat(existingProduct.getStatus()).isEqualTo("INACTIVE");
+    }
+
+    private byte[] createHierarchyTestExcelBytes(List<List<Object>> dataRows) throws IOException {
+        try (Workbook wb = new XSSFWorkbook(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            Sheet sheet = wb.createSheet("DanhMucSanPham");
+            Row header = sheet.createRow(0);
+            String[] headers = {
+                    "STT", "Mã SKU (*)", "Tên sản phẩm (*)", "Đơn vị tính cơ sở (*)",
+                    "Ngành hàng (Cấp 1)", "Nhóm hàng (Cấp 2)", "Phân nhóm (Cấp 3)",
+                    "Quy cách đóng gói", "Giá vốn (VNĐ)", "Mã vạch (Barcode)", "Trạng thái", "Mô tả"
+            };
+            for (int i = 0; i < headers.length; i++) {
+                header.createCell(i).setCellValue(headers[i]);
+            }
+
+            for (int r = 0; r < dataRows.size(); r++) {
+                Row row = sheet.createRow(r + 1);
+                List<Object> cells = dataRows.get(r);
+                for (int c = 0; c < cells.size(); c++) {
+                    Object val = cells.get(c);
+                    if (val instanceof Number) {
+                        row.createCell(c).setCellValue(((Number) val).doubleValue());
+                    } else if (val != null) {
+                        row.createCell(c).setCellValue(val.toString());
+                    } else {
+                        row.createCell(c).setCellValue("");
+                    }
+                }
+            }
+
+            wb.write(out);
+            return out.toByteArray();
+        }
+    }
+
+    @Test
+    @DisplayName("Phần 3: Nhập tệp có 3 cấp ngành hàng - nhóm hàng - phân nhóm, liên kết trực tiếp vào cây phân cấp")
+    void executeImport_Part3_LinksProductCategoryHierarchy() throws IOException {
+        List<List<Object>> rows = List.of(
+                List.of(1, "SP-COCA-330", "Nước ngọt Coca 330ml", "Lon", "Đồ uống", "Nước giải khát", "Có ga", "Thùng 24", 210000, "893", "ACTIVE", "Nước ngọt"),
+                List.of(2, "SP-BANH-CHOCO", "Bánh Chocopie", "Hộp", "Bánh kẹo", "Bánh ngọt", "", "Thùng 12", 150000, "894", "ACTIVE", "Bánh")
+        );
+
+        byte[] excelBytes = createHierarchyTestExcelBytes(rows);
+        MockMultipartFile file = new MockMultipartFile("file", "san_pham_cay.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(productRepository.findExistingSkus(anyCollection())).thenReturn(Set.of());
+        when(productRepository.findBySkuIn(anyCollection())).thenReturn(List.of());
+
+        ProductImportSummaryResponse summary = productExcelImportService.executeImport(file);
+
+        assertThat(summary.getSuccessCount()).isEqualTo(2);
+        assertThat(summary.getCreatedCount()).isEqualTo(2);
+        assertThat(summary.getErrorCount()).isEqualTo(0);
+
+        // Đã gọi lưu các cấp của cây phân cấp
+        verify(productCategoryRepository, atLeastOnce()).save(any(ProductCategory.class));
+        verify(productRepository, atLeastOnce()).saveAll(anyList());
+    }
+
+    @Test
+    @DisplayName("Phần 4: Sản phẩm trùng SKU trong cùng file nhưng khác cấp cây -> Ghi đè, đổi cấp cây thay vì báo lỗi dòng")
+    void executeImport_Part4_DuplicateSkuInFile_OverwritesInsteadOfError() throws IOException {
+        // Cùng SKU SP-COCA-330: dòng 1 là Cấp 2 (Nước giải khát), dòng 2 chuyển sang Cấp 3 (Có ga)
+        List<List<Object>> rows = List.of(
+                List.of(1, "SP-COCA-330", "Coca lon 330ml", "Lon", "Đồ uống", "Nước giải khát", "", "Thùng 24", 200000, "893", "ACTIVE", "Dòng 1"),
+                List.of(2, "SP-COCA-330", "Coca lon 330ml", "Lon", "Đồ uống", "Nước giải khát", "Có ga", "Thùng 24", 210000, "893", "ACTIVE", "Dòng 2 đổi cấp cây")
+        );
+
+        byte[] excelBytes = createHierarchyTestExcelBytes(rows);
+        MockMultipartFile file = new MockMultipartFile("file", "trung_sku_doi_cap.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(productRepository.findExistingSkus(anyCollection())).thenReturn(Set.of());
+        when(productRepository.findBySkuIn(anyCollection())).thenReturn(List.of());
+
+        // Kiểm tra xem trước (Preview): Cả 2 dòng đều HỢP LỆ (valid = true), KHÔNG bị báo lỗi dòng!
+        ProductImportPreviewResponse preview = productExcelImportService.previewImport(file);
+        assertThat(preview.getTotalRows()).isEqualTo(2);
+        assertThat(preview.getValidRows()).isEqualTo(2);
+        assertThat(preview.getInvalidRows()).isEqualTo(0);
+
+        ProductImportRowDto row2 = preview.getRows().get(1);
+        assertThat(row2.isValid()).isTrue();
+        assertThat(row2.getAction()).isEqualTo("UPDATE");
+        assertThat(row2.isLevelChanged()).isTrue();
+        assertThat(row2.getCategoryPath()).contains("Có ga");
+
+        // Kiểm tra khi thực thi (Execute): Ghi đè thành công, lưu 1 bản ghi với cấp cây mới
+        ProductImportSummaryResponse summary = productExcelImportService.executeImport(file);
+        assertThat(summary.getSuccessCount()).isEqualTo(1);
+        assertThat(summary.getErrorCount()).isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("Phần 4: Sản phẩm đã tồn tại trong DB với cấp cũ, nhập file đổi sang cấp cây mới -> Ghi đè thành công")
+    void executeImport_Part4_ExistingProductOverwrittenWithNewTreeLevel() throws IOException {
+        Product existingProduct = Product.builder()
+                .id(99L)
+                .sku("SP-COCA-330")
+                .name("Coca cũ")
+                .baseUnit("Lon")
+                .category("Đồ uống")
+                .productCategory(ProductCategory.builder().id(1L).name("Đồ uống").level(1).build())
+                .costPrice(BigDecimal.valueOf(190000))
+                .status("ACTIVE")
+                .build();
+
+        // Nhập file chỉ định cấp 3: Có ga
+        List<List<Object>> rows = List.of(
+                List.of(1, "SP-COCA-330", "Coca lon 330ml", "Lon", "Đồ uống", "Nước giải khát", "Có ga", "Thùng 24", 210000, "893", "ACTIVE", "Cập nhật cấp 3")
+        );
+
+        byte[] excelBytes = createHierarchyTestExcelBytes(rows);
+        MockMultipartFile file = new MockMultipartFile("file", "doi_cap_db.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+
+        when(productRepository.findExistingSkus(anyCollection())).thenReturn(Set.of("SP-COCA-330"));
+        when(productRepository.findBySkuIn(anyCollection())).thenReturn(List.of(existingProduct));
+
+        ProductImportSummaryResponse summary = productExcelImportService.executeImport(file);
+
+        assertThat(summary.getSuccessCount()).isEqualTo(1);
+        assertThat(summary.getUpdatedCount()).isEqualTo(1);
+        assertThat(summary.getErrorCount()).isEqualTo(0);
+
+        // Sản phẩm được đổi tên và nhóm sang cấp mới
+        assertThat(existingProduct.getName()).isEqualTo("Coca lon 330ml");
+        assertThat(existingProduct.getCategory()).isEqualTo("Có ga");
+        assertThat(existingProduct.getProductCategory()).isNotNull();
+        assertThat(existingProduct.getProductCategory().getName()).isEqualTo("Có ga");
     }
 }
