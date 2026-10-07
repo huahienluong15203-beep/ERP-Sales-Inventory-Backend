@@ -141,6 +141,7 @@ public class ProductService {
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy sản phẩm với ID " + id));
 
         String oldBaseUnit = product.getBaseUnit();
+        BigDecimal oldCostPrice = product.getCostPrice();
         String newBaseUnit = request.getBaseUnit().trim();
 
         // Nếu thay đổi đơn vị cơ sở, kiểm tra xem có đơn vị quy đổi nào bị trùng không
@@ -158,8 +159,12 @@ public class ProductService {
         product.setPackaging(request.getPackaging() != null ? request.getPackaging().trim() : null);
         // Chỉ Quản lý kinh doanh (hoặc Admin) mới được xem và sửa giá vốn (S2-05)
         boolean canManageCost = canViewCostPrice(actor);
+        boolean costChanged = false;
         if (request.getCostPrice() != null) {
             if (canManageCost) {
+                if (oldCostPrice == null || oldCostPrice.compareTo(request.getCostPrice()) != 0) {
+                    costChanged = true;
+                }
                 product.setCostPrice(request.getCostPrice());
             } else {
                 log.warn("S2-05 Người dùng {} không có quyền sửa giá vốn, giữ nguyên giá cũ",
@@ -175,15 +180,26 @@ public class ProductService {
 
         Product updated = productRepository.save(product);
 
+        // S205-02: Nếu có thay đổi giá vốn, ghi nhận giá vốn cũ và mới vào AuditLog
+        String oldValueLog = costChanged
+                ? (oldCostPrice != null ? oldCostPrice.stripTrailingZeros().toPlainString() : "0")
+                : oldBaseUnit;
+        String newValueLog = costChanged
+                ? (updated.getCostPrice() != null ? updated.getCostPrice().stripTrailingZeros().toPlainString() : "0")
+                : updated.getBaseUnit();
+        String reasonLog = costChanged
+                ? String.format("Cập nhật giá vốn sản phẩm SKU %s: %s -> %s", updated.getSku(), oldValueLog, newValueLog)
+                : "Cập nhật thông tin sản phẩm SKU " + updated.getSku();
+
         auditLogService.record(
                 AuditModule.INVENTORY,
                 "UPDATE_PRODUCT",
                 "PRODUCT",
                 updated.getId(),
                 updated.getSku(),
-                oldBaseUnit,
-                updated.getBaseUnit(),
-                "Cập nhật thông tin sản phẩm SKU " + updated.getSku(),
+                oldValueLog,
+                newValueLog,
+                reasonLog,
                 actor
         );
 

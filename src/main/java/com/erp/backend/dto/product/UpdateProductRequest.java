@@ -2,6 +2,7 @@ package com.erp.backend.dto.product;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -42,6 +43,7 @@ public class UpdateProductRequest {
     private String packaging;
 
     @DecimalMin(value = "0.0", inclusive = true, message = "Giá vốn không được âm")
+    @Digits(integer = 13, fraction = 2, message = "Giá vốn tối đa 13 chữ số nguyên và 2 chữ số thập phân")
     @Schema(description = "Giá vốn / Giá nhập (VNĐ)", example = "215000")
     private BigDecimal costPrice;
 

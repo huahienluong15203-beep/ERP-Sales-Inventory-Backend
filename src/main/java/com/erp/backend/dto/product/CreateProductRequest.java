@@ -48,6 +48,7 @@ public class CreateProductRequest {
     private String packaging;
 
     @DecimalMin(value = "0.0", inclusive = true, message = "Giá vốn không được âm")
+    @Digits(integer = 13, fraction = 2, message = "Giá vốn tối đa 13 chữ số nguyên và 2 chữ số thập phân")
     @Schema(description = "Giá vốn / Giá nhập (VNĐ)", example = "210000")
     private BigDecimal costPrice;
 
