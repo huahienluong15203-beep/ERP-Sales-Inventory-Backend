@@ -258,6 +258,33 @@ public class ProductService {
     }
 
     /**
+     * Tra cứu nhanh danh sách sản phẩm cho các ô chọn (combobox, bảng giá, đơn hàng).
+     */
+    @Transactional(readOnly = true)
+    public List<ProductOptionItemResponse> searchProductOptions(String keyword, int limit, UserDetailsImpl actor) {
+        int safeLimit = Math.max(1, Math.min(limit, 100));
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(0, safeLimit, org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.ASC, "sku"));
+        Page<Product> page = productRepository.searchProducts(
+                StringUtils.hasText(keyword) ? keyword.trim() : null,
+                null,
+                "ACTIVE",
+                pageable
+        );
+        boolean canViewCost = canViewCostPrice(actor);
+        return page.getContent().stream()
+                .map(p -> new ProductOptionItemResponse(
+                        p.getId(),
+                        p.getSku(),
+                        p.getName(),
+                        p.getBaseUnit(),
+                        p.getPackaging(),
+                        p.getCategory(),
+                        canViewCost ? p.getCostPrice() : null,
+                        p.getStatus()))
+                .toList();
+    }
+
+    /**
      * Xóa sản phẩm hoặc chuyển sang trạng thái ngừng kinh doanh INACTIVE.
      */
     @Transactional(rollbackFor = Exception.class)

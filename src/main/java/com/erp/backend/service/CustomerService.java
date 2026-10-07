@@ -46,6 +46,7 @@ public class CustomerService {
     private final UserRepository userRepository;
     private final AuditLogService auditLogService;
     private final CustomerDeliveryAddressRepository addressRepository;
+    private final PriceListRepository priceListRepository;
 
     // ======================= S3-08: TÌM KIẾM / XEM =======================
 
@@ -77,7 +78,8 @@ public class CustomerService {
                         transactionLocked),
                 PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by("id").descending())));
 
-        return PageResponse.of(result.map(this::toResponse));
+        Map<CustomerGroup, RefItem> priceListMap = resolveEffectivePriceLists();
+        return PageResponse.of(result.map(c -> toResponse(c, priceListMap.get(c.getCustomerGroup()))));
     }
 
     @Transactional(readOnly = true)
@@ -116,7 +118,18 @@ public class CustomerService {
                 .sorted(Comparator.comparing(User::getFullName, String.CASE_INSENSITIVE_ORDER))
                 .map(this::toUserRef)
                 .toList();
-        return new CustomerFormOptionsResponse(groups, statuses, regions, salesReps);
+
+        Map<CustomerGroup, RefItem> priceListMap = resolveEffectivePriceLists();
+        List<PriceListOptionResponse> priceLists = priceListMap.entrySet().stream()
+                .map(e -> new PriceListOptionResponse(
+                        e.getValue().id(),
+                        e.getValue().code(),
+                        e.getValue().name(),
+                        e.getKey().name(),
+                        e.getKey().getLabel()))
+                .toList();
+
+        return new CustomerFormOptionsResponse(groups, statuses, regions, salesReps, priceLists);
     }
 
     // ======================= S3-03: TẠO / SỬA HỒ SƠ =======================
@@ -495,7 +508,40 @@ public class CustomerService {
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy đại lý"));
     }
 
+    private static final java.time.ZoneId VN_ZONE = java.time.ZoneId.of("Asia/Ho_Chi_Minh");
+
+    private Map<CustomerGroup, RefItem> resolveEffectivePriceLists() {
+        if (priceListRepository == null) return Collections.emptyMap();
+        java.time.LocalDate today = java.time.LocalDate.now(VN_ZONE);
+        List<PriceList> effective = priceListRepository.findAllEffective(today);
+        Map<CustomerGroup, RefItem> map = new EnumMap<>(CustomerGroup.class);
+        for (PriceList p : effective) {
+            if (!map.containsKey(p.getCustomerGroup())) {
+                map.put(p.getCustomerGroup(), new RefItem(p.getId(), p.getCode(), p.getName()));
+            }
+        }
+        for (CustomerGroup g : CustomerGroup.values()) {
+            if (!map.containsKey(g)) {
+                List<PriceList> active = priceListRepository.findByCustomerGroupAndStatusOrderByStartDateDesc(g, ACTIVE);
+                if (!active.isEmpty()) {
+                    PriceList p = active.get(0);
+                    map.put(g, new RefItem(p.getId(), p.getCode(), p.getName()));
+                }
+            }
+        }
+        return map;
+    }
+
+    private RefItem resolvePriceListForGroup(CustomerGroup group) {
+        if (group == null || priceListRepository == null) return null;
+        return resolveEffectivePriceLists().get(group);
+    }
+
     CustomerResponse toResponse(Customer c) {
+        return toResponse(c, resolvePriceListForGroup(c.getCustomerGroup()));
+    }
+
+    CustomerResponse toResponse(Customer c, RefItem priceListRef) {
         Region region = c.getRegion();
         return new CustomerResponse(
                 c.getId(),
@@ -519,7 +565,8 @@ public class CustomerService {
                 c.getTransactionLockReason(),
                 c.getTransactionLockedAt(),
                 c.getCreatedAt(),
-                c.getUpdatedAt());
+                c.getUpdatedAt(),
+                priceListRef);
     }
 
     private RefItem toUserRef(User u) {

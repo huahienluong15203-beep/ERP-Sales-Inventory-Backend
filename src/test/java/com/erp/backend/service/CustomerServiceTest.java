@@ -7,6 +7,7 @@ import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.CustomerAssignmentHistoryRepository;
 import com.erp.backend.repository.CustomerDeliveryAddressRepository;
 import com.erp.backend.repository.CustomerRepository;
+import com.erp.backend.repository.PriceListRepository;
 import com.erp.backend.repository.RegionRepository;
 import com.erp.backend.repository.UserRepository;
 import com.erp.backend.security.UserDetailsImpl;
@@ -38,6 +39,7 @@ class CustomerServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private AuditLogService auditLogService;
     @Mock private CustomerDeliveryAddressRepository addressRepository;
+    @Mock private PriceListRepository priceListRepository;
 
     @InjectMocks private CustomerService service;
 

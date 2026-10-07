@@ -9,5 +9,6 @@ public record CustomerFormOptionsResponse(
         List<OptionItem> customerGroups,
         List<OptionItem> statuses,
         List<RefItem> regions,
-        List<RefItem> salesReps) {
+        List<RefItem> salesReps,
+        List<PriceListOptionResponse> priceLists) {
 }
