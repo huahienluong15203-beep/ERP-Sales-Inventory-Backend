@@ -33,5 +33,6 @@ public record CustomerResponse(
         String transactionLockReason,
         LocalDateTime transactionLockedAt,
         LocalDateTime createdAt,
-        LocalDateTime updatedAt) {
+        LocalDateTime updatedAt,
+        RefItem priceList) {
 }

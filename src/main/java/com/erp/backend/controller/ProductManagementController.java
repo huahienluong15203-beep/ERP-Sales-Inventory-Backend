@@ -2,6 +2,7 @@ package com.erp.backend.controller;
 
 import com.erp.backend.dto.product.*;
 import com.erp.backend.dto.user.PageResponse;
+import java.util.List;
 import com.erp.backend.security.UserDetailsImpl;
 import com.erp.backend.service.ProductExcelImportService;
 import com.erp.backend.service.ProductService;
@@ -64,6 +65,19 @@ public class ProductManagementController {
             @Valid @RequestBody UpdateProductRequest request,
             @AuthenticationPrincipal UserDetailsImpl actor) {
         return ResponseEntity.ok(productService.updateProduct(id, request, actor));
+    }
+
+    /**
+     * Tra cứu nhanh danh sách sản phẩm cho các ô chọn (combobox, bảng giá, đơn hàng).
+     */
+    @GetMapping("/search-options")
+    @Operation(summary = "Tìm kiếm nhanh sản phẩm cho ô chọn (combobox)", description = "Tìm kiếm nhanh theo từ khoá (SKU hoặc Tên sản phẩm) đang hoạt động (ACTIVE).")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'WH_MANAGER', 'WAREHOUSE', 'SALES_REP', 'ACCOUNTANT')")
+    public ResponseEntity<List<ProductOptionItemResponse>> searchProductOptions(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(defaultValue = "30") int limit,
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        return ResponseEntity.ok(productService.searchProductOptions(keyword, limit, actor));
     }
 
     /**
