@@ -52,6 +52,7 @@ public class OrderDraftService {
     private final CustomerDeliveryAddressRepository addressRepository;
     private final ProductRepository productRepository;
     private final PriceListItemRepository priceItemRepository;
+    private final PriceListRepository priceListRepository;
     private final DiscountPolicyService discountPolicyService;
     private final CustomerService customerService;
 
@@ -138,17 +139,48 @@ public class OrderDraftService {
                         o.getLines().size(), o.getTotalAmount(), o.getCreatedByUsername(), o.getUpdatedAt())));
     }
 
-    /** Gợi ý sản phẩm khi gõ mã / tên (tối đa 20), kèm đơn vị tính và giá theo nhóm khách hàng của đại lý. */
+    /**
+     * Gợi ý / hiển thị sản phẩm theo bảng giá của cấp đại lý (tự động load, kèm tìm kiếm SKU/tên nếu có).
+     */
     @Transactional(readOnly = true)
     public List<ProductOptionResponse> productOptions(Long customerId, String keyword, UserDetailsImpl actor) {
         Customer customer = findCustomer(customerId, actor);
-        if (!StringUtils.hasText(keyword) || keyword.trim().length() < 2) {
+        String kw = StringUtils.hasText(keyword) ? keyword.trim() : "";
+        LocalDate today = LocalDate.now(VN_ZONE);
+
+        // 1. Tìm bảng giá đang có hiệu lực của nhóm khách hàng mà đại lý thuộc về
+        List<PriceList> effectivePriceLists = priceListRepository.findEffectiveByCustomerGroup(
+                customer.getCustomerGroup(), today);
+
+        if (!effectivePriceLists.isEmpty()) {
+            PriceList activePriceList = effectivePriceLists.get(0);
+            List<PriceListItem> items = priceItemRepository.findByPriceListIdAndKeyword(
+                    activePriceList.getId(), kw, PageRequest.of(0, 100));
+
+            return items.stream()
+                    .filter(item -> item.getProduct() != null && "ACTIVE".equalsIgnoreCase(item.getProduct().getStatus()))
+                    .map(item -> {
+                        Product p = item.getProduct();
+                        return new ProductOptionResponse(
+                                p.getId(),
+                                item.getProductSku(),
+                                item.getProductName(),
+                                p.getBaseUnit(),
+                                units(p),
+                                true,
+                                item.getPrice(),
+                                activePriceList.getCode(),
+                                null);
+                    })
+                    .toList();
+        }
+
+        // 2. Fallback nếu đại lý chưa có bảng giá hiệu lực: tìm kiếm theo danh mục chung nếu có từ khóa
+        if (!StringUtils.hasText(kw)) {
             return List.of();
         }
-        String kw = keyword.trim();
-        LocalDate today = LocalDate.now(VN_ZONE);
         return productRepository.findByNameContainingIgnoreCaseOrSkuContainingIgnoreCase(kw, kw,
-                        PageRequest.of(0, 20, Sort.by("sku"))).stream()
+                        PageRequest.of(0, 50, Sort.by("sku"))).stream()
                 .filter(p -> "ACTIVE".equalsIgnoreCase(p.getStatus()))
                 .map(p -> {
                     Optional<PriceListItem> price = findPrice(customer, p, today);
