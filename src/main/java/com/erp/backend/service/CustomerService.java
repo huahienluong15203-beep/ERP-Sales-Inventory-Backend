@@ -47,6 +47,7 @@ public class CustomerService {
     private final RegionRepository regionRepository;
     private final UserRepository userRepository;
     private final AuditLogService auditLogService;
+    private final CustomerDeliveryAddressRepository addressRepository;
 
     // ======================= S3-08: TÌM KIẾM / XEM =======================
 
@@ -130,6 +131,9 @@ public class CustomerService {
         customer.setSalesRep(salesRep);
 
         Customer saved = customerRepository.save(customer);
+        if (StringUtils.hasText(saved.getAddress())) {
+            createOrUpdateDefaultDeliveryAddress(saved, saved.getAddress(), saved.getContactName(), saved.getPhone());
+        }
 
         if (salesRep != null) {
             recordHistory(saved, null, salesRep, CustomerAssignmentHistory.TYPE_CREATE, "Gán khi tạo đại lý", actor);
@@ -149,7 +153,11 @@ public class CustomerService {
         }
 
         applyProfile(customer, req, taxCode);
-        return toResponse(customerRepository.save(customer));
+        Customer saved = customerRepository.save(customer);
+        if (StringUtils.hasText(saved.getAddress())) {
+            createOrUpdateDefaultDeliveryAddress(saved, saved.getAddress(), saved.getContactName(), saved.getPhone());
+        }
+        return toResponse(saved);
     }
 
     /**
@@ -519,6 +527,34 @@ public class CustomerService {
                 attributes.getRequest().setAttribute(AuditLogInterceptor.AUDIT_LOGGED_ATTR, Boolean.TRUE);
             }
         } catch (Exception ignored) {
+        }
+    }
+
+    private void createOrUpdateDefaultDeliveryAddress(Customer customer, String address, String contactName, String phone) {
+        if (!StringUtils.hasText(address)) return;
+        List<CustomerDeliveryAddress> existing = addressRepository
+                .findByCustomer_IdAndStatusOrderByDefaultAddressDescIdAsc(customer.getId(), ACTIVE);
+        if (existing.isEmpty()) {
+            CustomerDeliveryAddress defaultAddr = CustomerDeliveryAddress.builder()
+                    .customer(customer)
+                    .label("Địa chỉ trụ sở / Kho chính")
+                    .address(address.trim())
+                    .receiverName(StringUtils.hasText(contactName) ? contactName.trim() : customer.getName())
+                    .receiverPhone(StringUtils.hasText(phone) ? phone.trim() : "0000000000")
+                    .defaultAddress(true)
+                    .status(ACTIVE)
+                    .build();
+            addressRepository.save(defaultAddr);
+        } else {
+            existing.stream()
+                    .filter(a -> a.isDefaultAddress() && "Địa chỉ trụ sở / Kho chính".equalsIgnoreCase(a.getLabel()))
+                    .findFirst()
+                    .ifPresent(a -> {
+                        a.setAddress(address.trim());
+                        if (StringUtils.hasText(contactName)) a.setReceiverName(contactName.trim());
+                        if (StringUtils.hasText(phone)) a.setReceiverPhone(phone.trim());
+                        addressRepository.save(a);
+                    });
         }
     }
 

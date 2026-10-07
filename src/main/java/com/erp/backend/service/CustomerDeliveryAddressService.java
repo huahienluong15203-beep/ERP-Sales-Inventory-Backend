@@ -32,12 +32,26 @@ public class CustomerDeliveryAddressService {
     private final CustomerRepository customerRepository;
     private final CustomerDeliveryAddressRepository addressRepository;
 
-    @Transactional(readOnly = true)
+    @Transactional
     public List<DeliveryAddressResponse> list(Long customerId, UserDetailsImpl actor) {
         Customer customer = customerRepository.findById(customerId)
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy đại lý"));
         CustomerAccess.checkCanAccess(actor, customer);
-        return activeAddresses(customerId).stream().map(this::toResponse).toList();
+        List<CustomerDeliveryAddress> list = activeAddresses(customerId);
+        if (list.isEmpty() && StringUtils.hasText(customer.getAddress())) {
+            CustomerDeliveryAddress autoDefault = CustomerDeliveryAddress.builder()
+                    .customer(customer)
+                    .label("Địa chỉ trụ sở / Kho chính")
+                    .address(customer.getAddress().trim())
+                    .receiverName(StringUtils.hasText(customer.getContactName()) ? customer.getContactName().trim() : customer.getName())
+                    .receiverPhone(StringUtils.hasText(customer.getPhone()) ? customer.getPhone().trim() : "0000000000")
+                    .defaultAddress(true)
+                    .status(ACTIVE)
+                    .build();
+            addressRepository.save(autoDefault);
+            list = List.of(autoDefault);
+        }
+        return list.stream().map(this::toResponse).toList();
     }
 
     @Transactional

@@ -42,6 +42,7 @@ class CustomerDeliveryAddressServiceTest {
     @BeforeEach
     void setUp() {
         customer = customer(1, salesRep(7));
+        lenient().when(customerRepository.findById(1L)).thenReturn(Optional.of(customer));
         lenient().when(customerRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(customer));
         lenient().when(addressRepository.save(any(CustomerDeliveryAddress.class))).thenAnswer(inv -> inv.getArgument(0));
         lenient().when(addressRepository.findByCustomer_IdAndStatusOrderByDefaultAddressDescIdAsc(1L, "ACTIVE"))
@@ -167,5 +168,23 @@ class CustomerDeliveryAddressServiceTest {
         assertThatThrownBy(() -> service.create(1L, request(null), owner))
                 .isInstanceOf(BusinessException.class)
                 .extracting("code").isEqualTo("CUSTOMER_INACTIVE");
+    }
+
+    @Test
+    @DisplayName("S3-04: Chưa có điểm giao nhưng hồ sơ đã có địa chỉ -> tự động tạo điểm giao mặc định từ địa chỉ hồ sơ")
+    void list_whenEmpty_autoCreatesFromCustomerAddress() {
+        customer.setAddress("123 Phố Huế, Hà Nội");
+        customer.setContactName("Chị Hoa");
+        customer.setPhone("0912345678");
+
+        List<DeliveryAddressResponse> res = service.list(1L, owner);
+
+        assertThat(res).hasSize(1);
+        assertThat(res.get(0).address()).isEqualTo("123 Phố Huế, Hà Nội");
+        assertThat(res.get(0).label()).isEqualTo("Địa chỉ trụ sở / Kho chính");
+        assertThat(res.get(0).receiverName()).isEqualTo("Chị Hoa");
+        assertThat(res.get(0).receiverPhone()).isEqualTo("0912345678");
+        assertThat(res.get(0).isDefault()).isTrue();
+        verify(addressRepository).save(any(CustomerDeliveryAddress.class));
     }
 }
