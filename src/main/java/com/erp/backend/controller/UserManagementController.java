@@ -5,19 +5,23 @@ import com.erp.backend.dto.UserAccountResponse;
 import com.erp.backend.dto.user.*;
 import com.erp.backend.entity.RoleName;
 import com.erp.backend.security.UserDetailsImpl;
+import com.erp.backend.service.UserExcelImportService;
 import com.erp.backend.service.UserManagementService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
 /**
- * S1-08 + S1-09 + Lock/Unlock: API quản trị tài khoản — CHỈ Quản trị hệ thống (ADMIN) được gọi.
+ * S1-08 + S1-09 + Lock/Unlock + SCRUM-18 (S2-01): API quản trị tài khoản — CHỈ Quản trị hệ thống (ADMIN) được gọi.
  */
 @RestController
 @RequestMapping("/api/admin/users")
@@ -26,6 +30,7 @@ import java.util.List;
 public class UserManagementController {
 
     private final UserManagementService userManagementService;
+    private final UserExcelImportService userExcelImportService;
 
     /** Danh sách người dùng đơn giản (phục vụ chức năng khoá/mở khoá nhanh). */
     @GetMapping("/list")
@@ -84,5 +89,27 @@ public class UserManagementController {
                                           @AuthenticationPrincipal UserDetailsImpl currentUser) {
         Long currentUserId = (currentUser != null) ? currentUser.getId() : null;
         return userManagementService.updateAssignments(id, request, currentUserId);
+    }
+
+    /** S2-01: Tải tệp mẫu Excel nhập người dùng hàng loạt. */
+    @GetMapping("/import/template")
+    public ResponseEntity<byte[]> downloadImportTemplate() {
+        byte[] excelBytes = userExcelImportService.generateTemplate();
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=Mau_Nhap_Nguoi_Dung_ERP.xlsx")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(excelBytes);
+    }
+
+    /** S2-01: Xem trước dữ liệu và báo lỗi từng dòng trước khi nhập. */
+    @PostMapping("/import/preview")
+    public ResponseEntity<UserImportPreviewResponse> previewImport(@RequestParam("file") MultipartFile file) {
+        return ResponseEntity.ok(userExcelImportService.previewImport(file));
+    }
+
+    /** S2-01: Thực thi nhập danh sách người dùng (dòng lỗi bỏ qua, dòng hợp lệ vẫn nhập, có báo cáo). */
+    @PostMapping("/import/execute")
+    public ResponseEntity<UserImportSummaryResponse> executeImport(@RequestParam("file") MultipartFile file) {
+        return ResponseEntity.ok(userExcelImportService.executeImport(file));
     }
 }

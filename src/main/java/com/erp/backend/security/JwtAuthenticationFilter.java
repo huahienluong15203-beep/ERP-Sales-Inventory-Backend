@@ -47,11 +47,25 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 UserDetails userDetails = userDetailsService.loadUserByUsername(username);
 
                 // 4. Reloading current account state invalidates existing JWTs after an admin lock.
-                if (userDetails.isEnabled() && userDetails.isAccountNonLocked()) {
-                    User dbUser = userRepository.findByUsername(username).orElse(null);
+                if (!userDetails.isEnabled() || !userDetails.isAccountNonLocked()) {
+                    logger.warn("Tài khoản '{}' đã bị khoá hoặc vô hiệu hoá bởi Quản trị viên.", username);
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    response.setContentType("application/json;charset=UTF-8");
+                    response.getWriter().write("{\"status\":401,\"error\":\"Unauthorized\",\"message\":\"Tài khoản của bạn đã bị khoá bởi Quản trị viên. Phiên làm việc đã bị thu hồi!\",\"code\":\"ACCOUNT_LOCKED\"}");
+                    return;
+                }
 
-                    // 5. Kiểm tra Đơn phiên làm việc (Single Active Session): 1 nick chỉ 1 phiên duy nhất
-                    if (dbUser != null) {
+                User dbUser = userRepository.findByUsername(username).orElse(null);
+                if (dbUser != null && ("LOCKED".equalsIgnoreCase(dbUser.getStatus()) || (dbUser.getLockUntil() != null && dbUser.getLockUntil().isAfter(java.time.LocalDateTime.now())))) {
+                    logger.warn("Tài khoản '{}' trạng thái trong DB đang bị khoá.", username);
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    response.setContentType("application/json;charset=UTF-8");
+                    response.getWriter().write("{\"status\":401,\"error\":\"Unauthorized\",\"message\":\"Tài khoản của bạn đã bị khoá bởi Quản trị viên. Phiên làm việc đã bị thu hồi!\",\"code\":\"ACCOUNT_LOCKED\"}");
+                    return;
+                }
+
+                // 5. Kiểm tra Đơn phiên làm việc (Single Active Session): 1 nick chỉ 1 phiên duy nhất
+                if (dbUser != null) {
                         String currentActiveSessionId = dbUser.getActiveSessionId();
                         boolean isSessionInvalid = false;
                         if (currentActiveSessionId != null && (jwtSessionId == null || !currentActiveSessionId.equals(jwtSessionId))) {
@@ -94,7 +108,6 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                         // Lưu vào SecurityContext để các Controller kiểm tra quyền (@PreAuthorize)
                         SecurityContextHolder.getContext().setAuthentication(authentication);
                     }
-                }
             }
         } catch (Exception e) {
             logger.error("Không thể xác thực người dùng: {}", e.getMessage());

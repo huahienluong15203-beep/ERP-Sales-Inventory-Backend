@@ -4,11 +4,15 @@ import com.erp.backend.dto.LoginRequest;
 import com.erp.backend.dto.LoginResponse;
 import com.erp.backend.dto.MessageResponse;
 import com.erp.backend.service.AuthService;
+import com.erp.backend.service.ForgotPasswordRateLimiter;
 import lombok.RequiredArgsConstructor;
 import com.erp.backend.dto.ForgotPasswordRequest;
 import com.erp.backend.dto.ResetPasswordRequest;
 
 import com.erp.backend.dto.ChangePasswordRequest;
+import com.erp.backend.exception.TooManyRequestsException;
+import java.util.Map;
+import jakarta.servlet.http.HttpServletRequest;
 import com.erp.backend.security.UserDetailsImpl;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -21,6 +25,7 @@ import org.springframework.web.bind.annotation.*;
 public class AuthController {
 
     private final AuthService authService;
+    private final ForgotPasswordRateLimiter forgotPasswordRateLimiter;
 
     // 1. API ĐĂNG NHẬP (Story S1-01)
     @PostMapping("/login")
@@ -45,10 +50,19 @@ public class AuthController {
 
     // 3. API QUÊN MẬT KHẨU (Gửi mail đặt lại mật khẩu)
     @PostMapping("/forgot-password")
-    public ResponseEntity<?> forgotPassword(@RequestBody ForgotPasswordRequest request) {
+    public ResponseEntity<?> forgotPassword(@RequestBody ForgotPasswordRequest request,
+                                            HttpServletRequest httpRequest) {
         try {
-            String message = authService.forgotPassword(request);
-            return ResponseEntity.ok(new MessageResponse(message));
+            String message = authService.forgotPassword(request, httpRequest.getRemoteAddr());
+            // Kèm số giây phải chờ trước khi gửi lại để Frontend đếm ngược đúng cấu hình
+            return ResponseEntity.ok(Map.of(
+                    "message", message,
+                    "cooldownSeconds", forgotPasswordRateLimiter.getCooldownSeconds()));
+        } catch (TooManyRequestsException e) {
+            // 429: gửi quá nhanh -> báo số giây phải đợi để Frontend đếm ngược
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .header("Retry-After", String.valueOf(e.getRetryAfterSeconds()))
+                    .body(Map.of("message", e.getMessage(), "retryAfterSeconds", e.getRetryAfterSeconds()));
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(new MessageResponse(e.getMessage()));
         }

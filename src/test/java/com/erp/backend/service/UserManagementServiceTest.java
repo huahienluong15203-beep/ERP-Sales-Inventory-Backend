@@ -84,7 +84,7 @@ class UserManagementServiceTest {
     void create_success() {
         when(tempPasswordGenerator.generate()).thenReturn("Temp1234ab");
         when(passwordEncoder.encode("Temp1234ab")).thenReturn("HASHED");
-        when(mailService.sendAccountCreatedEmail(any(), eq("Temp1234ab"))).thenReturn(true);
+        when(mailService.isConfigured()).thenReturn(true);
 
         CreateUserResponse res = service.create(newRequest("Sales01", RoleName.ROLE_SALES_REP));
 
@@ -98,6 +98,8 @@ class UserManagementServiceTest {
         assertThat(saved.getStatus()).isEqualTo("ACTIVE");
         assertThat(res.activationEmailSent()).isTrue();
         assertThat(res.user().getRoles()).containsExactly("ROLE_SALES_REP");
+        // Email được giao cho luồng chạy ngầm với đúng người nhận và mật khẩu tạm
+        verify(mailService).sendAccountCreatedEmail("sales01@erp.com", "Nguyễn Văn A", "sales01", "Temp1234ab");
     }
 
     @Test
@@ -114,7 +116,7 @@ class UserManagementServiceTest {
                     assertThat(be.getField()).isEqualTo("username");
                 });
         verify(userRepository, never()).save(any());
-        verify(mailService, never()).sendAccountCreatedEmail(any(), any());
+        verify(mailService, never()).sendAccountCreatedEmail(any(), any(), any(), any());
     }
 
     @Test
@@ -131,7 +133,7 @@ class UserManagementServiceTest {
     @DisplayName("S1-08: Chưa cấu hình SMTP -> vẫn tạo được tài khoản, báo activationEmailSent = false")
     void create_mailNotSent_stillCreated() {
         when(tempPasswordGenerator.generate()).thenReturn("Temp1234ab");
-        when(mailService.sendAccountCreatedEmail(any(), any())).thenReturn(false);
+        when(mailService.isConfigured()).thenReturn(false);
 
         CreateUserResponse res = service.create(newRequest("sales02", RoleName.ROLE_SALES_REP));
 

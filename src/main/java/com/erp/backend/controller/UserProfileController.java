@@ -73,6 +73,8 @@ public class UserProfileController {
             userInfo.put("fullName", user.getFullName());
             userInfo.put("email", user.getEmail());
             userInfo.put("phone", user.getPhone() != null ? user.getPhone() : "0988776655");
+            userInfo.put("avatarUrl", user.getAvatarUrl());
+            userInfo.put("avatarThumbnailUrl", user.getAvatarThumbnailUrl());
             userInfo.put("status", user.getStatus());
             userInfo.put("role", effectiveRole);
             userInfo.put("roles", userRoles);

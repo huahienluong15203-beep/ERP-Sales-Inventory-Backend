@@ -6,6 +6,7 @@ import com.erp.backend.dto.LoginResponse;
 import com.erp.backend.dto.ResetPasswordRequest;
 import com.erp.backend.entity.PasswordResetToken;
 import com.erp.backend.entity.User;
+import com.erp.backend.exception.TooManyRequestsException;
 import com.erp.backend.repository.PasswordResetTokenRepository;
 import com.erp.backend.repository.UserRepository;
 import com.erp.backend.security.JwtUtils;
@@ -19,6 +20,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 @Service
 @RequiredArgsConstructor
@@ -29,6 +31,11 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtUtils jwtUtils;
     private final EmailService emailService;
+    private final ForgotPasswordRateLimiter forgotPasswordRateLimiter;
+
+    /** Định dạng email hợp lệ: ten@tenmien.duoi (vd: nguyenvana@gmail.com). */
+    private static final Pattern EMAIL_PATTERN = Pattern
+            .compile("^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,}$");
 
     @Value("${erp.app.resetPasswordExpirationMs:1800000}")
     private long resetTokenExpirationMs;
@@ -39,27 +46,30 @@ public class AuthService {
     private static final int MAX_FAILED_ATTEMPTS = 5;
     private static final int LOCK_TIME_DURATION_MINUTES = 15;
 
-    // ... (Giữ nguyên hàm authenticateUser cũ) ...
+    /**
+     * S1-01 + quy tắc 10: mọi trường hợp đăng nhập thất bại (sai tài khoản, sai mật khẩu, đang bị khoá)
+     * đều trả về CÙNG một thông báo, để người ngoài không dò được tài khoản nào tồn tại / mật khẩu nào đúng.
+     */
+    public static final String LOGIN_FAILED_MESSAGE =
+            "Tài khoản hoặc mật khẩu không chính xác, hoặc tài khoản đang bị tạm khoá. Vui lòng kiểm tra lại hoặc thử lại sau ít phút.";
+
     @Transactional(noRollbackFor = RuntimeException.class)
     public LoginResponse authenticateUser(LoginRequest loginRequest) {
-        // [Toàn bộ logic hàm authenticateUser cũ giữ nguyên 100%]
         User user = userRepository.findByUsername(loginRequest.getUsername())
-                .orElseThrow(() -> new RuntimeException("Tài khoản hoặc mật khẩu không chính xác!"));
+                .orElseThrow(() -> new RuntimeException(LOGIN_FAILED_MESSAGE));
 
         if ("LOCKED".equalsIgnoreCase(user.getStatus())) {
-            if (user.getLockUntil() != null) {
-                if (user.getLockUntil().isAfter(LocalDateTime.now())) {
-                    throw new RuntimeException(
-                            "Tài khoản đang bị tạm khoá do nhập sai quá 5 lần. Vui lòng thử lại sau!");
-                } else {
-                    user.setStatus("ACTIVE");
-                    user.setFailedLoginAttempts(0);
-                    user.setLockUntil(null);
-                    userRepository.save(user);
-                }
-            } else {
-                throw new RuntimeException("Tài khoản đã bị khoá bởi Quản trị viên!");
+            boolean tempLockExpired = user.getLockUntil() != null && !user.getLockUntil().isAfter(LocalDateTime.now());
+            if (!tempLockExpired) {
+                // Đang khoá (tạm khoá 15 phút hoặc Admin khoá): KHÔNG kiểm tra mật khẩu,
+                // tránh việc dò mật khẩu trong lúc bị khoá; thông báo giống hệt trường hợp sai mật khẩu.
+                throw new RuntimeException(LOGIN_FAILED_MESSAGE);
             }
+            // Hết 15 phút tạm khoá -> mở lại và cho đăng nhập tiếp
+            user.setStatus("ACTIVE");
+            user.setFailedLoginAttempts(0);
+            user.setLockUntil(null);
+            userRepository.save(user);
         }
 
         boolean isPasswordMatch = passwordEncoder.matches(loginRequest.getPassword(), user.getPassword());
@@ -67,15 +77,12 @@ public class AuthService {
             int attempts = user.getFailedLoginAttempts() + 1;
             user.setFailedLoginAttempts(attempts);
             if (attempts >= MAX_FAILED_ATTEMPTS) {
+                // S1-01: sai 5 lần liên tiếp -> tạm khoá 15 phút
                 user.setStatus("LOCKED");
                 user.setLockUntil(LocalDateTime.now().plusMinutes(LOCK_TIME_DURATION_MINUTES));
-                userRepository.save(user);
-                throw new RuntimeException("Bạn đã nhập sai 5 lần liên tiếp. Tài khoản bị tạm khoá trong 15 phút!");
-            } else {
-                userRepository.save(user);
-                int remaining = MAX_FAILED_ATTEMPTS - attempts;
-                throw new RuntimeException("Tài khoản hoặc mật khẩu không chính xác! (Còn " + remaining + " lần thử)");
             }
+            userRepository.save(user);
+            throw new RuntimeException(LOGIN_FAILED_MESSAGE);
         }
 
         user.setFailedLoginAttempts(0);
@@ -92,15 +99,16 @@ public class AuthService {
         // ROLE_ADMIN → ROLE_SALES_MANAGER → ROLE_WH_MANAGER → ROLE_ACCOUNTANT → ...
         List<String> roleOrder = List.of(
                 "ROLE_ADMIN", "ROLE_SALES_MANAGER", "ROLE_WH_MANAGER",
-                "ROLE_ACCOUNTANT", "ROLE_WAREHOUSE", "ROLE_SALES_REP", "ROLE_CUSTOMER"
-        );
+                "ROLE_ACCOUNTANT", "ROLE_WAREHOUSE", "ROLE_SALES_REP", "ROLE_CUSTOMER");
         List<String> roles = user.getRoles().stream()
                 .map(role -> role.getName().name())
                 .sorted((a, b) -> {
                     int ia = roleOrder.indexOf(a);
                     int ib = roleOrder.indexOf(b);
-                    if (ia < 0) ia = roleOrder.size();
-                    if (ib < 0) ib = roleOrder.size();
+                    if (ia < 0)
+                        ia = roleOrder.size();
+                    if (ib < 0)
+                        ib = roleOrder.size();
                     return ia - ib;
                 })
                 .toList();
@@ -129,40 +137,87 @@ public class AuthService {
     }
 
     // 8. TÍNH NĂNG QUÊN MẬT KHẨU (Gửi mail kèm link 30 phút)
+    // Thứ tự kiểm tra:
+    // (1) Email bắt buộc nhập (2) Đúng định dạng
+    // (3) Chống spam: 2 lần gửi cho cùng email cách nhau >= 1 phút (áp dụng cho mọi email)
+    // (4) Email có tài khoản thì sinh token + gửi mail CHẠY NGẦM; không có thì thôi.
+    //     Cả 2 trường hợp trả về CÙNG một thông báo (S1-03, quy tắc 10: không lộ email nào đã đăng ký)
     @Transactional
     public String forgotPassword(ForgotPasswordRequest request) {
-        if (request.getEmail() == null || request.getEmail().isBlank()) {
-            throw new RuntimeException("Vui lòng cung cấp địa chỉ email!");
+        return forgotPassword(request, null);
+    }
+
+    /**
+     * @param clientKey địa chỉ IP gửi yêu cầu (giữ để tương thích với AuthController; không còn dùng để khoá
+     *                  theo số lần nhập email sai, vì việc khoá đó làm lộ email nào chưa đăng ký).
+     */
+    @Transactional
+    public String forgotPassword(ForgotPasswordRequest request, String clientKey) {
+        String email = request.getEmail() == null ? "" : request.getEmail().trim();
+
+        // (1) Bắt buộc nhập
+        if (email.isEmpty()) {
+            throw new RuntimeException("Vui lòng nhập địa chỉ email!");
         }
 
-        Optional<User> userOpt = userRepository.findByEmail(request.getEmail().trim());
-        if (userOpt.isPresent()) {
-            User user = userOpt.get();
-
-            // Xoá các token cũ chưa sử dụng của user này (nếu có)
-            tokenRepository.deleteByUser(user);
-
-            // Sinh token ngẫu nhiên UUID
-            String token = UUID.randomUUID().toString();
-            LocalDateTime expiryDate = LocalDateTime.now().plusSeconds(resetTokenExpirationMs / 1000);
-
-            PasswordResetToken resetToken = PasswordResetToken.builder()
-                    .token(token)
-                    .user(user)
-                    .expiryDate(expiryDate)
-                    .used(false)
-                    .build();
-
-            tokenRepository.save(resetToken);
-
-            // Gửi email link
-            String resetLink = resetPasswordUrl + "?token=" + token;
-            emailService.sendPasswordResetEmail(user.getEmail(), resetLink);
+        // (2) Kiểm tra định dạng
+        if (!EMAIL_PATTERN.matcher(email).matches()) {
+            throw new RuntimeException(
+                    "Email không đúng định dạng (ví dụ đúng: nguyenvana@gmail.com). Vui lòng kiểm tra lại!");
         }
 
-        // TIÊU CHÍ BẢO MẬT: Dù email có tồn tại hay không thì vẫn trả về cùng 1 thông
-        // báo
-        return "Nếu email của bạn tồn tại trong hệ thống, chúng tôi đã gửi liên kết đặt lại mật khẩu. Vui lòng kiểm tra hộp thư (liên kết có hiệu lực trong 30 phút)!";
+        // (3) Chống spam: áp dụng cho MỌI email (có hay không có tài khoản) để không lộ email nào tồn tại
+        long waitSeconds = forgotPasswordRateLimiter.secondsUntilAllowed(email);
+        if (waitSeconds > 0) {
+            throw new TooManyRequestsException(
+                    "Bạn vừa yêu cầu gửi email đặt lại mật khẩu. Vui lòng đợi " + formatWait(waitSeconds)
+                            + " rồi thử lại, và kiểm tra cả hộp thư Spam.",
+                    waitSeconds);
+        }
+        forgotPasswordRateLimiter.recordSent(email);
+
+        // (4) S1-03 + quy tắc 10: email không tồn tại vẫn trả về CÙNG thông báo, chỉ là không gửi mail
+        User user = userRepository.findByEmailIgnoreCase(email).orElse(null);
+        if (user == null) {
+            return FORGOT_PASSWORD_MESSAGE;
+        }
+
+        // Xoá các token cũ chưa sử dụng của user này (nếu có)
+        tokenRepository.deleteByUser(user);
+
+        // Sinh token ngẫu nhiên UUID
+        String token = UUID.randomUUID().toString();
+        LocalDateTime expiryDate = LocalDateTime.now().plusSeconds(resetTokenExpirationMs / 1000);
+
+        PasswordResetToken resetToken = PasswordResetToken.builder()
+                .token(token)
+                .user(user)
+                .expiryDate(expiryDate)
+                .used(false)
+                .build();
+
+        tokenRepository.save(resetToken);
+
+        // (5) Gửi email CHẠY NGẦM, sau khi token đã lưu DB thành công -> API trả kết
+        // quả ngay
+        String toEmail = user.getEmail();
+        String resetLink = resetPasswordUrl + "?token=" + token;
+        AfterCommit.run(() -> emailService.sendPasswordResetEmail(toEmail, resetLink));
+
+        return FORGOT_PASSWORD_MESSAGE;
+    }
+
+    /** Thông báo chung cho quên mật khẩu: giống nhau dù email có tài khoản hay không. */
+    public static final String FORGOT_PASSWORD_MESSAGE =
+            "Nếu email này đã được đăng ký, hệ thống đã gửi liên kết đặt lại mật khẩu. "
+                    + "Vui lòng kiểm tra hộp thư (kể cả mục Spam). Liên kết có hiệu lực trong 30 phút.";
+
+    /** Hiển thị thời gian chờ dễ đọc: "45 giây" hoặc "12 phút". */
+    private String formatWait(long seconds) {
+        if (seconds < 60) {
+            return seconds + " giây";
+        }
+        return ((seconds + 59) / 60) + " phút";
     }
 
     // 9. TÍNH NĂNG ĐẶT LẠI MẬT KHẨU MỚI (Từ link trong email)
@@ -254,7 +309,7 @@ public class AuthService {
         user.setPassword(passwordEncoder.encode(newPassword));
         user.setMustChangePassword(false);
         // S1-04: Ghi nhận thời điểm đổi mật khẩu -> JwtAuthenticationFilter sẽ thu hồi
-        //        mọi token cũ (phiên đăng nhập khác) được cấp trước thời điểm này
+        // mọi token cũ (phiên đăng nhập khác) được cấp trước thời điểm này
         user.setPasswordChangedAt(LocalDateTime.now());
         userRepository.save(user);
 
@@ -262,4 +317,3 @@ public class AuthService {
 
     }
 }
-

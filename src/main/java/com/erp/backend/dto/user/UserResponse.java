@@ -22,6 +22,8 @@ public class UserResponse {
     private List<String> roles;
     private List<RefItem> warehouses;
     private List<RefItem> regions;
+    private String avatarUrl;
+    private String avatarThumbnailUrl;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -18,6 +19,10 @@ public class EmailService {
     @org.springframework.beans.factory.annotation.Value("${erp.app.mailFrom:${spring.mail.username:okluon123pk@gmail.com}}")
     private String mailFrom;
 
+    /**
+     * Gửi email đặt lại mật khẩu - CHẠY NGẦM (@Async) để API không phải đợi máy chủ Gmail.
+     */
+    @Async
     public void sendPasswordResetEmail(String toEmail, String resetLink) {
         // Luôn in link ra Console để tiện cho lập trình viên test ngay tại máy
         System.out.println("\n=======================================================");

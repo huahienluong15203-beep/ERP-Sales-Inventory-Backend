@@ -9,6 +9,8 @@ import com.erp.backend.repository.UserRepository;
 import com.erp.backend.security.JwtUtils;
 import com.erp.backend.service.AuthService;
 import com.erp.backend.service.EmailService;
+import com.erp.backend.service.ForgotPasswordRateLimiter;
+import com.erp.backend.exception.TooManyRequestsException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -45,6 +47,9 @@ class AuthServiceForgotPasswordTest {
     @Mock
     private EmailService emailService;
 
+    @Mock
+    private ForgotPasswordRateLimiter forgotPasswordRateLimiter;
+
     @InjectMocks
     private AuthService authService;
 
@@ -54,37 +59,87 @@ class AuthServiceForgotPasswordTest {
         ReflectionTestUtils.setField(authService, "resetPasswordUrl", "http://localhost:5173/reset-password");
     }
 
-    @Test
-    @DisplayName("AC3: Email không tồn tại vẫn trả về cùng thông báo để bảo mật chống dò email")
-    void testForgotPassword_EmailNotFound_StillReturnsGenericMessage() {
+    private ForgotPasswordRequest request(String email) {
         ForgotPasswordRequest request = new ForgotPasswordRequest();
-        request.setEmail("unknown@erp.com");
-
-        when(userRepository.findByEmail("unknown@erp.com")).thenReturn(Optional.empty());
-
-        String message = authService.forgotPassword(request);
-
-        assertNotNull(message);
-        assertTrue(message.contains("Nếu email của bạn tồn tại trong hệ thống"));
-        verify(emailService, never()).sendPasswordResetEmail(anyString(), anyString());
-        verify(tokenRepository, never()).save(any());
+        request.setEmail(email);
+        return request;
     }
 
     @Test
-    @DisplayName("AC1: Email tồn tại sinh token và gửi link đặt lại mật khẩu")
-    void testForgotPassword_EmailExists_GeneratesTokenAndSendsEmail() {
-        ForgotPasswordRequest request = new ForgotPasswordRequest();
-        request.setEmail("user@erp.com");
+    @DisplayName("Bỏ trống email -> báo yêu cầu nhập, không truy vấn DB")
+    void testForgotPassword_EmptyEmail_Rejected() {
+        RuntimeException ex = assertThrows(RuntimeException.class, () -> authService.forgotPassword(request("   ")));
+        assertTrue(ex.getMessage().contains("Vui lòng nhập"));
+        verifyNoInteractions(userRepository, emailService);
+    }
 
+    @Test
+    @DisplayName("Email sai định dạng -> báo lỗi định dạng, không truy vấn DB, không gửi mail")
+    void testForgotPassword_InvalidFormat_Rejected() {
+        for (String bad : new String[]{"abc", "abc@", "abc@gmail", "a b@gmail.com"}) {
+            RuntimeException ex = assertThrows(RuntimeException.class, () -> authService.forgotPassword(request(bad)));
+            assertTrue(ex.getMessage().contains("không đúng định dạng"), "Email: " + bad);
+        }
+        verifyNoInteractions(userRepository, emailService);
+    }
+
+    @Test
+    @DisplayName("S1-03: Email chưa có trong hệ thống -> CÙNG thông báo như email có thật, không sinh token, không gửi mail")
+    void testForgotPassword_EmailNotFound_SameMessage() {
+        when(userRepository.findByEmailIgnoreCase("unknown@erp.com")).thenReturn(Optional.empty());
+
+        String message = authService.forgotPassword(request("unknown@erp.com"), "1.2.3.4");
+
+        assertEquals(AuthService.FORGOT_PASSWORD_MESSAGE, message);
+        assertFalse(message.contains("chưa được đăng ký"));
+        verify(emailService, never()).sendPasswordResetEmail(anyString(), anyString());
+        verify(tokenRepository, never()).save(any());
+        // vẫn ghi nhận lượt gửi để chống spam giống hệt email có thật
+        verify(forgotPasswordRateLimiter).recordSent("unknown@erp.com");
+    }
+
+    @Test
+    @DisplayName("S1-03: Thông báo cho email có thật và email không tồn tại giống hệt nhau")
+    void testForgotPassword_KnownAndUnknown_IdenticalResponse() {
         User user = User.builder().id(1L).email("user@erp.com").build();
-        when(userRepository.findByEmail("user@erp.com")).thenReturn(Optional.of(user));
+        when(userRepository.findByEmailIgnoreCase("user@erp.com")).thenReturn(Optional.of(user));
+        when(userRepository.findByEmailIgnoreCase("ghost@erp.com")).thenReturn(Optional.empty());
 
-        String message = authService.forgotPassword(request);
+        String known = authService.forgotPassword(request("user@erp.com"));
+        String unknown = authService.forgotPassword(request("ghost@erp.com"));
 
-        assertNotNull(message);
+        assertEquals(known, unknown);
+    }
+
+    @Test
+    @DisplayName("AC1: Email tồn tại -> sinh token, ghi nhận lượt gửi và gửi link đặt lại mật khẩu")
+    void testForgotPassword_EmailExists_GeneratesTokenAndSendsEmail() {
+        User user = User.builder().id(1L).email("user@erp.com").build();
+        when(userRepository.findByEmailIgnoreCase("User@erp.com")).thenReturn(Optional.of(user));
+
+        String message = authService.forgotPassword(request(" User@erp.com "));
+
+        assertEquals(AuthService.FORGOT_PASSWORD_MESSAGE, message);
         verify(tokenRepository, times(1)).deleteByUser(user);
         verify(tokenRepository, times(1)).save(any(PasswordResetToken.class));
+        verify(forgotPasswordRateLimiter, times(1)).recordSent("User@erp.com");
         verify(emailService, times(1)).sendPasswordResetEmail(eq("user@erp.com"), contains("token="));
+    }
+
+    @Test
+    @DisplayName("Chống spam: yêu cầu lại quá nhanh -> 429, không sinh token, không gửi mail")
+    void testForgotPassword_TooSoon_Throttled() {
+        when(forgotPasswordRateLimiter.secondsUntilAllowed("user@erp.com")).thenReturn(45L);
+
+        TooManyRequestsException ex = assertThrows(TooManyRequestsException.class,
+                () -> authService.forgotPassword(request("user@erp.com")));
+
+        assertEquals(45L, ex.getRetryAfterSeconds());
+        assertTrue(ex.getMessage().contains("45 giây"));
+        verify(tokenRepository, never()).save(any());
+        verify(emailService, never()).sendPasswordResetEmail(anyString(), anyString());
+        verify(forgotPasswordRateLimiter, never()).recordSent(anyString());
+        verifyNoInteractions(userRepository); // bị chặn trước khi tra DB -> không lộ email có tồn tại hay không
     }
 
     @Test

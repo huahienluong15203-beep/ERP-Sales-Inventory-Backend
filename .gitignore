@@ -68,4 +68,9 @@ release.properties
 !**/src/main/**/target/
 !**/src/test/**/target/
 HELP.md
+
+# Uploads thư mục lưu trữ file người dùng tải lên
+uploads/
+.agents/
+
 

@@ -1,6 +1,5 @@
 package com.erp.backend.service;
 
-import com.erp.backend.entity.User;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -8,6 +7,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.mail.MailException;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 /**
@@ -28,18 +28,27 @@ public class MailService {
     @Value("${erp.app.mailFrom:no-reply@erp.local}")
     private String mailFrom;
 
-    /** S1-08: Gửi email kích hoạt kèm mật khẩu tạm. Trả về true nếu gửi thành công. */
-    public boolean sendAccountCreatedEmail(User user, String tempPassword) {
+    /** Hệ thống đã cấu hình máy chủ gửi mail (SMTP) hay chưa. */
+    public boolean isConfigured() {
+        return mailSenderProvider.getIfAvailable() != null;
+    }
+
+    /**
+     * S1-08: Gửi email kích hoạt kèm mật khẩu tạm - CHẠY NGẦM (@Async).
+     * API tạo tài khoản trả kết quả ngay, không phải đợi máy chủ Gmail phản hồi.
+     */
+    @Async
+    public void sendAccountCreatedEmail(String toEmail, String fullName, String username, String tempPassword) {
         JavaMailSender sender = mailSenderProvider.getIfAvailable();
         if (sender == null) {
             log.warn("[DEV] Chưa cấu hình SMTP - không gửi được email. Tài khoản: {} | Mật khẩu tạm: {}",
-                    user.getUsername(), tempPassword);
-            return false;
+                    username, tempPassword);
+            return;
         }
 
         SimpleMailMessage message = new SimpleMailMessage();
         message.setFrom(mailFrom);
-        message.setTo(user.getEmail());
+        message.setTo(toEmail);
         message.setSubject("[ERP Bán hàng & Kho] Tài khoản của bạn đã được tạo");
         message.setText("""
                 Xin chào %s,
@@ -53,14 +62,13 @@ public class MailService {
                 Bạn sẽ được yêu cầu đổi mật khẩu ngay ở lần đăng nhập đầu tiên.
 
                 Nếu bạn không yêu cầu tài khoản này, vui lòng bỏ qua email.
-                """.formatted(user.getFullName(), user.getUsername(), tempPassword, frontendUrl));
+                """.formatted(fullName, username, tempPassword, frontendUrl));
 
         try {
             sender.send(message);
-            return true;
+            log.info("Đã gửi email kích hoạt tài khoản '{}' tới {}", username, toEmail);
         } catch (MailException e) {
-            log.error("Gửi email kích hoạt cho {} thất bại: {}", user.getUsername(), e.getMessage());
-            return false;
+            log.error("Gửi email kích hoạt cho {} thất bại: {}", username, e.getMessage());
         }
     }
 }

@@ -10,5 +10,7 @@ import java.util.List;
 public interface RegionRepository extends JpaRepository<Region, Long> {
     boolean existsByCode(String code);
 
+    java.util.Optional<Region> findByCodeIgnoreCase(String code);
+
     List<Region> findByStatusOrderByNameAsc(String status);
 }

@@ -86,6 +86,14 @@ public class User {
     @Column(name = "active_session_id", length = 100)
     private String activeSessionId;
 
+    // S2-03: Ảnh đại diện người dùng (hỗ trợ hiển thị trên lịch sử, đơn hàng, navbar)
+    @Column(name = "avatar_url", length = 500)
+    private String avatarUrl;
+
+    // S2-03: Ảnh đại diện bản thu nhỏ (thumbnail) tối ưu tải danh sách/lịch sử
+    @Column(name = "avatar_thumbnail_url", length = 500)
+    private String avatarThumbnailUrl;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
