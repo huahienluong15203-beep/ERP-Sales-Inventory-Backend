@@ -79,8 +79,18 @@ public class CustomerService {
                         transactionLocked),
                 PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by("id").descending())));
 
+        List<Long> customerIds = result.getContent().stream().map(Customer::getId).toList();
+        Map<Long, Integer> deliveryCounts = new HashMap<>();
+        if (!customerIds.isEmpty()) {
+            for (Object[] row : addressRepository.countByCustomerIdsAndStatus(customerIds, ACTIVE)) {
+                Long cid = (Long) row[0];
+                Long cnt = (Long) row[1];
+                deliveryCounts.put(cid, cnt != null ? cnt.intValue() : 0);
+            }
+        }
+
         Map<CustomerGroup, RefItem> priceListMap = resolveEffectivePriceLists();
-        return PageResponse.of(result.map(c -> toResponse(c, priceListMap.get(c.getCustomerGroup()))));
+        return PageResponse.of(result.map(c -> toResponse(c, priceListMap.get(c.getCustomerGroup()), deliveryCounts.getOrDefault(c.getId(), 0))));
     }
 
     @Transactional(readOnly = true)
@@ -591,6 +601,11 @@ public class CustomerService {
     }
 
     CustomerResponse toResponse(Customer c, RefItem priceListRef) {
+        int count = c.getId() != null ? (int) addressRepository.countByCustomer_IdAndStatus(c.getId(), ACTIVE) : 0;
+        return toResponse(c, priceListRef, count);
+    }
+
+    CustomerResponse toResponse(Customer c, RefItem priceListRef, Integer deliveryPointCount) {
         Region region = c.getRegion();
         return new CustomerResponse(
                 c.getId(),
@@ -615,7 +630,8 @@ public class CustomerService {
                 c.getTransactionLockedAt(),
                 c.getCreatedAt(),
                 c.getUpdatedAt(),
-                priceListRef);
+                priceListRef,
+                deliveryPointCount != null ? deliveryPointCount : 0);
     }
 
     private RefItem toUserRef(User u) {

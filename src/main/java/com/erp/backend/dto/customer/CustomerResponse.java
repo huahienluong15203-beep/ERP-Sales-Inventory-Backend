@@ -34,5 +34,36 @@ public record CustomerResponse(
         LocalDateTime transactionLockedAt,
         LocalDateTime createdAt,
         LocalDateTime updatedAt,
-        RefItem priceList) {
+        RefItem priceList,
+        Integer deliveryPointCount) {
+
+    public CustomerResponse(
+            Long id,
+            String code,
+            String name,
+            String taxCode,
+            String customerGroup,
+            String customerGroupLabel,
+            RefItem region,
+            RefItem salesRep,
+            String contactName,
+            String phone,
+            String email,
+            String address,
+            String note,
+            String status,
+            String statusReason,
+            BigDecimal creditLimit,
+            Integer maxDebtDays,
+            Boolean transactionLocked,
+            String transactionLockReason,
+            LocalDateTime transactionLockedAt,
+            LocalDateTime createdAt,
+            LocalDateTime updatedAt,
+            RefItem priceList) {
+        this(id, code, name, taxCode, customerGroup, customerGroupLabel, region, salesRep,
+                contactName, phone, email, address, note, status, statusReason, creditLimit,
+                maxDebtDays, transactionLocked, transactionLockReason, transactionLockedAt,
+                createdAt, updatedAt, priceList, 0);
+    }
 }
