@@ -14,4 +14,7 @@ public interface CustomerDeliveryAddressRepository extends JpaRepository<Custome
     List<CustomerDeliveryAddress> findByCustomer_IdAndStatusOrderByDefaultAddressDescIdAsc(Long customerId, String status);
 
     Optional<CustomerDeliveryAddress> findByIdAndCustomer_Id(Long id, Long customerId);
+
+    /** Dọn điểm giao khi xoá hồ sơ đại lý chưa phát sinh giao dịch. */
+    void deleteByCustomer_Id(Long customerId);
 }

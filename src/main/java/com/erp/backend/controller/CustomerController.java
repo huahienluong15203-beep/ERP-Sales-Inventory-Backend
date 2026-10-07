@@ -90,6 +90,19 @@ public class CustomerController {
         return customerService.changeStatus(id, request, actor);
     }
 
+    /**
+     * Xoá hồ sơ đại lý chưa phát sinh giao dịch (Admin, Kế toán công nợ). Bắt buộc lý do.
+     * Đã có đơn hàng -> 409 CUSTOMER_HAS_TRANSACTIONS, dùng "Ngừng giao dịch" thay thế.
+     */
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasAnyRole('ADMIN', 'ACCOUNTANT')")
+    public ResponseEntity<Void> delete(@PathVariable Long id,
+                                       @Valid @RequestBody DeleteCustomerRequest request,
+                                       @AuthenticationPrincipal UserDetailsImpl actor) {
+        customerService.delete(id, request, actor);
+        return ResponseEntity.noContent().build();
+    }
+
     // ======================= S3-05: HẠN MỨC CÔNG NỢ & SỐ NGÀY NỢ =======================
 
     /**
