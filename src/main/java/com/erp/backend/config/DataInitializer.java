@@ -37,6 +37,7 @@ public class DataInitializer implements CommandLineRunner {
         seedUser("admin", "admin123", "Quản Trị Viên Hệ Thống", "okluon123pk@gmail.com", "0987654321", RoleName.ROLE_ADMIN);
         seedUser("sales_manager", "manager123", "Trần Quản Lý Kinh Doanh", "manager@erp.com", "0912345678", RoleName.ROLE_SALES_MANAGER);
         seedUser("sales_rep", "sales123", "Lê Văn Bán Hàng", "salesrep@erp.com", "0923456789", RoleName.ROLE_SALES_REP);
+        seedUser("tran_minh", "sales123", "Trần Minh", "tranminh@erp.com", "0912345679", RoleName.ROLE_SALES_REP);
         seedUser("wh_staff", "wh123", "Nguyễn Văn Thủ Kho", "warehouse@erp.com", "0934567890", RoleName.ROLE_WAREHOUSE);
         seedUser("wh_manager", "wh123", "Hoàng Quản Lý Kho", "whmanager@erp.com", "0945678901", RoleName.ROLE_WH_MANAGER);
         seedUser("accountant", "acc123", "Phạm Thị Kế Toán", "accountant@erp.com", "0956789012", RoleName.ROLE_ACCOUNTANT);

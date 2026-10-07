@@ -22,9 +22,7 @@ import com.erp.backend.entity.AuditModule;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 
 /**
  * S3-03: Quản lý hồ sơ đại lý.
@@ -100,8 +98,22 @@ public class CustomerService {
         List<RefItem> regions = regionRepository.findByStatusOrderByNameAsc(ACTIVE).stream()
                 .map(r -> new RefItem(r.getId(), r.getCode(), r.getName()))
                 .toList();
-        List<RefItem> salesReps = userRepository
-                .findDistinctByRoles_NameAndStatusOrderByFullNameAsc(RoleName.ROLE_SALES_REP, ACTIVE).stream()
+
+        Map<Long, User> salesUsersMap = new LinkedHashMap<>();
+        for (User u : userRepository.findDistinctByRoles_NameInAndStatusOrderByFullNameAsc(
+                List.of(RoleName.ROLE_SALES_REP, RoleName.ROLE_SALES_MANAGER), ACTIVE)) {
+            if (u.getId() != null) {
+                salesUsersMap.put(u.getId(), u);
+            }
+        }
+        for (User u : customerRepository.findDistinctSalesRepsWithCustomers()) {
+            if (u != null && u.getId() != null && !salesUsersMap.containsKey(u.getId())) {
+                salesUsersMap.put(u.getId(), u);
+            }
+        }
+
+        List<RefItem> salesReps = salesUsersMap.values().stream()
+                .sorted(Comparator.comparing(User::getFullName, String.CASE_INSENSITIVE_ORDER))
                 .map(this::toUserRef)
                 .toList();
         return new CustomerFormOptionsResponse(groups, statuses, regions, salesReps);
@@ -445,15 +457,16 @@ public class CustomerService {
         customer.setNote(blankToNull(req.getNote()));
     }
 
-    /** Người phụ trách phải là nhân viên kinh doanh đang hoạt động. */
+    /** Người phụ trách phải thuộc bộ phận kinh doanh (nhân viên hoặc quản lý kinh doanh) và đang hoạt động. */
     User loadActiveSalesRep(Long userId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_SALES_REP",
                         "Không tìm thấy nhân viên kinh doanh", "salesRepId"));
-        boolean isSalesRep = user.getRoles().stream().anyMatch(r -> r.getName() == RoleName.ROLE_SALES_REP);
-        if (!isSalesRep) {
+        boolean isSalesStaff = user.getRoles().stream().anyMatch(r ->
+                r.getName() == RoleName.ROLE_SALES_REP || r.getName() == RoleName.ROLE_SALES_MANAGER);
+        if (!isSalesStaff) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_SALES_REP",
-                    user.getFullName() + " không phải nhân viên kinh doanh", "salesRepId");
+                    user.getFullName() + " không thuộc bộ phận kinh doanh", "salesRepId");
         }
         if (!ACTIVE.equalsIgnoreCase(user.getStatus())) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_SALES_REP",
