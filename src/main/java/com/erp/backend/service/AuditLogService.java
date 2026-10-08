@@ -153,11 +153,20 @@ public class AuditLogService {
             String action,
             int page,
             int size) {
+        // Tự động hoán đổi nếu ngày bắt đầu lớn hơn ngày kết thúc để tránh lỗi truy vấn rỗng sai logic
+        LocalDateTime effectiveStart = startDate;
+        LocalDateTime effectiveEnd = endDate;
+        if (effectiveStart != null && effectiveEnd != null && effectiveStart.isAfter(effectiveEnd)) {
+            LocalDateTime temp = effectiveStart;
+            effectiveStart = effectiveEnd;
+            effectiveEnd = temp;
+        }
+
         int safePage = Math.max(page, 0);
         int safeSize = size <= 0 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
 
         Page<AuditLog> result = auditLogRepository.findAll(
-                AuditLogSpecifications.filter(keyword, module, targetType, actorId, startDate, endDate, action),
+                AuditLogSpecifications.filter(keyword, module, targetType, actorId, effectiveStart, effectiveEnd, action),
                 PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by("id").descending())));
 
         return PageResponse.of(result.map(this::toResponse));
