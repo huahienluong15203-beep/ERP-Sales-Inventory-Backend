@@ -196,6 +196,28 @@ public class OrderDraftService {
                 .toList();
     }
 
+    /**
+     * S4-05: Chốt đơn: tính lại giá / chiết khấu theo bảng giá hôm nay từ các dòng đã lưu,
+     * đồng thời kiểm tra lại đại lý (khoá giao dịch, ngừng giao dịch, nợ quá hạn) như tạo đơn mới.
+     */
+    void recalculateForSubmit(SalesOrder order, UserDetailsImpl actor) {
+        OrderDraftRequest req = new OrderDraftRequest();
+        req.setCustomerId(order.getCustomer().getId());
+        req.setDeliveryAddressId(order.getDeliveryAddress() != null ? order.getDeliveryAddress().getId() : null);
+        req.setDesiredDeliveryDate(order.getDesiredDeliveryDate());
+        req.setNote(order.getNote());
+        List<OrderLineRequest> lines = new ArrayList<>();
+        for (SalesOrderLine l : order.getLines()) {
+            OrderLineRequest r = new OrderLineRequest();
+            r.setProductSku(l.getProductSku());
+            r.setUnitName(l.getUnitName());
+            r.setQuantity(l.getQuantity());
+            lines.add(r);
+        }
+        req.setLines(lines);
+        fill(order, req, actor, null);
+    }
+
     // ======================= TÍNH ĐƠN =======================
 
     /**
@@ -410,7 +432,9 @@ public class OrderDraftService {
                 a == null ? null : new OrderResponse.DeliveryAddressInfo(a.getId(), a.getLabel(), a.getAddress(),
                         a.getReceiverName(), a.getReceiverPhone()),
                 o.getDesiredDeliveryDate(), o.getNote(), lines, o.getSubtotal(), o.getDiscountTotal(), o.getTotalAmount(),
-                o.getCreatedByUsername(), o.getCreatedAt(), o.getUpdatedAt(), warnings(c, credit), credit);
+                o.getCreatedByUsername(), o.getCreatedAt(), o.getUpdatedAt(), warnings(c, credit), credit,
+                OrderApprovalReasons.of(o), o.getLastApprovalComment(), o.getSubmittedAt(), o.getApprovedAt(),
+                o.getApprovedByUsername());
     }
 
     /** S3-07 AC3: cảnh báo khi đại lý của đơn đang bị khoá giao dịch. S4-02: cảnh báo vượt hạn mức / nợ quá hạn. */

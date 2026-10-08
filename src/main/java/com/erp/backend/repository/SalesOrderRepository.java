@@ -1,8 +1,10 @@
 package com.erp.backend.repository;
 
 import com.erp.backend.entity.SalesOrder;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -14,6 +16,11 @@ import java.util.Optional;
 public interface SalesOrderRepository extends JpaRepository<SalesOrder, Long>, JpaSpecificationExecutor<SalesOrder> {
 
     boolean existsByCode(String code);
+
+    /** S4-05: Khoá dòng đơn khi chốt / duyệt để 2 người thao tác cùng lúc không ghi đè nhau. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select o from SalesOrder o where o.id = :id")
+    Optional<SalesOrder> findByIdForUpdate(@Param("id") Long id);
 
     /** Đại lý đã có đơn hàng (kể cả đơn nháp) thì không được xoá hồ sơ. */
     boolean existsByCustomer_Id(Long customerId);

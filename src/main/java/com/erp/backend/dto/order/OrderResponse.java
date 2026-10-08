@@ -30,7 +30,13 @@ public record OrderResponse(
         // S3-07 AC3: cảnh báo hiển thị cho người dùng (vd đại lý đang bị khoá giao dịch), rỗng nếu không có
         List<String> warnings,
         // S4-02: công nợ của đại lý khi thêm đơn này (chỉ có khi đơn còn nháp); credit.exceedsLimit = đơn cần duyệt
-        CreditStatusResponse credit) {
+        CreditStatusResponse credit,
+        // S4-05: lý do cần duyệt + mức vi phạm (lúc chốt đơn), ý kiến gần nhất của người duyệt
+        List<ApprovalReason> approvalReasons,
+        String lastApprovalComment,
+        LocalDateTime submittedAt,
+        LocalDateTime approvedAt,
+        String approvedByUsername) {
 
     public record DeliveryAddressInfo(Long id, String label, String address, String receiverName, String receiverPhone) {
     }
