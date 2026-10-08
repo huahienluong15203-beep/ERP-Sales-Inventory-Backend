@@ -191,15 +191,15 @@ public class ProductService {
                 ? (updated.getCostPrice() != null ? updated.getCostPrice().stripTrailingZeros().toPlainString() : "0")
                 : updated.getBaseUnit();
         String reasonLog = costChanged
-                ? String.format("Cập nhật giá vốn sản phẩm SKU %s: %s -> %s", updated.getSku(), oldValueLog, newValueLog)
-                : "Cập nhật thông tin sản phẩm SKU " + updated.getSku();
+                ? String.format("Cập nhật giá vốn sản phẩm SKU %s (%s): %s đ -> %s đ", updated.getSku(), updated.getName(), oldValueLog, newValueLog)
+                : "Cập nhật thông tin sản phẩm SKU " + updated.getSku() + " (" + updated.getName() + ")";
 
         auditLogService.record(
-                AuditModule.INVENTORY,
-                "UPDATE_PRODUCT",
+                costChanged ? AuditModule.PRICING : AuditModule.INVENTORY,
+                costChanged ? "UPDATE_COST_PRICE" : "UPDATE_PRODUCT",
                 "PRODUCT",
                 updated.getId(),
-                updated.getSku(),
+                updated.getSku() + ":" + updated.getName(),
                 oldValueLog,
                 newValueLog,
                 reasonLog,

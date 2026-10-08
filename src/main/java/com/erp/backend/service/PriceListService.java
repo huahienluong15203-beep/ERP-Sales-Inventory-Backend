@@ -260,9 +260,18 @@ public class PriceListService {
 
         PriceList saved = priceListRepository.save(priceList);
         priceHistoryService.record(saved, change == null ? List.of() : List.of(change), actor);
-        audit(before == null ? "ADD_PRICE_ITEM" : "UPDATE_PRICE_ITEM", saved, before,
+        auditLogService.record(
+                AuditModule.PRICING,
+                before == null ? "ADD_PRICE_ITEM" : "UPDATE_PRICE_ITEM",
+                "PRODUCT_PRICE",
+                product.getId(),
+                product.getSku() + ":" + product.getName(),
+                before,
                 priceText(req.getPrice(), req.getFloorPrice()),
-                "SKU " + product.getSku() + " trong bảng giá " + saved.getCode(), actor);
+                String.format("Cập nhật giá bán SKU %s (%s) trong bảng giá %s: %s",
+                        product.getSku(), product.getName(), saved.getCode(), priceText(req.getPrice(), req.getFloorPrice())),
+                actor
+        );
         return toResponse(saved, true);
     }
 
@@ -279,8 +288,17 @@ public class PriceListService {
         PriceList saved = priceListRepository.save(priceList);
         priceHistoryService.record(saved, List.of(new PriceChange(item.getProduct(), PriceHistory.DELETE,
                 item.getPrice(), null, item.getFloorPrice(), null)), actor);
-        audit("DELETE_PRICE_ITEM", saved, item.getProductSku() + ": " + priceText(item.getPrice(), item.getFloorPrice()),
-                null, "Xoá dòng giá khỏi bảng giá " + saved.getCode(), actor);
+        auditLogService.record(
+                AuditModule.PRICING,
+                "DELETE_PRICE_ITEM",
+                "PRODUCT_PRICE",
+                item.getProduct().getId(),
+                item.getProductSku() + ":" + item.getProduct().getName(),
+                item.getProductSku() + ": " + priceText(item.getPrice(), item.getFloorPrice()),
+                null,
+                "Xoá dòng giá SKU " + item.getProductSku() + " (" + item.getProduct().getName() + ") khỏi bảng giá " + saved.getCode(),
+                actor
+        );
         return toResponse(saved, true);
     }
 
