@@ -443,6 +443,18 @@ public class CustomerService {
         customer.setSalesRep(newRep);
         Customer saved = customerRepository.save(customer);
         recordHistory(saved, oldRep, newRep, CustomerAssignmentHistory.TYPE_ASSIGN, blankToNull(req.getReason()), actor);
+
+        auditLogService.record(
+                AuditModule.CUSTOMER,
+                "ASSIGN_SALES_REP",
+                "CUSTOMER",
+                saved.getId(),
+                saved.getCode(),
+                oldRep != null ? oldRep.getFullName() + " (@" + oldRep.getUsername() + ")" : "Chưa phân công",
+                newRep.getFullName() + " (@" + newRep.getUsername() + ")",
+                req.getReason() != null ? req.getReason() : "Điều chuyển người phụ trách",
+                actor);
+
         return toResponse(saved);
     }
 
@@ -489,6 +501,17 @@ public class CustomerService {
         customerRepository.saveAll(customers);
         historyRepository.saveAll(histories);
 
+        auditLogService.record(
+                AuditModule.CUSTOMER,
+                "TRANSFER_CUSTOMERS",
+                "CUSTOMER",
+                fromRep.getId(),
+                "NV-" + fromRep.getUsername(),
+                fromRep.getFullName() + " (" + customers.size() + " đại lý)",
+                toRep.getFullName() + " (" + customers.size() + " đại lý)",
+                reason,
+                actor);
+
         return new TransferCustomersResponse(customers.size(),
                 "Đã chuyển " + customers.size() + " đại lý từ " + fromRep.getFullName() + " sang " + toRep.getFullName());
     }
@@ -507,6 +530,57 @@ public class CustomerService {
                         h.getReason(),
                         h.getChangedAt()))
                 .toList();
+    }
+
+    /**
+     * Tra cứu lịch sử phân công và chuyển giao địa bàn toàn hệ thống kèm bộ lọc.
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<AssignmentHistoryItemResponse> searchAssignmentHistories(
+            String keyword,
+            Long customerId,
+            Long fromSalesRepId,
+            Long toSalesRepId,
+            String changeType,
+            LocalDateTime startDate,
+            LocalDateTime endDate,
+            int page,
+            int size,
+            UserDetailsImpl actor) {
+        Long restrictedId = CustomerAccess.restrictedSalesRepId(actor);
+
+        int safePage = Math.max(page, 0);
+        int safeSize = size <= 0 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
+
+        Page<CustomerAssignmentHistory> result = historyRepository.findAll(
+                CustomerAssignmentHistorySpecifications.search(
+                        keyword,
+                        customerId,
+                        fromSalesRepId,
+                        toSalesRepId,
+                        changeType,
+                        restrictedId,
+                        startDate,
+                        endDate),
+                PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "changedAt").and(Sort.by("id").descending())));
+
+        return PageResponse.of(result.map(h -> {
+            Customer c = h.getCustomer();
+            RefItem customerRef = c != null ? new RefItem(c.getId(), c.getCode(), c.getName()) : null;
+            RefItem regionRef = (c != null && c.getRegion() != null)
+                    ? new RefItem(c.getRegion().getId(), c.getRegion().getCode(), c.getRegion().getName())
+                    : null;
+            return new AssignmentHistoryItemResponse(
+                    h.getId(),
+                    h.getChangeType(),
+                    customerRef,
+                    regionRef,
+                    toUserRef(h.getFromSalesRep()),
+                    toUserRef(h.getToSalesRep()),
+                    toUserRef(h.getChangedBy()),
+                    h.getReason(),
+                    h.getChangedAt());
+        }));
     }
 
     // ======================= HÀM PHỤ =======================
