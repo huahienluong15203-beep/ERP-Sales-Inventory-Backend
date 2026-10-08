@@ -24,6 +24,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.math.BigDecimal;
+import java.net.URI;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -56,6 +57,7 @@ public class ProductService {
         }
 
         String baseUnit = request.getBaseUnit().trim();
+        validateImageUrl(request.getImageUrl());
 
         Product product = Product.builder()
                 .sku(trimmedSku)
@@ -171,6 +173,7 @@ public class ProductService {
                         actor != null ? actor.getUsername() : "unknown");
             }
         }
+        validateImageUrl(request.getImageUrl());
         product.setBarcode(request.getBarcode() != null ? request.getBarcode().trim() : null);
         product.setImageUrl(request.getImageUrl() != null ? request.getImageUrl().trim() : null);
         product.setDescription(request.getDescription() != null ? request.getDescription().trim() : null);
@@ -403,5 +406,29 @@ public class ProductService {
         } catch (Exception ignored) {
         }
         return false;
+    }
+
+    /**
+     * Kiểm tra tính hợp lệ của đường dẫn ảnh sản phẩm.
+     */
+    public static void validateImageUrl(String imageUrl) {
+        if (!StringUtils.hasText(imageUrl)) return;
+        String trimmed = imageUrl.trim();
+        try {
+            URI uri = URI.create(trimmed);
+            String scheme = uri.getScheme();
+            if (scheme == null || (!scheme.equalsIgnoreCase("http") && !scheme.equalsIgnoreCase("https"))) {
+                throw BusinessException.badRequest("INVALID_IMAGE_URL",
+                        "Đường dẫn hình ảnh phải bắt đầu bằng http:// hoặc https://");
+            }
+            String host = uri.getHost();
+            if (host == null || (!host.contains(".") && !host.equalsIgnoreCase("localhost"))) {
+                throw BusinessException.badRequest("INVALID_IMAGE_URL",
+                        "Đường dẫn hình ảnh không hợp lệ (tên miền không đúng định dạng)");
+            }
+        } catch (IllegalArgumentException e) {
+            throw BusinessException.badRequest("INVALID_IMAGE_URL",
+                    "Đường dẫn hình ảnh không đúng định dạng URL");
+        }
     }
 }
