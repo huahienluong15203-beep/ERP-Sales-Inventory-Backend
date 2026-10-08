@@ -5,14 +5,17 @@ import com.erp.backend.dto.user.PageResponse;
 import com.erp.backend.security.UserDetailsImpl;
 import com.erp.backend.service.OrderApprovalService;
 import com.erp.backend.service.OrderDraftService;
+import com.erp.backend.service.OrderQueryService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -30,16 +33,39 @@ public class OrderController {
 
     private final OrderDraftService orderDraftService;
     private final OrderApprovalService orderApprovalService;
+    private final OrderQueryService orderQueryService;
 
-    /** Vd: ?status=DRAFT&customerId=6&keyword=DH2610&page=0&size=20 */
+    /**
+     * S3-09 / S4-07: Danh sách đơn có bộ lọc. NV kinh doanh chỉ thấy đơn của đại lý mình phụ trách.
+     * Vd: ?status=PENDING_APPROVAL,APPROVED&customerId=6&salesRepId=7&regionId=2&fromDate=2026-10-01&toDate=2026-10-31&keyword=DH2610&page=0&size=20
+     */
     @GetMapping
-    public PageResponse<OrderSummaryResponse> search(@RequestParam(required = false) String status,
+    public PageResponse<OrderSummaryResponse> search(@RequestParam(required = false) List<String> status,
                                                      @RequestParam(required = false) Long customerId,
+                                                     @RequestParam(required = false) Long salesRepId,
+                                                     @RequestParam(required = false) Long regionId,
+                                                     @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
+                                                     @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate,
                                                      @RequestParam(required = false) String keyword,
                                                      @RequestParam(defaultValue = "0") int page,
                                                      @RequestParam(defaultValue = "20") int size,
                                                      @AuthenticationPrincipal UserDetailsImpl actor) {
-        return orderDraftService.search(status, customerId, keyword, page, size, actor);
+        return orderQueryService.search(new OrderSearchCriteria(status, customerId, salesRepId, regionId, fromDate, toDate,
+                keyword), page, size, actor);
+    }
+
+    /** S4-07: Tổng số đơn và tổng tiền của toàn bộ kết quả đang lọc (cùng bộ lọc với danh sách). */
+    @GetMapping("/totals")
+    public OrderTotalsResponse totals(@RequestParam(required = false) List<String> status,
+                                      @RequestParam(required = false) Long customerId,
+                                      @RequestParam(required = false) Long salesRepId,
+                                      @RequestParam(required = false) Long regionId,
+                                      @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
+                                      @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate,
+                                      @RequestParam(required = false) String keyword,
+                                      @AuthenticationPrincipal UserDetailsImpl actor) {
+        return orderQueryService.totals(new OrderSearchCriteria(status, customerId, salesRepId, regionId, fromDate, toDate,
+                keyword), actor);
     }
 
     /** S4-05: Đơn chờ duyệt kèm lý do và mức vi phạm, đơn chờ lâu nhất lên đầu. Vd: ?keyword=DL001&page=0&size=20 */
