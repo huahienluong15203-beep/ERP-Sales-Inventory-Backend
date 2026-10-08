@@ -13,7 +13,8 @@ import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.Optional;
 
-public interface SalesOrderRepository extends JpaRepository<SalesOrder, Long>, JpaSpecificationExecutor<SalesOrder> {
+public interface SalesOrderRepository extends JpaRepository<SalesOrder, Long>, JpaSpecificationExecutor<SalesOrder>,
+        SalesOrderTotalsRepository {
 
     boolean existsByCode(String code);
 

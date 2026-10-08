@@ -3,17 +3,13 @@ package com.erp.backend.service;
 import com.erp.backend.dto.customer.CreditStatusResponse;
 import com.erp.backend.dto.discount.DiscountCalculationResponse;
 import com.erp.backend.dto.order.*;
-import com.erp.backend.dto.user.PageResponse;
 import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.*;
 import com.erp.backend.security.UserDetailsImpl;
-import jakarta.persistence.criteria.Join;
-import jakarta.persistence.criteria.Predicate;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
-import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -45,8 +41,6 @@ public class OrderDraftService {
     static final ZoneId VN_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
     static final int MAX_LINES = 200;
     static final BigDecimal MAX_QUANTITY = new BigDecimal("1000000");
-    static final int DEFAULT_PAGE_SIZE = 20;
-    static final int MAX_PAGE_SIZE = 100;
     private static final String CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     private static final SecureRandom RANDOM = new SecureRandom();
 
@@ -105,42 +99,6 @@ public class OrderDraftService {
     @Transactional(readOnly = true)
     public OrderResponse getById(Long id, UserDetailsImpl actor) {
         return toResponse(findOrder(id, actor));
-    }
-
-    /** NV kinh doanh chỉ thấy đơn của đại lý mình phụ trách. */
-    @Transactional(readOnly = true)
-    public PageResponse<OrderSummaryResponse> search(String status, Long customerId, String keyword,
-                                                     int page, int size, UserDetailsImpl actor) {
-        Long restrictedSalesRepId = CustomerAccess.restrictedSalesRepId(actor);
-        int safePage = Math.max(page, 0);
-        int safeSize = size <= 0 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
-
-        Specification<SalesOrder> spec = (root, query, cb) -> {
-            List<Predicate> ps = new ArrayList<>();
-            Join<SalesOrder, Customer> customer = root.join("customer");
-            if (StringUtils.hasText(status)) {
-                ps.add(cb.equal(root.get("status"), status.trim().toUpperCase()));
-            }
-            if (customerId != null) {
-                ps.add(cb.equal(customer.get("id"), customerId));
-            }
-            if (restrictedSalesRepId != null) {
-                ps.add(cb.equal(customer.get("salesRep").get("id"), restrictedSalesRepId));
-            }
-            if (StringUtils.hasText(keyword)) {
-                String like = "%" + keyword.trim().toLowerCase() + "%";
-                ps.add(cb.or(cb.like(cb.lower(root.get("code")), like),
-                        cb.like(cb.lower(customer.get("code")), like),
-                        cb.like(cb.lower(customer.get("name")), like)));
-            }
-            return cb.and(ps.toArray(new Predicate[0]));
-        };
-
-        return PageResponse.of(orderRepository.findAll(spec,
-                        PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "updatedAt").and(Sort.by("id").descending())))
-                .map(o -> new OrderSummaryResponse(o.getId(), o.getCode(), o.getStatus(), o.getCustomer().getId(),
-                        o.getCustomer().getCode(), o.getCustomer().getName(), o.getDesiredDeliveryDate(),
-                        o.getLines().size(), o.getTotalAmount(), o.getCreatedByUsername(), o.getUpdatedAt())));
     }
 
     /**
