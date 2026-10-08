@@ -195,6 +195,26 @@ public class CustomerController {
         return customerService.transfer(request, actor);
     }
 
+    /**
+     * Tra cứu lịch sử phân công và chuyển giao địa bàn toàn hệ thống kèm bộ lọc.
+     * Dùng cho phân hệ Nhật ký hệ thống & Kiểm toán điều chuyển nhân sự.
+     */
+    @GetMapping("/assignment-histories")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'ACCOUNTANT', 'SALES_REP')")
+    public PageResponse<AssignmentHistoryItemResponse> searchAssignmentHistories(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) Long customerId,
+            @RequestParam(required = false) Long fromSalesRepId,
+            @RequestParam(required = false) Long toSalesRepId,
+            @RequestParam(required = false) String changeType,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE_TIME) java.time.LocalDateTime startDate,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE_TIME) java.time.LocalDateTime endDate,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        return customerService.searchAssignmentHistories(keyword, customerId, fromSalesRepId, toSalesRepId, changeType, startDate, endDate, page, size, actor);
+    }
+
     @GetMapping("/{id}/assignment-history")
     public List<AssignmentHistoryResponse> assignmentHistory(@PathVariable Long id,
                                                              @AuthenticationPrincipal UserDetailsImpl actor) {
