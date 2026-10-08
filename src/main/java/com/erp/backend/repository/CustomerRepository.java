@@ -49,4 +49,6 @@ public interface CustomerRepository extends JpaRepository<Customer, Long>, JpaSp
 
     @Query("select distinct c.salesRep from Customer c where c.salesRep is not null")
     List<User> findDistinctSalesRepsWithCustomers();
+
+    long countBySalesRep_Id(Long salesRepId);
 }
