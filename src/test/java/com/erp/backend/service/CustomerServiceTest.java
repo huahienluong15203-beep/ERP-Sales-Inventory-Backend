@@ -42,6 +42,7 @@ class CustomerServiceTest {
     @Mock private CustomerDeliveryAddressRepository addressRepository;
     @Mock private PriceListRepository priceListRepository;
     @Mock private SalesOrderRepository orderRepository;
+    @Mock private CustomerCreditService creditService;
 
     @InjectMocks private CustomerService service;
 
@@ -694,6 +695,34 @@ class CustomerServiceTest {
         assertThatThrownBy(() -> service.assertCanCreateOrder(c))
                 .isInstanceOf(BusinessException.class)
                 .extracting("code").isEqualTo("CUSTOMER_TRANSACTION_LOCKED");
+    }
+
+    @Test
+    @DisplayName("S4-02: Kiểm tra tạo đơn - Bị chặn khi đại lý có nợ quá hạn")
+    void checkOrderCreation_overdue_blocked() {
+        Customer c = customer(1L, null);
+        when(customerRepository.findById(1L)).thenReturn(Optional.of(c));
+        when(creditService.evaluate(eq(c), any())).thenReturn(new com.erp.backend.dto.customer.CreditStatusResponse(
+                1L, c.getCode(), c.getName(), java.math.BigDecimal.TEN, java.math.BigDecimal.ONE, java.math.BigDecimal.ONE,
+                java.math.BigDecimal.ZERO, java.math.BigDecimal.ONE, false, java.math.BigDecimal.ZERO, 30,
+                true, 1, java.math.BigDecimal.ONE, 5, true, "Đại lý có 1 khoản nợ quá hạn 5 ngày"));
+
+        OrderCreationCheckResponse res = service.checkOrderCreation(1L);
+
+        assertThat(res.allowed()).isFalse();
+        assertThat(res.blockReason()).contains("nợ quá hạn");
+    }
+
+    @Test
+    @DisplayName("S4-02: assertCanCreateOrder chặn khi đại lý có nợ quá hạn")
+    void assertCanCreateOrder_overdue_throws() {
+        Customer c = customer(1L, null);
+        doThrow(BusinessException.conflict("CUSTOMER_DEBT_OVERDUE", "Nợ quá hạn", "customerId"))
+                .when(creditService).assertNoOverdueDebt(c);
+
+        assertThatThrownBy(() -> service.assertCanCreateOrder(c))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("CUSTOMER_DEBT_OVERDUE");
     }
 
     // ======================= XOÁ HỒ SƠ ĐẠI LÝ =======================

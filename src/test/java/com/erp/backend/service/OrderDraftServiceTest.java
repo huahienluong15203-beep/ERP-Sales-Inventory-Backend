@@ -1,5 +1,6 @@
 package com.erp.backend.service;
 
+import com.erp.backend.dto.customer.CreditStatusResponse;
 import com.erp.backend.dto.discount.DiscountCalculationResponse;
 import com.erp.backend.dto.order.*;
 import com.erp.backend.entity.*;
@@ -41,6 +42,7 @@ class OrderDraftServiceTest {
     @Mock private PriceListRepository priceListRepository;
     @Mock private DiscountPolicyService discountPolicyService;
     @Mock private CustomerService customerService;
+    @Mock private CustomerCreditService creditService;
 
     @InjectMocks private OrderDraftService service;
 
@@ -231,6 +233,52 @@ class OrderDraftServiceTest {
                 .hasFieldOrPropertyWithValue("code", "CUSTOMER_TRANSACTION_LOCKED")
                 .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT);
         verify(orderRepository, never()).saveAndFlush(any());
+    }
+
+    private static CreditStatusResponse credit(boolean exceeds, String message) {
+        return new CreditStatusResponse(6L, "DL006", "Đại lý", new BigDecimal("1000000"), new BigDecimal("900000"),
+                new BigDecimal("100000"), new BigDecimal("500000"), new BigDecimal("1400000"), exceeds,
+                exceeds ? new BigDecimal("400000") : BigDecimal.ZERO, 30, false, 0, BigDecimal.ZERO, 0, false, message);
+    }
+
+    @Test
+    @DisplayName("S4-02: Xem trước đơn vượt hạn mức -> trả về công nợ, cờ cần duyệt và cảnh báo")
+    void preview_overCreditLimit_flaggedNeedsApproval() {
+        when(creditService.evaluate(eq(customer), any())).thenReturn(credit(true, "Công nợ sau đơn vượt hạn mức. Đơn cần được duyệt"));
+
+        OrderResponse res = service.preview(request(line("SP-COCA", "Lon", "50")), rep);
+
+        verify(creditService).evaluate(eq(customer), argThat(a -> a.compareTo(new BigDecimal("500000")) == 0));
+        assertThat(res.credit()).isNotNull();
+        assertThat(res.credit().exceedsLimit()).isTrue();
+        assertThat(res.credit().currentDebt()).isEqualByComparingTo("900000");
+        assertThat(res.warnings()).containsExactly("Công nợ sau đơn vượt hạn mức. Đơn cần được duyệt");
+    }
+
+    @Test
+    @DisplayName("S4-02: Đại lý nợ quá hạn -> chặn tạo đơn nháp mới (409)")
+    void overdueCustomer_createDraftBlocked() {
+        doThrow(BusinessException.conflict("CUSTOMER_DEBT_OVERDUE", "Nợ quá hạn", "customerId"))
+                .when(customerService).assertCanCreateOrder(customer);
+
+        assertThatThrownBy(() -> service.createDraft(request(line("SP-COCA", null, "1")), rep))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "CUSTOMER_DEBT_OVERDUE")
+                .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT);
+        verify(orderRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("S4-02: Đơn đã duyệt -> không tính lại công nợ (tiền đơn đã nằm trong công nợ)")
+    void approvedOrder_noCreditEvaluation() {
+        SalesOrder approved = SalesOrder.builder().id(100L).code("DH261004-AAAA").customer(customer)
+                .status(SalesOrder.STATUS_APPROVED).build();
+        when(orderRepository.findById(100L)).thenReturn(Optional.of(approved));
+
+        OrderResponse res = service.getById(100L, rep);
+
+        assertThat(res.credit()).isNull();
+        verify(creditService, never()).evaluate(any(), any());
     }
 
     @Test

@@ -14,6 +14,7 @@ import java.util.List;
 /**
  * S3-09: Đơn hàng bán cho đại lý. Sprint này mới có trạng thái DRAFT (đơn nháp, lưu và mở lại gõ tiếp).
  * Chốt đơn, giữ tồn, kiểm tra công nợ làm ở Sprint 4.
+ * S4-02: đơn đã duyệt (APPROVED) được tính vào công nợ hiện tại của đại lý, tính hạn nợ từ approvedAt.
  */
 @Entity
 @Table(name = "sales_orders")
@@ -26,6 +27,14 @@ import java.util.List;
 public class SalesOrder {
 
     public static final String STATUS_DRAFT = "DRAFT";
+    public static final String STATUS_PENDING_APPROVAL = "PENDING_APPROVAL";
+    public static final String STATUS_APPROVED = "APPROVED";
+
+    /**
+     * S4-02: Trạng thái đơn đang tính vào công nợ của đại lý.
+     * Chưa có hoá đơn / phiếu thu nên tạm coi đơn đã duyệt là đang nợ; có module công nợ thì sửa ở đây.
+     */
+    public static final List<String> OUTSTANDING_DEBT_STATUSES = List.of(STATUS_APPROVED);
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -68,6 +77,10 @@ public class SalesOrder {
     @Column(name = "total_amount", nullable = false, precision = 18, scale = 2)
     @Builder.Default
     private BigDecimal totalAmount = BigDecimal.ZERO;
+
+    // S4-02: thời điểm đơn được duyệt, dùng làm ngày bắt đầu tính hạn nợ (maxDebtDays của đại lý)
+    @Column(name = "approved_at")
+    private LocalDateTime approvedAt;
 
     @Column(name = "created_by_id")
     private Long createdById;
