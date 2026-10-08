@@ -48,6 +48,7 @@ public class CustomerService {
     private final CustomerDeliveryAddressRepository addressRepository;
     private final PriceListRepository priceListRepository;
     private final SalesOrderRepository orderRepository;
+    private final CustomerCreditService creditService;
 
     // ======================= S3-08: TÌM KIẾM / XEM =======================
 
@@ -401,6 +402,19 @@ public class CustomerService {
                     customer.getMaxDebtDays(),
                     false);
         }
+        // S4-02: có khoản nợ quá số ngày cho phép -> chặn tạo đơn mới
+        CreditStatusResponse credit = creditService.evaluate(customer, java.math.BigDecimal.ZERO);
+        if (credit != null && credit.overdue()) {
+            return new OrderCreationCheckResponse(
+                    customer.getId(),
+                    customer.getCode(),
+                    customer.getName(),
+                    false,
+                    credit.message(),
+                    customer.getCreditLimit(),
+                    customer.getMaxDebtDays(),
+                    false);
+        }
         return new OrderCreationCheckResponse(
                 customer.getId(),
                 customer.getCode(),
@@ -425,6 +439,8 @@ public class CustomerService {
             throw BusinessException.badRequest("CUSTOMER_INACTIVE",
                     "Đại lý " + customer.getName() + " (" + customer.getCode() + ") đã ngừng giao dịch.");
         }
+        // S4-02: nợ quá hạn -> chặn tạo đơn mới hoàn toàn
+        creditService.assertNoOverdueDebt(customer);
     }
 
     // ======================= S3-06: PHÂN CÔNG NGƯỜI PHỤ TRÁCH =======================

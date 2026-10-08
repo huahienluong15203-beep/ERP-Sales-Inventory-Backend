@@ -5,6 +5,7 @@ import com.erp.backend.dto.user.PageResponse;
 import com.erp.backend.entity.CustomerGroup;
 import com.erp.backend.security.UserDetailsImpl;
 import com.erp.backend.service.CustomerDeliveryAddressService;
+import com.erp.backend.service.CustomerCreditService;
 import com.erp.backend.service.CustomerService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -14,6 +15,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 /**
@@ -33,6 +35,7 @@ import java.util.List;
 public class CustomerController {
 
     private final CustomerService customerService;
+    private final CustomerCreditService creditService;
     private final CustomerDeliveryAddressService deliveryAddressService;
 
     // ======================= S3-08: TÌM KIẾM / XEM =======================
@@ -136,6 +139,17 @@ public class CustomerController {
     @GetMapping("/{id}/check-order-creation")
     public OrderCreationCheckResponse checkOrderCreation(@PathVariable Long id) {
         return customerService.checkOrderCreation(id);
+    }
+
+    /**
+     * S4-02: Công nợ hiện tại, hạn mức, còn lại của đại lý; truyền orderAmount để biết đơn có vượt hạn mức (cần duyệt) không.
+     * Có nợ quá hạn thì blocked = true (chặn tạo đơn).
+     */
+    @GetMapping("/{id}/credit-status")
+    public CreditStatusResponse creditStatus(@PathVariable Long id,
+                                             @RequestParam(required = false) BigDecimal orderAmount,
+                                             @AuthenticationPrincipal UserDetailsImpl actor) {
+        return creditService.getStatus(id, orderAmount, actor);
     }
 
     // ======================= S3-04: ĐIỂM GIAO HÀNG =======================

@@ -1,5 +1,6 @@
 package com.erp.backend.service;
 
+import com.erp.backend.dto.customer.CreditStatusResponse;
 import com.erp.backend.dto.discount.DiscountCalculationResponse;
 import com.erp.backend.dto.order.*;
 import com.erp.backend.dto.user.PageResponse;
@@ -34,6 +35,8 @@ import java.util.*;
  * - Chiết khấu theo sản lượng tính tự động (S3-01).
  * - Tính tổng tiền hàng, chiết khấu, tổng phải thu; xem trước không lưu, lưu nháp và mở lại gõ tiếp.
  * Đơn nháp không giữ tồn, không khoá bảng giá; việc đó làm khi chốt đơn (Sprint 4).
+ * S4-02: kèm tình trạng công nợ; tiền đơn + công nợ hiện tại > hạn mức thì đơn "cần duyệt",
+ * đại lý có nợ quá hạn thì chặn tạo đơn mới (trong customerService.assertCanCreateOrder).
  */
 @Service
 @RequiredArgsConstructor
@@ -55,6 +58,7 @@ public class OrderDraftService {
     private final PriceListRepository priceListRepository;
     private final DiscountPolicyService discountPolicyService;
     private final CustomerService customerService;
+    private final CustomerCreditService creditService;
 
     // ======================= XEM TRƯỚC / LƯU NHÁP =======================
 
@@ -398,21 +402,28 @@ public class OrderDraftService {
                         l.getFloorPrice(), l.getGrossAmount(), l.getDiscountPolicyCode(), l.getDiscountAmount(),
                         l.getNetAmount()))
                 .toList();
+        // Đơn đã duyệt thì tiền đơn đã nằm trong công nợ hiện tại, chỉ tính cho đơn nháp
+        CreditStatusResponse credit = SalesOrder.STATUS_DRAFT.equals(o.getStatus())
+                ? creditService.evaluate(c, o.getTotalAmount()) : null;
         return new OrderResponse(o.getId(), o.getCode(), o.getStatus(), c.getId(), c.getCode(), c.getName(),
                 c.getCustomerGroup().name(), c.getCustomerGroup().getLabel(),
                 a == null ? null : new OrderResponse.DeliveryAddressInfo(a.getId(), a.getLabel(), a.getAddress(),
                         a.getReceiverName(), a.getReceiverPhone()),
                 o.getDesiredDeliveryDate(), o.getNote(), lines, o.getSubtotal(), o.getDiscountTotal(), o.getTotalAmount(),
-                o.getCreatedByUsername(), o.getCreatedAt(), o.getUpdatedAt(), warnings(c));
+                o.getCreatedByUsername(), o.getCreatedAt(), o.getUpdatedAt(), warnings(c, credit), credit);
     }
 
-    /** S3-07 AC3: cảnh báo khi đại lý của đơn đang bị khoá giao dịch. */
-    private static List<String> warnings(Customer c) {
-        if (!c.isTransactionLocked()) {
-            return List.of();
+    /** S3-07 AC3: cảnh báo khi đại lý của đơn đang bị khoá giao dịch. S4-02: cảnh báo vượt hạn mức / nợ quá hạn. */
+    private static List<String> warnings(Customer c, CreditStatusResponse credit) {
+        List<String> warnings = new ArrayList<>();
+        if (c.isTransactionLocked()) {
+            String reason = c.getTransactionLockReason() != null ? ": " + c.getTransactionLockReason() : "";
+            warnings.add("Đại lý " + c.getName() + " (" + c.getCode() + ") đang bị khoá giao dịch" + reason
+                    + ". Đơn nháp này vẫn xử lý tiếp được nhưng không tạo được đơn mới.");
         }
-        String reason = c.getTransactionLockReason() != null ? ": " + c.getTransactionLockReason() : "";
-        return List.of("Đại lý " + c.getName() + " (" + c.getCode() + ") đang bị khoá giao dịch" + reason
-                + ". Đơn nháp này vẫn xử lý tiếp được nhưng không tạo được đơn mới.");
+        if (credit != null && credit.message() != null) {
+            warnings.add(credit.message());
+        }
+        return List.copyOf(warnings);
     }
 }
