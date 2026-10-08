@@ -217,14 +217,15 @@ class ProductServiceTest {
         assertThat(response).isNotNull();
         assertThat(existing.getName()).isEqualTo("Coca mới");
         assertThat(existing.getCostPrice()).isEqualByComparingTo(BigDecimal.valueOf(210000));
+        // Đổi giá vốn -> ghi nhật ký nhóm giá (PRICING) kèm giá cũ / mới
         verify(auditLogService).record(
-                eq(AuditModule.INVENTORY),
-                eq("UPDATE_PRODUCT"),
+                eq(AuditModule.PRICING),
+                eq("UPDATE_COST_PRICE"),
                 eq("PRODUCT"),
                 eq(1L),
-                eq("SP-COCA-330"),
-                any(),
-                any(),
+                eq("SP-COCA-330:Coca mới"),
+                eq("200000"),
+                eq("210000"),
                 anyString(),
                 eq(actor)
         );
