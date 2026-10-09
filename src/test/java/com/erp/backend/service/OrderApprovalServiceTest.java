@@ -41,6 +41,7 @@ class OrderApprovalServiceTest {
     @Mock private OrderDraftService orderDraftService;
     @Mock private CustomerCreditService creditService;
     @Mock private AuditLogService auditLogService;
+    @Mock private InventoryService inventoryService;
 
     @InjectMocks private OrderApprovalService service;
 

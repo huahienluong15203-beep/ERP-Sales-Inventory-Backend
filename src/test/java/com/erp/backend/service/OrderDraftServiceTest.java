@@ -2,6 +2,7 @@ package com.erp.backend.service;
 
 import com.erp.backend.dto.customer.CreditStatusResponse;
 import com.erp.backend.dto.discount.DiscountCalculationResponse;
+import com.erp.backend.dto.inventory.StockInfoDto;
 import com.erp.backend.dto.order.*;
 import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
@@ -43,6 +44,7 @@ class OrderDraftServiceTest {
     @Mock private DiscountPolicyService discountPolicyService;
     @Mock private CustomerService customerService;
     @Mock private CustomerCreditService creditService;
+    @Mock private InventoryService inventoryService;
 
     @InjectMocks private OrderDraftService service;
 
@@ -89,6 +91,11 @@ class OrderDraftServiceTest {
             if (o.getId() == null) o.setId(100L);
             return o;
         });
+
+        Warehouse defaultWarehouse = Warehouse.builder().id(1L).code("WH-MB01").name("Kho Tổng Miền Bắc").build();
+        lenient().when(inventoryService.resolveWarehouseForCustomer(any())).thenReturn(defaultWarehouse);
+        lenient().when(inventoryService.getStockInfo(any(), any()))
+                .thenReturn(StockInfoDto.of("WH-MB01", "Kho Tổng Miền Bắc", new BigDecimal("100000"), BigDecimal.ZERO, new BigDecimal("100000")));
     }
 
     private OrderLineRequest line(String sku, String unit, String qty) {
@@ -479,5 +486,49 @@ class OrderDraftServiceTest {
         assertThat(opt2.priceAvailable()).isFalse();
         assertThat(opt2.unitPrice()).isNull();
         assertThat(opt2.message()).contains("SP-SPRITE-COCA").contains("chưa có giá trong bảng giá đang hiệu lực của nhóm " + customer.getCustomerGroup().getLabel());
+    }
+
+    @Test
+    @DisplayName("S4-03: Gợi ý sản phẩm kèm tồn khả dụng của kho phục vụ đại lý")
+    void productOptions_shouldIncludeStockInfo() {
+        when(priceListRepository.findEffectiveByCustomerGroup(eq(CustomerGroup.DEALER_LEVEL_1), any()))
+                .thenReturn(List.of(priceList));
+        PriceListItem item = PriceListItem.builder().priceList(priceList).product(coca).productSku("SP-COCA")
+                .productName("Coca lon").price(new BigDecimal("10000")).floorPrice(new BigDecimal("9000")).build();
+        when(priceItemRepository.findByPriceListIdAndKeyword(eq(priceList.getId()), eq("coca"), any(Pageable.class)))
+                .thenReturn(List.of(item));
+        when(productRepository.findByNameContainingIgnoreCaseOrSkuContainingIgnoreCase(eq("coca"), eq("coca"), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(coca)));
+
+        when(inventoryService.getStockInfo(any(), eq(coca)))
+                .thenReturn(StockInfoDto.of("WH-MB01", "Kho Tổng Miền Bắc", new BigDecimal("100"), new BigDecimal("30"), new BigDecimal("70")));
+
+        List<ProductOptionResponse> res = service.productOptions(6L, "coca", rep);
+
+        assertThat(res).isNotEmpty();
+        ProductOptionResponse opt = res.get(0);
+        assertThat(opt.warehouseCode()).isEqualTo("WH-MB01");
+        assertThat(opt.warehouseName()).isEqualTo("Kho Tổng Miền Bắc");
+        assertThat(opt.physicalStock()).isEqualByComparingTo("100");
+        assertThat(opt.reservedStock()).isEqualByComparingTo("30");
+        assertThat(opt.availableStock()).isEqualByComparingTo("70");
+    }
+
+    @Test
+    @DisplayName("S4-03: Đặt vượt tồn khả dụng -> dòng hàng bị gắn cờ isOverStock và thêm cảnh báo gợi ý số lượng tối đa")
+    void toResponse_whenQuantityExceedsAvailableStock_shouldFlagOverStockAndAddWarning() {
+        // Tồn khả dụng = 10 lon, quy đổi 1 thùng = 24 lon -> chỉ đặt tối đa 0 thùng (hoặc 10 lon)
+        when(inventoryService.getStockInfo(any(), eq(coca)))
+                .thenReturn(StockInfoDto.of("WH-MB01", "Kho Tổng Miền Bắc", new BigDecimal("20"), new BigDecimal("10"), new BigDecimal("10")));
+
+        OrderDraftRequest req = request(line("SP-COCA", "Thùng", "1")); // 1 thùng = 24 lon > 10 lon khả dụng
+        OrderResponse draft = service.preview(req, rep);
+
+        assertThat(draft.warnings()).anyMatch(w -> w.contains("SP-COCA") && w.contains("Kho Tổng Miền Bắc"));
+        assertThat(draft.lines()).hasSize(1);
+        OrderLineResponse line = draft.lines().get(0);
+        assertThat(line.isOverStock()).isTrue();
+        assertThat(line.availableStock()).isEqualByComparingTo("10");
+        assertThat(line.maxAllowedQuantity()).isEqualByComparingTo("0"); // 10 lon / 24 lon mỗi thùng (FLOOR) = 0 thùng
     }
 }
