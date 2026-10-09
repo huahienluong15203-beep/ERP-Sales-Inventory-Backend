@@ -8,6 +8,7 @@ import com.erp.backend.repository.PriceListItemRepository;
 import com.erp.backend.repository.PriceListRepository;
 import com.erp.backend.repository.PriceListSpecifications;
 import com.erp.backend.dto.user.PageResponse;
+import com.erp.backend.repository.CustomerRepository;
 import com.erp.backend.repository.ProductRepository;
 import com.erp.backend.security.UserDetailsImpl;
 import lombok.RequiredArgsConstructor;
@@ -48,6 +49,7 @@ public class PriceListService {
     private final AuditLogService auditLogService;
     private final PriceHistoryService priceHistoryService;
     private final PriceHistoryRepository priceHistoryRepository;
+    private final CustomerRepository customerRepository;
 
     // ======================= XEM / TRA CỨU =======================
 
@@ -243,6 +245,23 @@ public class PriceListService {
             throw BusinessException.conflict("PRICE_LIST_HAS_ORDERS",
                     "Không thể xoá bảng giá đã phát sinh đơn hàng", null);
         }
+
+        // Chặn xoá nếu đây là bảng giá hiệu lực duy nhất của nhóm và nhóm đang có đại lý
+        if (ACTIVE.equals(priceList.getStatus())) {
+            LocalDate today = LocalDate.now(VN_ZONE);
+            List<PriceList> effectiveLists = priceListRepository.findEffectiveByCustomerGroup(priceList.getCustomerGroup(), today);
+            boolean isOnlyEffective = effectiveLists.stream().allMatch(p -> p.getId().equals(priceList.getId()));
+            if (isOnlyEffective) {
+                long customerCount = customerRepository.countByCustomerGroup(priceList.getCustomerGroup());
+                if (customerCount > 0) {
+                    throw BusinessException.conflict("LAST_ACTIVE_PRICE_LIST",
+                            "Không thể xoá bảng giá hiệu lực duy nhất của nhóm '" + priceList.getCustomerGroup().getLabel()
+                                    + "' vì đang có " + customerCount + " đại lý thuộc nhóm này. Vui lòng tạo bảng giá mới thay thế trước khi xoá.",
+                            null);
+                }
+            }
+        }
+
         String before = summary(priceList);
         priceHistoryRepository.deleteByPriceList(priceList);
         priceListRepository.clearSourcePriceList(priceList.getId());

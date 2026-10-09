@@ -51,4 +51,6 @@ public interface CustomerRepository extends JpaRepository<Customer, Long>, JpaSp
     List<User> findDistinctSalesRepsWithCustomers();
 
     long countBySalesRep_Id(Long salesRepId);
+
+    long countByCustomerGroup(com.erp.backend.entity.CustomerGroup customerGroup);
 }

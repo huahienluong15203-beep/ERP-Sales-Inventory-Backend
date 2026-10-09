@@ -3,6 +3,7 @@ package com.erp.backend.service;
 import com.erp.backend.dto.pricing.*;
 import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
+import com.erp.backend.repository.CustomerRepository;
 import com.erp.backend.repository.PriceHistoryRepository;
 import com.erp.backend.repository.PriceListItemRepository;
 import com.erp.backend.repository.PriceListRepository;
@@ -41,6 +42,7 @@ class PriceListServiceTest {
     @Mock private AuditLogService auditLogService;
     @Mock private PriceHistoryService priceHistoryService;
     @Mock private PriceHistoryRepository priceHistoryRepository;
+    @Mock private CustomerRepository customerRepository;
 
     @InjectMocks private PriceListService service;
 
@@ -369,7 +371,7 @@ class PriceListServiceTest {
     }
 
     @Test
-    @DisplayName("S2-10: Xoá bảng giá chưa phát sinh đơn hàng -> Thành công")
+    @DisplayName("S2-10: Xoá bảng giá chưa phát sinh đơn hàng (không phải bảng duy nhất có đại lý) -> Thành công")
     void delete_success() {
         PriceList list = PriceList.builder()
                 .id(5L)
@@ -377,6 +379,7 @@ class PriceListServiceTest {
                 .name("Bảng giá test xoá")
                 .customerGroup(CustomerGroup.DEALER_LEVEL_1)
                 .startDate(LocalDate.of(2026, 10, 1))
+                .status("INACTIVE")
                 .hasOrders(false)
                 .items(new ArrayList<>())
                 .build();
@@ -389,6 +392,31 @@ class PriceListServiceTest {
         verify(priceListRepository).delete(list);
         verify(auditLogService).record(eq(AuditModule.PRICING), eq("DELETE_PRICE_LIST"), eq("PRICE_LIST"),
                 eq(5L), eq("BG-TEST-DEL"), anyString(), isNull(), anyString(), eq(manager));
+    }
+
+    @Test
+    @DisplayName("S2-10: Xoá bảng giá hiệu lực duy nhất của nhóm đang có đại lý -> Báo lỗi 409 Conflict")
+    void delete_lastActivePriceList_withCustomers_conflict() {
+        PriceList list = PriceList.builder()
+                .id(5L)
+                .code("BG-ONLY-ONE")
+                .name("Bảng giá duy nhất")
+                .customerGroup(CustomerGroup.DEALER_LEVEL_1)
+                .startDate(LocalDate.of(2026, 10, 1))
+                .status("ACTIVE")
+                .hasOrders(false)
+                .items(new ArrayList<>())
+                .build();
+        when(priceListRepository.findByIdForUpdate(5L)).thenReturn(Optional.of(list));
+        when(priceListRepository.findEffectiveByCustomerGroup(eq(CustomerGroup.DEALER_LEVEL_1), any())).thenReturn(List.of(list));
+        when(customerRepository.countByCustomerGroup(CustomerGroup.DEALER_LEVEL_1)).thenReturn(3L);
+
+        assertThatThrownBy(() -> service.delete(5L, manager))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Không thể xoá bảng giá hiệu lực duy nhất của nhóm")
+                .hasMessageContaining("3 đại lý");
+
+        verify(priceListRepository, never()).delete(any(PriceList.class));
     }
 
     @Test
