@@ -57,6 +57,7 @@ public class OrderApprovalService {
     private final OrderDraftService orderDraftService;
     private final CustomerCreditService creditService;
     private final AuditLogService auditLogService;
+    private final InventoryService inventoryService;
 
     Clock clock = Clock.system(VN_ZONE);
 
@@ -74,6 +75,9 @@ public class OrderApprovalService {
         // Khoá dòng đại lý: 2 đơn của cùng đại lý chốt cùng lúc không cùng lọt qua kiểm tra hạn mức
         customerRepository.findByIdForUpdate(order.getCustomer().getId());
         orderDraftService.recalculateForSubmit(order, actor);
+
+        // S4-03 AC4: Kiểm tra và giữ chỗ tồn kho với khoá bi quan (PESSIMISTIC_WRITE)
+        inventoryService.checkAndReserveStock(order);
 
         CreditStatusResponse credit = creditService.evaluate(order.getCustomer(), order.getTotalAmount());
         applyViolations(order, credit);
@@ -159,6 +163,8 @@ public class OrderApprovalService {
     public OrderResponse reject(Long id, String comment, UserDetailsImpl actor) {
         String note = trimComment(comment, true);
         SalesOrder order = lockPending(id, actor);
+        // S4-03: Giải phóng hàng giữ chỗ khi đơn hàng bị từ chối
+        inventoryService.releaseReservedStock(order);
         order.setStatus(SalesOrder.STATUS_REJECTED);
         order.setLastApprovalComment(note);
         return finishDecision(order, SalesOrderApproval.ACTION_REJECT, "REJECT_ORDER", note, actor);
@@ -169,6 +175,8 @@ public class OrderApprovalService {
     public OrderResponse returnForEdit(Long id, String comment, UserDetailsImpl actor) {
         String note = trimComment(comment, true);
         SalesOrder order = lockPending(id, actor);
+        // S4-03: Giải phóng hàng giữ chỗ khi đơn được trả lại để sửa
+        inventoryService.releaseReservedStock(order);
         order.setStatus(SalesOrder.STATUS_DRAFT);
         order.setLastApprovalComment(note);
         return finishDecision(order, SalesOrderApproval.ACTION_RETURN, "RETURN_ORDER", note, actor);

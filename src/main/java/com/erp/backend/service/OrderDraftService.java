@@ -2,6 +2,7 @@ package com.erp.backend.service;
 
 import com.erp.backend.dto.customer.CreditStatusResponse;
 import com.erp.backend.dto.discount.DiscountCalculationResponse;
+import com.erp.backend.dto.inventory.StockInfoDto;
 import com.erp.backend.dto.order.*;
 import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
@@ -53,6 +54,7 @@ public class OrderDraftService {
     private final DiscountPolicyService discountPolicyService;
     private final CustomerService customerService;
     private final CustomerCreditService creditService;
+    private final InventoryService inventoryService;
 
     // ======================= XEM TRƯỚC / LƯU NHÁP =======================
 
@@ -109,6 +111,7 @@ public class OrderDraftService {
         Customer customer = findCustomer(customerId, actor);
         String kw = StringUtils.hasText(keyword) ? keyword.trim() : "";
         LocalDate today = LocalDate.now(VN_ZONE);
+        Warehouse warehouse = inventoryService != null ? inventoryService.resolveWarehouseForCustomer(customer) : null;
 
         // 1. Tìm bảng giá đang có hiệu lực của nhóm khách hàng mà đại lý thuộc về
         List<PriceList> effectivePriceLists = priceListRepository.findEffectiveByCustomerGroup(
@@ -126,6 +129,8 @@ public class OrderDraftService {
                 if (item.getProduct() != null && "ACTIVE".equalsIgnoreCase(item.getProduct().getStatus())) {
                     Product p = item.getProduct();
                     pricedSkus.add(item.getProductSku().toUpperCase());
+                    StockInfoDto stock = (inventoryService != null && warehouse != null)
+                            ? inventoryService.getStockInfo(warehouse, p) : null;
                     result.add(new ProductOptionResponse(
                             p.getId(),
                             item.getProductSku(),
@@ -136,7 +141,12 @@ public class OrderDraftService {
                             item.getPrice(),
                             item.getFloorPrice(),
                             activePriceList.getCode(),
-                            null));
+                            null,
+                            warehouse != null ? warehouse.getCode() : null,
+                            warehouse != null ? warehouse.getName() : null,
+                            stock != null ? stock.physicalStock() : BigDecimal.ZERO,
+                            stock != null ? stock.reservedStock() : BigDecimal.ZERO,
+                            stock != null ? stock.availableStock() : BigDecimal.ZERO));
                 }
             }
 
@@ -146,6 +156,8 @@ public class OrderDraftService {
                         kw, kw, PageRequest.of(0, 50, Sort.by("sku"))).getContent();
                 for (Product p : catalogMatches) {
                     if ("ACTIVE".equalsIgnoreCase(p.getStatus()) && !pricedSkus.contains(p.getSku().toUpperCase())) {
+                        StockInfoDto stock = (inventoryService != null && warehouse != null)
+                                ? inventoryService.getStockInfo(warehouse, p) : null;
                         result.add(new ProductOptionResponse(
                                 p.getId(),
                                 p.getSku(),
@@ -156,7 +168,12 @@ public class OrderDraftService {
                                 null,
                                 null,
                                 null,
-                                noPriceMessage(customer, p)));
+                                noPriceMessage(customer, p),
+                                warehouse != null ? warehouse.getCode() : null,
+                                warehouse != null ? warehouse.getName() : null,
+                                stock != null ? stock.physicalStock() : BigDecimal.ZERO,
+                                stock != null ? stock.reservedStock() : BigDecimal.ZERO,
+                                stock != null ? stock.availableStock() : BigDecimal.ZERO));
                     }
                 }
             }
@@ -173,11 +190,18 @@ public class OrderDraftService {
                 .filter(p -> "ACTIVE".equalsIgnoreCase(p.getStatus()))
                 .map(p -> {
                     Optional<PriceListItem> price = findPrice(customer, p, today);
+                    StockInfoDto stock = (inventoryService != null && warehouse != null)
+                            ? inventoryService.getStockInfo(warehouse, p) : null;
                     return new ProductOptionResponse(p.getId(), p.getSku(), p.getName(), p.getBaseUnit(), units(p),
                             price.isPresent(), price.map(PriceListItem::getPrice).orElse(null),
                             price.map(PriceListItem::getFloorPrice).orElse(null),
                             price.map(i -> i.getPriceList().getCode()).orElse(null),
-                            price.isPresent() ? null : noPriceMessage(customer, p));
+                            price.isPresent() ? null : noPriceMessage(customer, p),
+                            warehouse != null ? warehouse.getCode() : null,
+                            warehouse != null ? warehouse.getName() : null,
+                            stock != null ? stock.physicalStock() : BigDecimal.ZERO,
+                            stock != null ? stock.reservedStock() : BigDecimal.ZERO,
+                            stock != null ? stock.availableStock() : BigDecimal.ZERO);
                 })
                 .toList();
     }
@@ -469,6 +493,8 @@ public class OrderDraftService {
     OrderResponse toResponse(SalesOrder o) {
         Customer c = o.getCustomer();
         CustomerDeliveryAddress a = o.getDeliveryAddress();
+        Warehouse warehouse = inventoryService != null ? inventoryService.resolveWarehouseForCustomer(c) : null;
+
         List<OrderLineResponse> lines = o.getLines().stream()
                 .map(l -> {
                     BigDecimal pricePerUnit = l.getPricePerUnit() != null ? l.getPricePerUnit()
@@ -480,12 +506,30 @@ public class OrderDraftService {
                         BigDecimal netUnit = l.getNetAmount().divide(l.getBaseQuantity(), 4, RoundingMode.HALF_UP);
                         isBelow = netUnit.compareTo(l.getFloorPrice()) < 0;
                     }
+
+                    StockInfoDto stock = (inventoryService != null && warehouse != null && l.getProduct() != null)
+                            ? inventoryService.getStockInfo(warehouse, l.getProduct()) : null;
+                    BigDecimal available = stock != null ? stock.availableStock() : BigDecimal.ZERO;
+                    BigDecimal baseQty = l.getBaseQuantity() != null ? l.getBaseQuantity() : BigDecimal.ZERO;
+                    boolean isOverStock = baseQty.compareTo(available) > 0;
+                    BigDecimal factor = l.getConversionFactor() != null && l.getConversionFactor().signum() > 0
+                            ? l.getConversionFactor() : BigDecimal.ONE;
+                    BigDecimal maxAllowed = available.compareTo(BigDecimal.ZERO) > 0
+                            ? available.divide(factor, 0, RoundingMode.FLOOR) : BigDecimal.ZERO;
+
                     return new OrderLineResponse(
                             l.getId(), l.getLineNo(), l.getProduct().getId(), l.getProductSku(),
                             l.getProductName(), l.getUnitName(), l.getConversionFactor(), l.getQuantity(), l.getBaseUnit(),
                             l.getBaseQuantity(), l.getPriceList() != null ? l.getPriceList().getCode() : null, l.getUnitPrice(),
                             pricePerUnit, l.getFloorPrice(), l.getGrossAmount(), l.getDiscountPolicyCode(), l.getDiscountAmount(),
-                            l.getNetAmount(), Boolean.TRUE.equals(l.getIsCustomPrice()), isBelow);
+                            l.getNetAmount(), Boolean.TRUE.equals(l.getIsCustomPrice()), isBelow,
+                            warehouse != null ? warehouse.getCode() : null,
+                            warehouse != null ? warehouse.getName() : null,
+                            stock != null ? stock.physicalStock() : BigDecimal.ZERO,
+                            stock != null ? stock.reservedStock() : BigDecimal.ZERO,
+                            available,
+                            isOverStock,
+                            maxAllowed);
                 })
                 .toList();
         // Đơn đã duyệt thì tiền đơn đã nằm trong công nợ hiện tại, chỉ tính cho đơn nháp
@@ -496,13 +540,13 @@ public class OrderDraftService {
                 a == null ? null : new OrderResponse.DeliveryAddressInfo(a.getId(), a.getLabel(), a.getAddress(),
                         a.getReceiverName(), a.getReceiverPhone()),
                 o.getDesiredDeliveryDate(), o.getNote(), lines, o.getSubtotal(), o.getDiscountTotal(), o.getTotalAmount(),
-                o.getCreatedByUsername(), o.getCreatedAt(), o.getUpdatedAt(), warnings(c, credit, o), credit,
+                o.getCreatedByUsername(), o.getCreatedAt(), o.getUpdatedAt(), warnings(c, credit, o, lines), credit,
                 OrderApprovalReasons.of(o), o.getLastApprovalComment(), o.getSubmittedAt(), o.getApprovedAt(),
                 o.getApprovedByUsername());
     }
 
-    /** S3-07 AC3: cảnh báo khi đại lý của đơn đang bị khoá giao dịch. S4-02: cảnh báo vượt hạn mức / nợ quá hạn. S4-01: cảnh báo bán dưới giá sàn. */
-    private static List<String> warnings(Customer c, CreditStatusResponse credit, SalesOrder o) {
+    /** S3-07 AC3: cảnh báo khi đại lý của đơn đang bị khoá giao dịch. S4-02: cảnh báo vượt hạn mức / nợ quá hạn. S4-01: cảnh báo bán dưới giá sàn. S4-03: cảnh báo vượt tồn kho khả dụng. */
+    private static List<String> warnings(Customer c, CreditStatusResponse credit, SalesOrder o, List<OrderLineResponse> lines) {
         List<String> warnings = new ArrayList<>();
         if (c.isTransactionLocked()) {
             String reason = c.getTransactionLockReason() != null ? ": " + c.getTransactionLockReason() : "";
@@ -514,6 +558,19 @@ public class OrderDraftService {
         }
         if (o != null && o.getBelowFloorLineCount() != null && o.getBelowFloorLineCount() > 0) {
             warnings.add("Đơn hàng có " + o.getBelowFloorLineCount() + " mặt hàng bán dưới giá sàn quy định. Khi chốt đơn sẽ chuyển sang trạng thái Chờ duyệt.");
+        }
+        if (lines != null) {
+            for (OrderLineResponse line : lines) {
+                if (Boolean.TRUE.equals(line.isOverStock())) {
+                    warnings.add(String.format("Mặt hàng '%s' (%s) vượt quá tồn khả dụng tại %s (Kho còn %s %s, yêu cầu %s %s). Vui lòng điều chỉnh trước khi chốt đơn.",
+                            line.productName(), line.productSku(),
+                            line.warehouseName() != null ? line.warehouseName() : "kho",
+                            line.maxAllowedQuantity() != null ? line.maxAllowedQuantity().stripTrailingZeros().toPlainString() : "0",
+                            line.unitName(),
+                            line.quantity() != null ? line.quantity().stripTrailingZeros().toPlainString() : "0",
+                            line.unitName()));
+                }
+            }
         }
         return List.copyOf(warnings);
     }
