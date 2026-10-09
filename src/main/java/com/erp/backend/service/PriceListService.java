@@ -3,6 +3,7 @@ package com.erp.backend.service;
 import com.erp.backend.dto.pricing.*;
 import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
+import com.erp.backend.repository.PriceHistoryRepository;
 import com.erp.backend.repository.PriceListItemRepository;
 import com.erp.backend.repository.PriceListRepository;
 import com.erp.backend.repository.PriceListSpecifications;
@@ -46,6 +47,7 @@ public class PriceListService {
     private final ProductRepository productRepository;
     private final AuditLogService auditLogService;
     private final PriceHistoryService priceHistoryService;
+    private final PriceHistoryRepository priceHistoryRepository;
 
     // ======================= XEM / TRA CỨU =======================
 
@@ -231,6 +233,21 @@ public class PriceListService {
         PriceList saved = priceListRepository.save(priceList);
         audit("CHANGE_PRICE_LIST_STATUS", saved, old, st, "Đổi trạng thái bảng giá " + saved.getCode(), actor);
         return toResponse(saved, true);
+    }
+
+    /** Xoá bảng giá khi chưa phát sinh đơn hàng. */
+    @Transactional
+    public void delete(Long id, UserDetailsImpl actor) {
+        PriceList priceList = findForUpdate(id);
+        if (priceList.isHasOrders()) {
+            throw BusinessException.conflict("PRICE_LIST_HAS_ORDERS",
+                    "Không thể xoá bảng giá đã phát sinh đơn hàng", null);
+        }
+        String before = summary(priceList);
+        priceHistoryRepository.deleteByPriceList(priceList);
+        priceListRepository.clearSourcePriceList(priceList.getId());
+        priceListRepository.delete(priceList);
+        audit("DELETE_PRICE_LIST", priceList, before, null, "Xoá bảng giá " + priceList.getCode(), actor);
     }
 
     /** Thêm dòng giá mới, hoặc sửa giá nếu sản phẩm đã có trong bảng. */

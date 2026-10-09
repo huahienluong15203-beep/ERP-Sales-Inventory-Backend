@@ -3,6 +3,7 @@ package com.erp.backend.service;
 import com.erp.backend.dto.pricing.*;
 import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
+import com.erp.backend.repository.PriceHistoryRepository;
 import com.erp.backend.repository.PriceListItemRepository;
 import com.erp.backend.repository.PriceListRepository;
 import com.erp.backend.repository.ProductRepository;
@@ -39,6 +40,7 @@ class PriceListServiceTest {
     @Mock private ProductRepository productRepository;
     @Mock private AuditLogService auditLogService;
     @Mock private PriceHistoryService priceHistoryService;
+    @Mock private PriceHistoryRepository priceHistoryRepository;
 
     @InjectMocks private PriceListService service;
 
@@ -364,5 +366,59 @@ class PriceListServiceTest {
         when(priceListRepository.countByHasOrdersTrue()).thenReturn(1L);
 
         assertThat(service.stats()).isEqualTo(new PriceListStatsResponse(7, 5, 3, 2, 2, 1));
+    }
+
+    @Test
+    @DisplayName("S2-10: Xoá bảng giá chưa phát sinh đơn hàng -> Thành công")
+    void delete_success() {
+        PriceList list = PriceList.builder()
+                .id(5L)
+                .code("BG-TEST-DEL")
+                .name("Bảng giá test xoá")
+                .customerGroup(CustomerGroup.DEALER_LEVEL_1)
+                .startDate(LocalDate.of(2026, 10, 1))
+                .hasOrders(false)
+                .items(new ArrayList<>())
+                .build();
+        when(priceListRepository.findByIdForUpdate(5L)).thenReturn(Optional.of(list));
+
+        service.delete(5L, manager);
+
+        verify(priceHistoryRepository).deleteByPriceList(list);
+        verify(priceListRepository).clearSourcePriceList(5L);
+        verify(priceListRepository).delete(list);
+        verify(auditLogService).record(eq(AuditModule.PRICING), eq("DELETE_PRICE_LIST"), eq("PRICE_LIST"),
+                eq(5L), eq("BG-TEST-DEL"), anyString(), isNull(), anyString(), eq(manager));
+    }
+
+    @Test
+    @DisplayName("S2-10: Xoá bảng giá đã phát sinh đơn hàng -> Báo lỗi 409 Conflict")
+    void delete_hasOrders_conflict() {
+        PriceList list = PriceList.builder()
+                .id(6L)
+                .code("BG-HAS-ORDER")
+                .name("Bảng giá có đơn")
+                .customerGroup(CustomerGroup.DEALER_LEVEL_1)
+                .startDate(LocalDate.of(2026, 10, 1))
+                .hasOrders(true)
+                .items(new ArrayList<>())
+                .build();
+        when(priceListRepository.findByIdForUpdate(6L)).thenReturn(Optional.of(list));
+
+        assertThatThrownBy(() -> service.delete(6L, manager))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Không thể xoá bảng giá đã phát sinh đơn hàng");
+
+        verify(priceListRepository, never()).delete(any(PriceList.class));
+    }
+
+    @Test
+    @DisplayName("S2-10: Xoá bảng giá không tồn tại -> Báo lỗi 404")
+    void delete_notFound() {
+        when(priceListRepository.findByIdForUpdate(999L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.delete(999L, manager))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Không tìm thấy");
     }
 }

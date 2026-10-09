@@ -42,4 +42,8 @@ public interface PriceListRepository extends JpaRepository<PriceList, Long>, Jpa
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT p FROM PriceList p WHERE p.id = :id")
     Optional<PriceList> findByIdForUpdate(@Param("id") Long id);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("UPDATE PriceList p SET p.sourcePriceList = null WHERE p.sourcePriceList.id = :id")
+    void clearSourcePriceList(@Param("id") Long id);
 }
