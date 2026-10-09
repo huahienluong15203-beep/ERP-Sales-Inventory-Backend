@@ -3,10 +3,12 @@ package com.erp.backend.service;
 import com.erp.backend.dto.pricing.*;
 import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
+import com.erp.backend.repository.PriceHistoryRepository;
 import com.erp.backend.repository.PriceListItemRepository;
 import com.erp.backend.repository.PriceListRepository;
 import com.erp.backend.repository.PriceListSpecifications;
 import com.erp.backend.dto.user.PageResponse;
+import com.erp.backend.repository.CustomerRepository;
 import com.erp.backend.repository.ProductRepository;
 import com.erp.backend.security.UserDetailsImpl;
 import lombok.RequiredArgsConstructor;
@@ -46,6 +48,8 @@ public class PriceListService {
     private final ProductRepository productRepository;
     private final AuditLogService auditLogService;
     private final PriceHistoryService priceHistoryService;
+    private final PriceHistoryRepository priceHistoryRepository;
+    private final CustomerRepository customerRepository;
 
     // ======================= XEM / TRA CỨU =======================
 
@@ -231,6 +235,38 @@ public class PriceListService {
         PriceList saved = priceListRepository.save(priceList);
         audit("CHANGE_PRICE_LIST_STATUS", saved, old, st, "Đổi trạng thái bảng giá " + saved.getCode(), actor);
         return toResponse(saved, true);
+    }
+
+    /** Xoá bảng giá khi chưa phát sinh đơn hàng. */
+    @Transactional
+    public void delete(Long id, UserDetailsImpl actor) {
+        PriceList priceList = findForUpdate(id);
+        if (priceList.isHasOrders()) {
+            throw BusinessException.conflict("PRICE_LIST_HAS_ORDERS",
+                    "Không thể xoá bảng giá đã phát sinh đơn hàng", null);
+        }
+
+        // Chặn xoá nếu đây là bảng giá hiệu lực duy nhất của nhóm và nhóm đang có đại lý
+        if (ACTIVE.equals(priceList.getStatus())) {
+            LocalDate today = LocalDate.now(VN_ZONE);
+            List<PriceList> effectiveLists = priceListRepository.findEffectiveByCustomerGroup(priceList.getCustomerGroup(), today);
+            boolean isOnlyEffective = effectiveLists.stream().allMatch(p -> p.getId().equals(priceList.getId()));
+            if (isOnlyEffective) {
+                long customerCount = customerRepository.countByCustomerGroup(priceList.getCustomerGroup());
+                if (customerCount > 0) {
+                    throw BusinessException.conflict("LAST_ACTIVE_PRICE_LIST",
+                            "Không thể xoá bảng giá hiệu lực duy nhất của nhóm '" + priceList.getCustomerGroup().getLabel()
+                                    + "' vì đang có " + customerCount + " đại lý thuộc nhóm này. Vui lòng tạo bảng giá mới thay thế trước khi xoá.",
+                            null);
+                }
+            }
+        }
+
+        String before = summary(priceList);
+        priceHistoryRepository.deleteByPriceList(priceList);
+        priceListRepository.clearSourcePriceList(priceList.getId());
+        priceListRepository.delete(priceList);
+        audit("DELETE_PRICE_LIST", priceList, before, null, "Xoá bảng giá " + priceList.getCode(), actor);
     }
 
     /** Thêm dòng giá mới, hoặc sửa giá nếu sản phẩm đã có trong bảng. */

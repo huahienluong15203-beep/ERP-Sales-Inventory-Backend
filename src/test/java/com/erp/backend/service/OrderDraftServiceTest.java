@@ -92,10 +92,15 @@ class OrderDraftServiceTest {
     }
 
     private OrderLineRequest line(String sku, String unit, String qty) {
+        return line(sku, unit, qty, null);
+    }
+
+    private OrderLineRequest line(String sku, String unit, String qty, String unitPrice) {
         OrderLineRequest l = new OrderLineRequest();
         l.setProductSku(sku);
         l.setUnitName(unit);
         l.setQuantity(qty == null ? null : new BigDecimal(qty));
+        l.setUnitPrice(unitPrice == null ? null : new BigDecimal(unitPrice));
         return l;
     }
 
@@ -347,5 +352,132 @@ class OrderDraftServiceTest {
         assertThat(res.get(0).priceAvailable()).isTrue();
         assertThat(res.get(0).unitPrice()).isEqualByComparingTo("10000");
         assertThat(service.productOptions(6L, "c", rep)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("S4-01: Sửa giá thủ công trên giá sàn -> áp dụng giá mới, tính lại chiết khấu, không vi phạm giá sàn")
+    void preview_manualPriceAboveFloor() {
+        // Giá niêm yết: 240.000 đ/thùng (10.000 đ/lon), giá sàn: 9.000 đ/lon (216.000 đ/thùng)
+        // Nhân viên sửa giá thủ công thành 230.000 đ/thùng (9.583 đ/lon > 9.000 đ)
+        OrderResponse res = service.preview(request(line("sp-coca", "thùng", "5", "230000")), rep);
+
+        OrderLineResponse l = res.lines().get(0);
+        assertThat(l.isCustomPrice()).isTrue();
+        assertThat(l.isBelowFloor()).isFalse();
+        assertThat(l.pricePerUnit()).isEqualByComparingTo("230000");
+        assertThat(res.subtotal()).isEqualByComparingTo("1150000"); // 5 * 230.000
+        assertThat(res.discountTotal()).isEqualByComparingTo("57500"); // 5% trên 1.150.000
+        assertThat(res.totalAmount()).isEqualByComparingTo("1092500");
+        assertThat(res.warnings()).doesNotContain("giá sàn");
+        assertThat(res.approvalReasons()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("S4-01: Sửa giá thủ công dưới giá sàn -> đánh dấu dòng vi phạm, thêm cảnh báo và lý do cần duyệt")
+    void preview_manualPriceBelowFloor() {
+        // Giá sàn: 9.000 đ/lon (216.000 đ/thùng). Sửa thành 200.000 đ/thùng (8.333 đ/lon < 9.000 đ/lon)
+        OrderResponse res = service.preview(request(line("sp-coca", "thùng", "5", "200000")), rep);
+
+        OrderLineResponse l = res.lines().get(0);
+        assertThat(l.isCustomPrice()).isTrue();
+        assertThat(l.isBelowFloor()).isTrue();
+        assertThat(l.pricePerUnit()).isEqualByComparingTo("200000");
+        assertThat(res.subtotal()).isEqualByComparingTo("1000000"); // 5 * 200.000
+        assertThat(res.discountTotal()).isEqualByComparingTo("50000"); // 5% trên 1.000.000
+        assertThat(res.totalAmount()).isEqualByComparingTo("950000");
+        assertThat(res.warnings()).anyMatch(w -> w.contains("bán dưới giá sàn quy định"));
+        assertThat(res.approvalReasons()).extracting(ApprovalReason::code).contains(ApprovalReason.BELOW_FLOOR_PRICE);
+    }
+
+    @Test
+    @DisplayName("S4-01: Sửa giá âm -> ném lỗi 400 INVALID_UNIT_PRICE")
+    void preview_negativePrice_throwsBadRequest() {
+        OrderDraftRequest r = request(line("sp-coca", "thùng", "1", "-50000"));
+        assertThatThrownBy(() -> service.preview(r, rep))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "INVALID_UNIT_PRICE");
+    }
+
+    @Test
+    @DisplayName("S4-01: Không có bảng giá hiệu lực cho SKU -> chặn thêm dòng kèm lý do rõ ràng")
+    void preview_noEffectivePrice_throwsBadRequestWithReason() {
+        Product pepsi = Product.builder().id(20L).sku("SP-PEPSI").name("Pepsi").baseUnit("Lon").status("ACTIVE").build();
+        when(productRepository.findBySku("SP-PEPSI")).thenReturn(Optional.of(pepsi));
+        when(priceItemRepository.findEffective(eq(CustomerGroup.DEALER_LEVEL_1), eq("SP-PEPSI"), any(), any(Pageable.class)))
+                .thenReturn(List.of());
+
+        OrderDraftRequest r = request(line("SP-PEPSI", "Lon", "10"));
+        assertThatThrownBy(() -> service.preview(r, rep))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "NO_EFFECTIVE_PRICE")
+                .hasMessageContaining("SP-PEPSI")
+                .hasMessageContaining("chưa có giá trong bảng giá đang hiệu lực của nhóm");
+    }
+
+    @Test
+    @DisplayName("S4-01: Chốt đơn bảo toàn đơn giá sửa thủ công của dòng hàng")
+    void recalculateForSubmit_preservesCustomPrice() {
+        SalesOrder order = SalesOrder.builder().id(100L).code("DH261008-0001").customer(customer).status(SalesOrder.STATUS_DRAFT).build();
+        SalesOrderLine line = SalesOrderLine.builder()
+                .lineNo(1)
+                .product(coca)
+                .productSku("SP-COCA")
+                .productName("Coca")
+                .unitName("Thùng")
+                .conversionFactor(new BigDecimal("24"))
+                .quantity(new BigDecimal("5"))
+                .baseUnit("Lon")
+                .baseQuantity(new BigDecimal("120"))
+                .priceList(priceList)
+                .unitPrice(new BigDecimal("8333.33"))
+                .pricePerUnit(new BigDecimal("200000"))
+                .isCustomPrice(true)
+                .floorPrice(new BigDecimal("9000"))
+                .grossAmount(new BigDecimal("1000000"))
+                .discountAmount(new BigDecimal("50000"))
+                .netAmount(new BigDecimal("950000"))
+                .build();
+        order.addLine(line);
+
+        service.recalculateForSubmit(order, rep);
+
+        SalesOrderLine updated = order.getLines().get(0);
+        assertThat(updated.getIsCustomPrice()).isTrue();
+        assertThat(updated.getPricePerUnit()).isEqualByComparingTo("200000");
+        assertThat(order.getBelowFloorLineCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("S4-01: Gợi ý sản phẩm khi có bảng giá hiệu lực -> trả về giá sàn và liệt kê cả SKU chưa có giá kèm lý do chặn")
+    void productOptions_withEffectivePriceList_includesUnpricedCatalogMatches() {
+        when(priceListRepository.findEffectiveByCustomerGroup(eq(CustomerGroup.DEALER_LEVEL_1), any()))
+                .thenReturn(List.of(priceList));
+        PriceListItem item = PriceListItem.builder().priceList(priceList).product(coca).productSku("SP-COCA")
+                .productName("Coca lon").price(new BigDecimal("10000")).floorPrice(new BigDecimal("9000")).build();
+        when(priceItemRepository.findByPriceListIdAndKeyword(eq(priceList.getId()), eq("coca"), any(Pageable.class)))
+                .thenReturn(List.of(item));
+
+        Product sprite = Product.builder().id(30L).sku("SP-SPRITE-COCA").name("Sprite Coca").baseUnit("Lon").status("ACTIVE").build();
+        when(productRepository.findByNameContainingIgnoreCaseOrSkuContainingIgnoreCase(eq("coca"), eq("coca"), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(coca, sprite)));
+
+        List<ProductOptionResponse> res = service.productOptions(6L, "coca", rep);
+
+        assertThat(res).hasSize(2);
+        // Sản phẩm 1: Có trong bảng giá
+        ProductOptionResponse opt1 = res.get(0);
+        assertThat(opt1.sku()).isEqualTo("SP-COCA");
+        assertThat(opt1.priceAvailable()).isTrue();
+        assertThat(opt1.unitPrice()).isEqualByComparingTo("10000");
+        assertThat(opt1.floorPrice()).isEqualByComparingTo("9000");
+        assertThat(opt1.priceListCode()).isEqualTo("BG-C1");
+        assertThat(opt1.message()).isNull();
+
+        // Sản phẩm 2: Khớp từ khóa nhưng chưa có trong bảng giá
+        ProductOptionResponse opt2 = res.get(1);
+        assertThat(opt2.sku()).isEqualTo("SP-SPRITE-COCA");
+        assertThat(opt2.priceAvailable()).isFalse();
+        assertThat(opt2.unitPrice()).isNull();
+        assertThat(opt2.message()).contains("SP-SPRITE-COCA").contains("chưa có giá trong bảng giá đang hiệu lực của nhóm " + customer.getCustomerGroup().getLabel());
     }
 }

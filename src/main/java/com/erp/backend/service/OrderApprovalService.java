@@ -117,27 +117,7 @@ public class OrderApprovalService {
             order.setCreditExceededPercent(null);
         }
 
-        int count = 0;
-        BigDecimal shortfall = BigDecimal.ZERO;
-        BigDecimal maxPercent = null;
-        for (SalesOrderLine l : order.getLines()) {
-            BigDecimal floor = l.getFloorPrice();
-            if (floor == null || floor.signum() <= 0 || l.getBaseQuantity() == null || l.getBaseQuantity().signum() <= 0
-                    || l.getNetAmount() == null) {
-                continue;
-            }
-            // Giá bán thực tế / đơn vị cơ sở sau chiết khấu
-            BigDecimal netUnit = l.getNetAmount().divide(l.getBaseQuantity(), 4, RoundingMode.HALF_UP);
-            if (netUnit.compareTo(floor) < 0) {
-                count++;
-                shortfall = shortfall.add(floor.subtract(netUnit).multiply(l.getBaseQuantity()));
-                BigDecimal pct = floor.subtract(netUnit).multiply(HUNDRED).divide(floor, 2, RoundingMode.HALF_UP);
-                maxPercent = maxPercent == null || pct.compareTo(maxPercent) > 0 ? pct : maxPercent;
-            }
-        }
-        order.setBelowFloorLineCount(count > 0 ? count : null);
-        order.setBelowFloorAmount(count > 0 ? shortfall.setScale(2, RoundingMode.HALF_UP) : null);
-        order.setBelowFloorMaxPercent(maxPercent);
+        OrderDraftService.updateBelowFloorViolations(order);
     }
 
     // ======================= DUYỆT =======================

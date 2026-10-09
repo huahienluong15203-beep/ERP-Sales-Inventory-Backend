@@ -102,4 +102,12 @@ public class PriceListController {
                                         @AuthenticationPrincipal UserDetailsImpl actor) {
         return priceListService.deleteItem(id, itemId, actor);
     }
+
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER')")
+    public ResponseEntity<Void> delete(@PathVariable Long id,
+                                       @AuthenticationPrincipal UserDetailsImpl actor) {
+        priceListService.delete(id, actor);
+        return ResponseEntity.noContent().build();
+    }
 }

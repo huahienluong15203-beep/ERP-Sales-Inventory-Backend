@@ -64,6 +64,14 @@ public class SalesOrderLine {
     @Column(name = "unit_price", nullable = false, precision = 15, scale = 2)
     private BigDecimal unitPrice;
 
+    // S4-01: Đơn giá áp dụng theo đơn vị tính đã chọn (unitName). Bằng unitPrice * conversionFactor nếu dùng giá niêm yết
+    @Column(name = "price_per_unit", precision = 15, scale = 2)
+    private BigDecimal pricePerUnit;
+
+    // S4-01: Đánh dấu dòng hàng đã sửa giá thủ công
+    @Column(name = "is_custom_price")
+    private Boolean isCustomPrice;
+
     @Column(name = "floor_price", nullable = false, precision = 15, scale = 2)
     private BigDecimal floorPrice;
 

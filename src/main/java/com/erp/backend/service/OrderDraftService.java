@@ -114,30 +114,57 @@ public class OrderDraftService {
         List<PriceList> effectivePriceLists = priceListRepository.findEffectiveByCustomerGroup(
                 customer.getCustomerGroup(), today);
 
+        List<ProductOptionResponse> result = new ArrayList<>();
+
         if (!effectivePriceLists.isEmpty()) {
             PriceList activePriceList = effectivePriceLists.get(0);
             List<PriceListItem> items = priceItemRepository.findByPriceListIdAndKeyword(
                     activePriceList.getId(), kw, PageRequest.of(0, 100));
 
-            return items.stream()
-                    .filter(item -> item.getProduct() != null && "ACTIVE".equalsIgnoreCase(item.getProduct().getStatus()))
-                    .map(item -> {
-                        Product p = item.getProduct();
-                        return new ProductOptionResponse(
+            Set<String> pricedSkus = new HashSet<>();
+            for (PriceListItem item : items) {
+                if (item.getProduct() != null && "ACTIVE".equalsIgnoreCase(item.getProduct().getStatus())) {
+                    Product p = item.getProduct();
+                    pricedSkus.add(item.getProductSku().toUpperCase());
+                    result.add(new ProductOptionResponse(
+                            p.getId(),
+                            item.getProductSku(),
+                            item.getProductName(),
+                            p.getBaseUnit(),
+                            units(p),
+                            true,
+                            item.getPrice(),
+                            item.getFloorPrice(),
+                            activePriceList.getCode(),
+                            null));
+                }
+            }
+
+            // S4-01: Nếu người dùng tìm kiếm theo từ khóa, hiển thị cả sản phẩm chưa có giá trong bảng giá kèm lý do chặn
+            if (StringUtils.hasText(kw)) {
+                List<Product> catalogMatches = productRepository.findByNameContainingIgnoreCaseOrSkuContainingIgnoreCase(
+                        kw, kw, PageRequest.of(0, 50, Sort.by("sku"))).getContent();
+                for (Product p : catalogMatches) {
+                    if ("ACTIVE".equalsIgnoreCase(p.getStatus()) && !pricedSkus.contains(p.getSku().toUpperCase())) {
+                        result.add(new ProductOptionResponse(
                                 p.getId(),
-                                item.getProductSku(),
-                                item.getProductName(),
+                                p.getSku(),
+                                p.getName(),
                                 p.getBaseUnit(),
                                 units(p),
-                                true,
-                                item.getPrice(),
-                                activePriceList.getCode(),
-                                null);
-                    })
-                    .toList();
+                                false,
+                                null,
+                                null,
+                                null,
+                                noPriceMessage(customer, p)));
+                    }
+                }
+            }
+
+            return result;
         }
 
-        // 2. Fallback nếu đại lý chưa có bảng giá hiệu lực: tìm kiếm theo danh mục chung nếu có từ khóa
+        // 2. Đại lý chưa có bảng giá hiệu lực: tìm kiếm theo danh mục chung nếu có từ khóa
         if (!StringUtils.hasText(kw)) {
             return List.of();
         }
@@ -148,6 +175,7 @@ public class OrderDraftService {
                     Optional<PriceListItem> price = findPrice(customer, p, today);
                     return new ProductOptionResponse(p.getId(), p.getSku(), p.getName(), p.getBaseUnit(), units(p),
                             price.isPresent(), price.map(PriceListItem::getPrice).orElse(null),
+                            price.map(PriceListItem::getFloorPrice).orElse(null),
                             price.map(i -> i.getPriceList().getCode()).orElse(null),
                             price.isPresent() ? null : noPriceMessage(customer, p));
                 })
@@ -157,6 +185,7 @@ public class OrderDraftService {
     /**
      * S4-05: Chốt đơn: tính lại giá / chiết khấu theo bảng giá hôm nay từ các dòng đã lưu,
      * đồng thời kiểm tra lại đại lý (khoá giao dịch, ngừng giao dịch, nợ quá hạn) như tạo đơn mới.
+     * S4-01: Giữ nguyên đơn giá đã sửa thủ công để kiểm tra vi phạm giá sàn lúc chốt đơn.
      */
     void recalculateForSubmit(SalesOrder order, UserDetailsImpl actor) {
         OrderDraftRequest req = new OrderDraftRequest();
@@ -170,6 +199,10 @@ public class OrderDraftService {
             r.setProductSku(l.getProductSku());
             r.setUnitName(l.getUnitName());
             r.setQuantity(l.getQuantity());
+            if (Boolean.TRUE.equals(l.getIsCustomPrice()) && l.getPricePerUnit() != null) {
+                r.setUnitPrice(l.getPricePerUnit());
+                r.setIsCustomPrice(true);
+            }
             lines.add(r);
         }
         req.setLines(lines);
@@ -237,6 +270,7 @@ public class OrderDraftService {
         order.setSubtotal(subtotal.setScale(2, RoundingMode.HALF_UP));
         order.setDiscountTotal(discountTotal.setScale(2, RoundingMode.HALF_UP));
         order.setTotalAmount(subtotal.subtract(discountTotal).setScale(2, RoundingMode.HALF_UP));
+        updateBelowFloorViolations(order);
     }
 
     private SalesOrderLine buildLine(Customer customer, OrderLineRequest r, int lineNo, LocalDate today) {
@@ -250,6 +284,10 @@ public class OrderDraftService {
                 || r.getQuantity().compareTo(MAX_QUANTITY) > 0 || r.getQuantity().stripTrailingZeros().scale() > 4) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_QUANTITY",
                     prefix + "số lượng phải lớn hơn 0, tối đa 1.000.000 và tối đa 4 chữ số thập phân", "lines");
+        }
+        if (r.getUnitPrice() != null && r.getUnitPrice().compareTo(BigDecimal.ZERO) < 0) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_UNIT_PRICE",
+                    prefix + "đơn giá không được âm", "lines");
         }
 
         String unitName = product.getBaseUnit();
@@ -270,7 +308,34 @@ public class OrderDraftService {
         PriceListItem price = findPrice(customer, product, today)
                 .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST, "NO_EFFECTIVE_PRICE",
                         prefix + noPriceMessage(customer, product), "lines"));
-        DiscountCalculationResponse discount = discountPolicyService.calculate(customer.getCustomerGroup(), product, baseQuantity, price.getPrice(), today);
+
+        BigDecimal catalogBasePrice = price.getPrice();
+        BigDecimal catalogPricePerUnit = catalogBasePrice.multiply(factor).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal floorPrice = price.getFloorPrice() != null ? price.getFloorPrice() : BigDecimal.ZERO;
+
+        boolean isCustom;
+        BigDecimal pricePerUnit;
+        BigDecimal unitPrice;
+        if (Boolean.TRUE.equals(r.getIsCustomPrice())) {
+            isCustom = true;
+            pricePerUnit = r.getUnitPrice() != null ? r.getUnitPrice().setScale(2, RoundingMode.HALF_UP) : catalogPricePerUnit;
+            unitPrice = pricePerUnit.divide(factor, 2, RoundingMode.HALF_UP);
+        } else if (r.getUnitPrice() != null && r.getUnitPrice().compareTo(catalogPricePerUnit) != 0 && !Boolean.FALSE.equals(r.getIsCustomPrice())) {
+            isCustom = true;
+            pricePerUnit = r.getUnitPrice().setScale(2, RoundingMode.HALF_UP);
+            unitPrice = pricePerUnit.divide(factor, 2, RoundingMode.HALF_UP);
+        } else {
+            isCustom = false;
+            pricePerUnit = catalogPricePerUnit;
+            unitPrice = catalogBasePrice;
+        }
+
+        BigDecimal grossAmount = r.getQuantity().multiply(pricePerUnit).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal effectiveBasePrice = pricePerUnit.divide(factor, 4, RoundingMode.HALF_UP);
+        DiscountCalculationResponse discount = discountPolicyService.calculate(
+                customer.getCustomerGroup(), product, baseQuantity, effectiveBasePrice, today);
+        BigDecimal discountAmount = discount.discountAmount();
+        BigDecimal netAmount = grossAmount.subtract(discountAmount).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
 
         return SalesOrderLine.builder()
                 .lineNo(lineNo)
@@ -283,13 +348,43 @@ public class OrderDraftService {
                 .baseUnit(product.getBaseUnit())
                 .baseQuantity(baseQuantity)
                 .priceList(price.getPriceList())
-                .unitPrice(price.getPrice())
-                .floorPrice(price.getFloorPrice())
-                .grossAmount(discount.grossAmount())
+                .unitPrice(unitPrice)
+                .pricePerUnit(pricePerUnit)
+                .isCustomPrice(isCustom)
+                .floorPrice(floorPrice)
+                .grossAmount(grossAmount)
                 .discountPolicyCode(discount.applied() != null ? discount.applied().policyCode() : null)
-                .discountAmount(discount.discountAmount())
-                .netAmount(discount.netAmount())
+                .discountAmount(discountAmount)
+                .netAmount(netAmount)
                 .build();
+    }
+
+    /**
+     * S4-01 / S4-05: Cập nhật mức độ vi phạm bán dưới giá sàn cho các dòng hàng của đơn.
+     */
+    public static void updateBelowFloorViolations(SalesOrder order) {
+        int count = 0;
+        BigDecimal shortfall = BigDecimal.ZERO;
+        BigDecimal maxPercent = null;
+        BigDecimal hundred = new BigDecimal("100");
+        for (SalesOrderLine l : order.getLines()) {
+            BigDecimal floor = l.getFloorPrice();
+            if (floor == null || floor.signum() <= 0 || l.getBaseQuantity() == null || l.getBaseQuantity().signum() <= 0
+                    || l.getNetAmount() == null) {
+                continue;
+            }
+            // Giá bán thực tế / đơn vị cơ sở sau chiết khấu
+            BigDecimal netUnit = l.getNetAmount().divide(l.getBaseQuantity(), 4, RoundingMode.HALF_UP);
+            if (netUnit.compareTo(floor) < 0) {
+                count++;
+                shortfall = shortfall.add(floor.subtract(netUnit).multiply(l.getBaseQuantity()));
+                BigDecimal pct = floor.subtract(netUnit).multiply(hundred).divide(floor, 2, RoundingMode.HALF_UP);
+                maxPercent = maxPercent == null || pct.compareTo(maxPercent) > 0 ? pct : maxPercent;
+            }
+        }
+        order.setBelowFloorLineCount(count > 0 ? count : null);
+        order.setBelowFloorAmount(count > 0 ? shortfall.setScale(2, RoundingMode.HALF_UP) : null);
+        order.setBelowFloorMaxPercent(maxPercent);
     }
 
     // ======================= HÀM PHỤ =======================
@@ -375,12 +470,23 @@ public class OrderDraftService {
         Customer c = o.getCustomer();
         CustomerDeliveryAddress a = o.getDeliveryAddress();
         List<OrderLineResponse> lines = o.getLines().stream()
-                .map(l -> new OrderLineResponse(l.getId(), l.getLineNo(), l.getProduct().getId(), l.getProductSku(),
-                        l.getProductName(), l.getUnitName(), l.getConversionFactor(), l.getQuantity(), l.getBaseUnit(),
-                        l.getBaseQuantity(), l.getPriceList() != null ? l.getPriceList().getCode() : null, l.getUnitPrice(),
-                        l.getUnitPrice().multiply(l.getConversionFactor()).setScale(2, RoundingMode.HALF_UP),
-                        l.getFloorPrice(), l.getGrossAmount(), l.getDiscountPolicyCode(), l.getDiscountAmount(),
-                        l.getNetAmount()))
+                .map(l -> {
+                    BigDecimal pricePerUnit = l.getPricePerUnit() != null ? l.getPricePerUnit()
+                            : l.getUnitPrice().multiply(l.getConversionFactor()).setScale(2, RoundingMode.HALF_UP);
+                    boolean isBelow = false;
+                    if (l.getFloorPrice() != null && l.getFloorPrice().signum() > 0
+                            && l.getBaseQuantity() != null && l.getBaseQuantity().signum() > 0
+                            && l.getNetAmount() != null) {
+                        BigDecimal netUnit = l.getNetAmount().divide(l.getBaseQuantity(), 4, RoundingMode.HALF_UP);
+                        isBelow = netUnit.compareTo(l.getFloorPrice()) < 0;
+                    }
+                    return new OrderLineResponse(
+                            l.getId(), l.getLineNo(), l.getProduct().getId(), l.getProductSku(),
+                            l.getProductName(), l.getUnitName(), l.getConversionFactor(), l.getQuantity(), l.getBaseUnit(),
+                            l.getBaseQuantity(), l.getPriceList() != null ? l.getPriceList().getCode() : null, l.getUnitPrice(),
+                            pricePerUnit, l.getFloorPrice(), l.getGrossAmount(), l.getDiscountPolicyCode(), l.getDiscountAmount(),
+                            l.getNetAmount(), Boolean.TRUE.equals(l.getIsCustomPrice()), isBelow);
+                })
                 .toList();
         // Đơn đã duyệt thì tiền đơn đã nằm trong công nợ hiện tại, chỉ tính cho đơn nháp
         CreditStatusResponse credit = SalesOrder.STATUS_DRAFT.equals(o.getStatus())
@@ -390,13 +496,13 @@ public class OrderDraftService {
                 a == null ? null : new OrderResponse.DeliveryAddressInfo(a.getId(), a.getLabel(), a.getAddress(),
                         a.getReceiverName(), a.getReceiverPhone()),
                 o.getDesiredDeliveryDate(), o.getNote(), lines, o.getSubtotal(), o.getDiscountTotal(), o.getTotalAmount(),
-                o.getCreatedByUsername(), o.getCreatedAt(), o.getUpdatedAt(), warnings(c, credit), credit,
+                o.getCreatedByUsername(), o.getCreatedAt(), o.getUpdatedAt(), warnings(c, credit, o), credit,
                 OrderApprovalReasons.of(o), o.getLastApprovalComment(), o.getSubmittedAt(), o.getApprovedAt(),
                 o.getApprovedByUsername());
     }
 
-    /** S3-07 AC3: cảnh báo khi đại lý của đơn đang bị khoá giao dịch. S4-02: cảnh báo vượt hạn mức / nợ quá hạn. */
-    private static List<String> warnings(Customer c, CreditStatusResponse credit) {
+    /** S3-07 AC3: cảnh báo khi đại lý của đơn đang bị khoá giao dịch. S4-02: cảnh báo vượt hạn mức / nợ quá hạn. S4-01: cảnh báo bán dưới giá sàn. */
+    private static List<String> warnings(Customer c, CreditStatusResponse credit, SalesOrder o) {
         List<String> warnings = new ArrayList<>();
         if (c.isTransactionLocked()) {
             String reason = c.getTransactionLockReason() != null ? ": " + c.getTransactionLockReason() : "";
@@ -405,6 +511,9 @@ public class OrderDraftService {
         }
         if (credit != null && credit.message() != null) {
             warnings.add(credit.message());
+        }
+        if (o != null && o.getBelowFloorLineCount() != null && o.getBelowFloorLineCount() > 0) {
+            warnings.add("Đơn hàng có " + o.getBelowFloorLineCount() + " mặt hàng bán dưới giá sàn quy định. Khi chốt đơn sẽ chuyển sang trạng thái Chờ duyệt.");
         }
         return List.copyOf(warnings);
     }
