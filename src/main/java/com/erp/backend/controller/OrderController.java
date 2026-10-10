@@ -107,6 +107,20 @@ public class OrderController {
         return ResponseEntity.status(HttpStatus.CREATED).body(orderDraftService.createDraft(request, actor));
     }
 
+    /**
+     * S4-09 / SCRUM-159: Sao chép một đơn cũ thành đơn mới (để tạo đơn định kỳ cho khách quen trong vài giây).
+     * - AC1: Sao chép toàn bộ dòng hàng của đơn đã chọn.
+     * - AC2: Giá và chiết khấu được áp lại theo bảng giá hiện hành, không kế thừa giá cũ.
+     * - AC3: Bản sao luôn bắt đầu ở trạng thái Nháp (DRAFT).
+     */
+    @PostMapping(value = {"/{id}/copy", "/{id}/clone"})
+    @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'SALES_REP')")
+    public ResponseEntity<OrderResponse> copyOrder(@PathVariable Long id,
+                                                   @RequestBody(required = false) OrderCopyRequest request,
+                                                   @AuthenticationPrincipal UserDetailsImpl actor) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(orderDraftService.copyOrder(id, request, actor));
+    }
+
     /** Mở lại đơn nháp và lưu tiếp. */
     @PutMapping("/{id}")
     @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'SALES_REP')")

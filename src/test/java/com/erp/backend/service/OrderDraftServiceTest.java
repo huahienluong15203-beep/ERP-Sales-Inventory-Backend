@@ -45,6 +45,7 @@ class OrderDraftServiceTest {
     @Mock private CustomerService customerService;
     @Mock private CustomerCreditService creditService;
     @Mock private InventoryService inventoryService;
+    @Mock private AuditLogService auditLogService;
 
     @InjectMocks private OrderDraftService service;
 
@@ -68,6 +69,8 @@ class OrderDraftServiceTest {
         lenient().when(productRepository.findBySku("SP-COCA")).thenReturn(Optional.of(coca));
         lenient().when(addressRepository.findByCustomer_IdAndStatusOrderByDefaultAddressDescIdAsc(6L, "ACTIVE"))
                 .thenReturn(List.of(defaultAddress));
+        lenient().when(addressRepository.findByIdAndCustomer_Id(eq(3L), eq(6L)))
+                .thenReturn(Optional.of(defaultAddress));
         lenient().when(priceItemRepository.findEffective(eq(CustomerGroup.DEALER_LEVEL_1), eq("SP-COCA"), any(), any(Pageable.class)))
                 .thenReturn(List.of(PriceListItem.builder().priceList(priceList).product(coca).productSku("SP-COCA")
                         .productName("Coca lon").price(new BigDecimal("10000")).floorPrice(new BigDecimal("9000")).build()));
@@ -530,5 +533,150 @@ class OrderDraftServiceTest {
         assertThat(line.isOverStock()).isTrue();
         assertThat(line.availableStock()).isEqualByComparingTo("10");
         assertThat(line.maxAllowedQuantity()).isEqualByComparingTo("0"); // 10 lon / 24 lon mỗi thùng (FLOOR) = 0 thùng
+    }
+
+    // ================================= S4-09: SAO CHÉP ĐƠN HÀNG =================================
+
+    @Test
+    @DisplayName("S4-09 / SCRUM-159: Sao chép đơn cũ thành công - sao chép toàn bộ dòng hàng, tính lại giá theo bảng giá hiện hành, bắt đầu ở trạng thái Nháp")
+    void copyOrder_success_copiesAllLines_reappliesPrices_startsAsDraft() {
+        SalesOrder source = SalesOrder.builder()
+                .id(50L)
+                .code("DH261001-OLD1")
+                .status(SalesOrder.STATUS_APPROVED)
+                .customer(customer)
+                .deliveryAddress(defaultAddress)
+                .desiredDeliveryDate(LocalDate.now().plusDays(2))
+                .note("Đơn định kỳ cũ")
+                .build();
+        SalesOrderLine sourceLine = SalesOrderLine.builder()
+                .product(coca)
+                .productSku("SP-COCA")
+                .productName("Coca lon")
+                .unitName("Thùng")
+                .conversionFactor(new BigDecimal("24"))
+                .quantity(new BigDecimal("10"))
+                .baseUnit("Lon")
+                .baseQuantity(new BigDecimal("240"))
+                .isCustomPrice(true) // Giá cũ được sửa tay
+                .unitPrice(new BigDecimal("5000")) // Giá cũ khác giá bảng giá
+                .pricePerUnit(new BigDecimal("120000"))
+                .grossAmount(new BigDecimal("1200000"))
+                .discountAmount(BigDecimal.ZERO)
+                .netAmount(new BigDecimal("1200000"))
+                .build();
+        source.addLine(sourceLine);
+
+        when(orderRepository.findById(50L)).thenReturn(Optional.of(source));
+
+        OrderResponse res = service.copyOrder(50L, rep);
+
+        assertThat(res).isNotNull();
+        assertThat(res.id()).isEqualTo(100L);
+        assertThat(res.code()).startsWith("DH");
+        assertThat(res.code()).isNotEqualTo("DH261001-OLD1");
+        assertThat(res.status()).isEqualTo("DRAFT"); // AC3: Bản sao luôn bắt đầu ở trạng thái Nháp
+        assertThat(res.lines()).hasSize(1); // AC1: Sao chép toàn bộ dòng hàng
+
+        OrderLineResponse copiedLine = res.lines().get(0);
+        assertThat(copiedLine.productSku()).isEqualTo("SP-COCA");
+        assertThat(copiedLine.unitName()).isEqualTo("Thùng");
+        assertThat(copiedLine.quantity()).isEqualByComparingTo("10");
+        assertThat(copiedLine.isCustomPrice()).isFalse(); // AC2: Bỏ giá cũ, áp giá bảng giá hiện hành
+        // Bảng giá hiện hành: 10,000 / lon * 24 = 240,000 / thùng (khác với 120,000 cũ)
+        assertThat(copiedLine.pricePerUnit()).isEqualByComparingTo("240000");
+
+        verify(auditLogService).record(eq(AuditModule.INVOICE), eq("COPY_ORDER"), eq("SALES_ORDER"),
+                eq(100L), any(), eq("DH261001-OLD1"), any(), contains("DH261001-OLD1"), eq(rep));
+    }
+
+    @Test
+    @DisplayName("S4-09: Sao chép đơn kèm tuỳ biến ngày giao và ghi chú mới")
+    void copyOrder_withCustomFields_appliesRequestedFields() {
+        SalesOrder source = SalesOrder.builder()
+                .id(51L)
+                .code("DH261001-OLD2")
+                .status(SalesOrder.STATUS_CLOSED)
+                .customer(customer)
+                .deliveryAddress(defaultAddress)
+                .note("Ghi chú cũ")
+                .build();
+        source.addLine(SalesOrderLine.builder()
+                .product(coca)
+                .productSku("SP-COCA")
+                .unitName("Lon")
+                .conversionFactor(BigDecimal.ONE)
+                .quantity(new BigDecimal("5"))
+                .baseUnit("Lon")
+                .baseQuantity(new BigDecimal("5"))
+                .build());
+
+        when(orderRepository.findById(51L)).thenReturn(Optional.of(source));
+
+        LocalDate customDate = LocalDate.now().plusDays(5);
+        OrderCopyRequest req = OrderCopyRequest.builder()
+                .note("Giao đợt 2 tuần này")
+                .desiredDeliveryDate(customDate)
+                .build();
+
+        OrderResponse res = service.copyOrder(51L, req, rep);
+
+        assertThat(res.note()).isEqualTo("Giao đợt 2 tuần này");
+        assertThat(res.desiredDeliveryDate()).isEqualTo(customDate);
+        assertThat(res.status()).isEqualTo("DRAFT");
+    }
+
+    @Test
+    @DisplayName("S4-09: Đại lý không đủ điều kiện đặt đơn (nợ quá hạn...) -> Chặn sao chép đơn")
+    void copyOrder_failsWhenCustomerCannotCreateOrder() {
+        SalesOrder source = SalesOrder.builder()
+                .id(52L)
+                .customer(customer)
+                .build();
+        when(orderRepository.findById(52L)).thenReturn(Optional.of(source));
+        doThrow(BusinessException.conflict("OVERDUE_DEBT", "Đại lý có nợ quá hạn", "customerId"))
+                .when(customerService).assertCanCreateOrder(customer);
+
+        assertThatThrownBy(() -> service.copyOrder(52L, rep))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Đại lý có nợ quá hạn");
+
+        verify(orderRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("S4-09: Đơn gốc không có dòng hàng nào -> Báo lỗi BAD_REQUEST")
+    void copyOrder_failsWhenSourceHasNoLines() {
+        SalesOrder source = SalesOrder.builder()
+                .id(53L)
+                .code("DH261001-EMPTY")
+                .customer(customer)
+                .build();
+        when(orderRepository.findById(53L)).thenReturn(Optional.of(source));
+
+        assertThatThrownBy(() -> service.copyOrder(53L, rep))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("không có dòng hàng nào");
+
+        verify(orderRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("S4-09: Ngày giao mong muốn trong quá khứ -> Báo lỗi BAD_REQUEST")
+    void copyOrder_failsWhenDesiredDateInPast() {
+        SalesOrder source = SalesOrder.builder()
+                .id(54L)
+                .code("DH261001-DATE")
+                .customer(customer)
+                .build();
+        when(orderRepository.findById(54L)).thenReturn(Optional.of(source));
+
+        OrderCopyRequest req = OrderCopyRequest.builder()
+                .desiredDeliveryDate(LocalDate.now().minusDays(1))
+                .build();
+
+        assertThatThrownBy(() -> service.copyOrder(54L, req, rep))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("không được trước hôm nay");
     }
 }
