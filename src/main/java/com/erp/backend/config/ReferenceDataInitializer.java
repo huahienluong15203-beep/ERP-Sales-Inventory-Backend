@@ -29,6 +29,7 @@ public class ReferenceDataInitializer implements CommandLineRunner {
     private final RegionRepository regionRepository;
     private final ProductRepository productRepository;
     private final InventoryRepository inventoryRepository;
+    private final com.erp.backend.repository.MinStockThresholdRepository minStockThresholdRepository;
     private final JdbcTemplate jdbcTemplate;
 
     @Override
@@ -54,6 +55,9 @@ public class ReferenceDataInitializer implements CommandLineRunner {
 
         // S4-03: Khởi tạo tồn kho mẫu cho các sản phẩm trong hệ thống
         seedInventories();
+
+        // S5-09: Khởi tạo định mức tồn tối thiểu mẫu để test cảnh báo đứt hàng
+        seedMinStockThresholds();
     }
 
     private void seedWarehouse(String code, String name, String address) {
@@ -102,6 +106,38 @@ public class ReferenceDataInitializer implements CommandLineRunner {
                             .product(p)
                             .physicalStock(physical)
                             .reservedStock(reserved)
+                            .build());
+                }
+            }
+        }
+    }
+
+    private void seedMinStockThresholds() {
+        if (minStockThresholdRepository.count() > 0) {
+            return;
+        }
+
+        List<Warehouse> warehouses = warehouseRepository.findAll();
+        List<Product> products = productRepository.findAll();
+
+        for (Warehouse wh : warehouses) {
+            for (Product p : products) {
+                String sku = p.getSku() != null ? p.getSku().toUpperCase() : "";
+                BigDecimal threshold = null;
+
+                if (sku.contains("PEPSI")) {
+                    threshold = new BigDecimal("100"); // Tồn 20 < 100 -> CRITICAL
+                } else if (sku.contains("HEINEKEN")) {
+                    threshold = new BigDecimal("50");  // Tồn 15 < 50 -> CRITICAL
+                } else if (sku.contains("SAIGON")) {
+                    threshold = new BigDecimal("400"); // Tồn 550 >= 400 -> SAFE
+                }
+
+                if (threshold != null) {
+                    minStockThresholdRepository.save(com.erp.backend.entity.MinStockThreshold.builder()
+                            .warehouse(wh)
+                            .product(p)
+                            .minThreshold(threshold)
                             .build());
                 }
             }
