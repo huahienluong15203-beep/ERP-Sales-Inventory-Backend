@@ -6,6 +6,7 @@ import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.InventoryRepository;
 import com.erp.backend.repository.WarehouseRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -13,6 +14,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.time.ZoneId;
+import java.time.LocalDateTime;
+import java.time.Clock;
 import java.math.RoundingMode;
 import java.util.*;
 
@@ -23,6 +27,13 @@ public class InventoryService {
 
     private final InventoryRepository inventoryRepository;
     private final WarehouseRepository warehouseRepository;
+
+    // S5-06: số ngày giữ chỗ tối đa trước khi tự nhả (application.properties: erp.order.reservation-days)
+    @Value("${erp.order.reservation-days:7}")
+    int reservationDays = 7;
+
+    // Cho phép test cố định thời gian
+    Clock clock = Clock.system(ZoneId.of("Asia/Ho_Chi_Minh"));
 
     /**
      * S4-03 AC1: Xác định kho hàng phục vụ đại lý theo địa bàn / khu vực hoạt động.
@@ -168,6 +179,35 @@ public class InventoryService {
             log.info("S4-03: Đã giữ chỗ {} {} (tổng giữ: {}) cho SKU {} tại kho {}",
                     baseQty, product.getBaseUnit(), inventory.getReservedStock(), product.getSku(), warehouse.getCode());
         }
+
+        // S5-06: ghi nhận kho, thời điểm và hạn giữ chỗ trên đơn (cùng transaction với việc tăng giữ chỗ)
+        LocalDateTime now = LocalDateTime.now(clock);
+        order.setReservedWarehouse(warehouse);
+        order.setReservationStatus(SalesOrder.RESERVATION_RESERVED);
+        order.setReservedAt(now);
+        order.setReservationExpiresAt(now.plusDays(reservationDays));
+    }
+
+    /** S5-06: đơn vừa được duyệt -> gia hạn giữ chỗ thêm N ngày để kho kịp soạn hàng. */
+    public void renewReservation(SalesOrder order) {
+        if (order != null && SalesOrder.RESERVATION_RESERVED.equals(order.getReservationStatus())) {
+            order.setReservationExpiresAt(LocalDateTime.now(clock).plusDays(reservationDays));
+        }
+    }
+
+    /**
+     * S5-06: kho dùng để nhả / xuất: kho đã lưu lúc giữ chỗ; đơn cũ trước S5-06 chưa lưu thì xác định lại theo đại lý.
+     */
+    private Warehouse reservationWarehouse(SalesOrder order) {
+        return order.getReservedWarehouse() != null
+                ? order.getReservedWarehouse()
+                : resolveWarehouseForCustomer(order.getCustomer());
+    }
+
+    /** S5-06: đơn đã nhả hoặc đã xuất kho thì không trừ giữ chỗ lần nữa. */
+    private static boolean reservationClosed(SalesOrder order) {
+        return SalesOrder.RESERVATION_RELEASED.equals(order.getReservationStatus())
+                || SalesOrder.RESERVATION_DISPATCHED.equals(order.getReservationStatus());
     }
 
     /**
@@ -178,8 +218,12 @@ public class InventoryService {
         if (order == null || order.getLines() == null || order.getLines().isEmpty()) {
             return;
         }
+        if (reservationClosed(order)) {
+            log.info("S5-06: Đơn {} đã nhả / đã xuất kho trước đó, bỏ qua nhả giữ chỗ lần nữa", order.getCode());
+            return;
+        }
 
-        Warehouse warehouse = resolveWarehouseForCustomer(order.getCustomer());
+        Warehouse warehouse = reservationWarehouse(order);
 
         List<SalesOrderLine> sortedLines = new ArrayList<>(order.getLines());
         sortedLines.sort(Comparator.comparing(l -> l.getProduct().getId()));
@@ -205,6 +249,8 @@ public class InventoryService {
                         baseQty, product.getBaseUnit(), updated, product.getSku(), warehouse.getCode());
             }
         }
+        order.setReservationStatus(SalesOrder.RESERVATION_RELEASED);
+        order.setReservationExpiresAt(null);
     }
 
     /**
@@ -216,8 +262,12 @@ public class InventoryService {
         if (order == null || order.getLines() == null || order.getLines().isEmpty()) {
             return;
         }
+        if (SalesOrder.RESERVATION_DISPATCHED.equals(order.getReservationStatus())) {
+            return;
+        }
+        boolean wasReleased = SalesOrder.RESERVATION_RELEASED.equals(order.getReservationStatus());
 
-        Warehouse warehouse = resolveWarehouseForCustomer(order.getCustomer());
+        Warehouse warehouse = reservationWarehouse(order);
 
         List<SalesOrderLine> sortedLines = new ArrayList<>(order.getLines());
         sortedLines.sort(Comparator.comparing(l -> l.getProduct().getId()));
@@ -240,9 +290,9 @@ public class InventoryService {
                 }
                 inventory.setPhysicalStock(updatedPhysical);
 
-                // Giải phóng giữ chỗ
+                // Giải phóng giữ chỗ (đơn đã nhả trước đó thì không trừ lần nữa)
                 BigDecimal currentReserved = inventory.getReservedStock() != null ? inventory.getReservedStock() : BigDecimal.ZERO;
-                BigDecimal updatedReserved = currentReserved.subtract(baseQty);
+                BigDecimal updatedReserved = wasReleased ? currentReserved : currentReserved.subtract(baseQty);
                 if (updatedReserved.compareTo(BigDecimal.ZERO) < 0) {
                     updatedReserved = BigDecimal.ZERO;
                 }
@@ -253,5 +303,7 @@ public class InventoryService {
                         order.getCode(), baseQty, product.getBaseUnit(), updatedPhysical, updatedReserved, product.getSku(), warehouse.getCode());
             }
         }
+        order.setReservationStatus(SalesOrder.RESERVATION_DISPATCHED);
+        order.setReservationExpiresAt(null);
     }
 }

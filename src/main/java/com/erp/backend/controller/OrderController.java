@@ -6,10 +6,12 @@ import com.erp.backend.security.UserDetailsImpl;
 import com.erp.backend.service.OrderApprovalService;
 import com.erp.backend.service.OrderDraftService;
 import com.erp.backend.service.OrderQueryService;
+import com.erp.backend.service.OrderPrintService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -23,7 +25,8 @@ import java.util.List;
  * - Xem: Admin, QL kinh doanh, NV kinh doanh, Kế toán.
  * - Tạo / sửa nháp, xem trước, gợi ý sản phẩm: Admin, QL kinh doanh, NV kinh doanh.
  * NV kinh doanh chỉ làm việc với đại lý mình phụ trách.
- * S4-05: Chốt đơn (Admin, QL / NV kinh doanh); danh sách chờ duyệt, Duyệt / Từ chối / Trả lại sửa (chỉ QL kinh doanh).
+ * S4-05: Chốt đơn (Admin, QL / NV kinh doanh); danh sách chờ duyệt, Duyệt / Từ chối / Trả lại sửa (QL kinh doanh;
+ *        S4-10: NV kinh doanh xác nhận đơn đại lý tự đặt của đại lý mình nếu đơn không vi phạm).
  */
 @RestController
 @RequestMapping("/api/orders")
@@ -34,6 +37,7 @@ public class OrderController {
     private final OrderDraftService orderDraftService;
     private final OrderApprovalService orderApprovalService;
     private final OrderQueryService orderQueryService;
+    private final OrderPrintService orderPrintService;
     private final com.erp.backend.service.OrderStatusService orderStatusService;
 
     /**
@@ -71,11 +75,26 @@ public class OrderController {
 
     /** S4-05: Đơn chờ duyệt kèm lý do và mức vi phạm, đơn chờ lâu nhất lên đầu. Vd: ?keyword=DL001&page=0&size=20 */
     @GetMapping("/pending-approval")
-    @PreAuthorize("hasRole('SALES_MANAGER')")
+    @PreAuthorize("hasAnyRole('SALES_MANAGER', 'SALES_REP')")
     public PageResponse<PendingOrderResponse> pendingApproval(@RequestParam(required = false) String keyword,
                                                               @RequestParam(defaultValue = "0") int page,
-                                                              @RequestParam(defaultValue = "20") int size) {
-        return orderApprovalService.pending(keyword, page, size);
+                                                              @RequestParam(defaultValue = "20") int size,
+                                                              @AuthenticationPrincipal UserDetailsImpl actor) {
+        return orderApprovalService.pending(keyword, page, size, actor);
+    }
+
+    /**
+     * S4-08: Mẫu in đơn hàng (HTML khổ A4) có mã đơn và mã vạch Code 128; in hoặc "Lưu dưới dạng PDF" từ trình duyệt.
+     * ?autoprint=true thì tự mở hộp thoại in khi tải xong. Quyền như xem đơn.
+     */
+    // Không khai báo produces để lỗi (404 / 409...) vẫn trả JSON chuẩn {code, message, ...}
+    @GetMapping("/{id}/print")
+    public ResponseEntity<String> print(@PathVariable Long id,
+                                        @RequestParam(defaultValue = "false") boolean autoprint,
+                                        @AuthenticationPrincipal UserDetailsImpl actor) {
+        return ResponseEntity.ok()
+                .contentType(new MediaType(MediaType.TEXT_HTML, java.nio.charset.StandardCharsets.UTF_8))
+                .body(orderPrintService.printHtml(id, autoprint, actor));
     }
 
     @GetMapping("/{id}")
@@ -137,7 +156,8 @@ public class OrderController {
     }
 
     @PostMapping("/{id}/approve")
-    @PreAuthorize("hasRole('SALES_MANAGER')")
+    // S4-10: NV kinh doanh xác nhận được đơn đại lý tự đặt của đại lý mình (service kiểm chi tiết)
+    @PreAuthorize("hasAnyRole('SALES_MANAGER', 'SALES_REP')")
     public OrderResponse approve(@PathVariable Long id,
                                  @Valid @RequestBody(required = false) OrderApprovalActionRequest request,
                                  @AuthenticationPrincipal UserDetailsImpl actor) {
@@ -146,7 +166,8 @@ public class OrderController {
 
     /** Bắt buộc nhập ý kiến. */
     @PostMapping("/{id}/reject")
-    @PreAuthorize("hasRole('SALES_MANAGER')")
+    // S4-10: NV kinh doanh xác nhận được đơn đại lý tự đặt của đại lý mình (service kiểm chi tiết)
+    @PreAuthorize("hasAnyRole('SALES_MANAGER', 'SALES_REP')")
     public OrderResponse reject(@PathVariable Long id,
                                 @Valid @RequestBody(required = false) OrderApprovalActionRequest request,
                                 @AuthenticationPrincipal UserDetailsImpl actor) {
@@ -155,7 +176,8 @@ public class OrderController {
 
     /** Trả lại sửa: đơn về Nháp. Bắt buộc nhập ý kiến. */
     @PostMapping("/{id}/return")
-    @PreAuthorize("hasRole('SALES_MANAGER')")
+    // S4-10: NV kinh doanh xác nhận được đơn đại lý tự đặt của đại lý mình (service kiểm chi tiết)
+    @PreAuthorize("hasAnyRole('SALES_MANAGER', 'SALES_REP')")
     public OrderResponse returnForEdit(@PathVariable Long id,
                                        @Valid @RequestBody(required = false) OrderApprovalActionRequest request,
                                        @AuthenticationPrincipal UserDetailsImpl actor) {

@@ -16,6 +16,10 @@ final class OrderApprovalReasons {
 
     static List<ApprovalReason> of(SalesOrder o) {
         List<ApprovalReason> reasons = new ArrayList<>();
+        if (SalesOrder.SOURCE_PORTAL.equals(o.getSource())) {
+            reasons.add(new ApprovalReason(ApprovalReason.PORTAL_ORDER, "Đại lý tự đặt",
+                    "Đơn đại lý gửi qua cổng đại lý, chờ nhân viên phụ trách xác nhận", null, null));
+        }
         if (o.getCreditExceededAmount() != null && o.getCreditExceededAmount().signum() > 0) {
             String pct = o.getCreditExceededPercent() != null ? " (" + percent(o.getCreditExceededPercent()) + " hạn mức)" : "";
             reasons.add(new ApprovalReason(ApprovalReason.CREDIT_LIMIT, "Vượt hạn mức công nợ",
@@ -31,6 +35,11 @@ final class OrderApprovalReasons {
                     o.getBelowFloorAmount(), o.getBelowFloorMaxPercent()));
         }
         return List.copyOf(reasons);
+    }
+
+    /** S4-10: Có vi phạm cần QL kinh doanh duyệt (ngoài lý do "đại lý tự đặt")? */
+    static boolean needsManager(SalesOrder o) {
+        return of(o).stream().anyMatch(r -> !ApprovalReason.PORTAL_ORDER.equals(r.code()));
     }
 
     /** 12.5 -> "12,5%" */

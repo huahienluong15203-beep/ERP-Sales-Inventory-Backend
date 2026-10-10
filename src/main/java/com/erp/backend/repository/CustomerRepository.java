@@ -32,6 +32,9 @@ public interface CustomerRepository extends JpaRepository<Customer, Long>, JpaSp
     @Query("select c from Customer c where c.id = :id")
     Optional<Customer> findByIdForUpdate(@Param("id") Long id);
 
+    /** S4-10: Đại lý gắn với tài khoản cổng đại lý đang đăng nhập. */
+    Optional<Customer> findByPortalUser_Id(Long userId);
+
     // S3-06: Chuyển giao hàng loạt
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select c from Customer c where c.salesRep.id = :salesRepId")

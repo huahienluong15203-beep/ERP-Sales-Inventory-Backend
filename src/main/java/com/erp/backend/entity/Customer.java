@@ -86,6 +86,11 @@ public class Customer {
     @Builder.Default
     private Integer maxDebtDays = 30;
 
+    // S4-10: Tài khoản đăng nhập cổng đại lý (vai trò CUSTOMER) gắn với đại lý này. Mỗi tài khoản chỉ gắn 1 đại lý.
+    @OneToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "portal_user_id", unique = true)
+    private User portalUser;
+
     // S3-07: Khóa giao dịch đại lý (chặn tạo đơn mới trên mọi nền tảng khi có rủi ro công nợ).
     // columnDefinition có DEFAULT để ddl-auto=update thêm cột được trên bảng đã có dữ liệu
     @Column(name = "transaction_locked", nullable = false, columnDefinition = "boolean default false")

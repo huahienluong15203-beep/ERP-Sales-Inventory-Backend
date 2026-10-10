@@ -90,7 +90,9 @@ public class AuditLogInterceptor implements HandlerInterceptor {
 
     static boolean isReadOnlyPost(String uri) {
         String lower = uri.toLowerCase();
-        return lower.endsWith("/preview") || lower.endsWith("/preview/");
+        // S5-02: /reorder-preview (đặt lại đơn cũ) cũng chỉ tính thử, không đổi dữ liệu
+        return lower.endsWith("/preview") || lower.endsWith("/preview/")
+                || lower.endsWith("/reorder-preview") || lower.endsWith("/reorder-preview/");
     }
 
     private AuditModule resolveModule(String uri) {

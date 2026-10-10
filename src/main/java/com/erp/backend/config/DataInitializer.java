@@ -1,16 +1,20 @@
 package com.erp.backend.config;
 
+import com.erp.backend.entity.Customer;
 import com.erp.backend.entity.Role;
 import com.erp.backend.entity.RoleName;
 import com.erp.backend.entity.User;
+import com.erp.backend.repository.CustomerRepository;
 import com.erp.backend.repository.RoleRepository;
 import com.erp.backend.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.data.domain.Sort;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 @Component
@@ -20,6 +24,7 @@ public class DataInitializer implements CommandLineRunner {
     private final RoleRepository roleRepository;
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final CustomerRepository customerRepository;
 
     @Override
     public void run(String... args) throws Exception {
@@ -42,6 +47,32 @@ public class DataInitializer implements CommandLineRunner {
         seedUser("wh_manager", "wh123", "Hoàng Quản Lý Kho", "whmanager@erp.com", "0945678901", RoleName.ROLE_WH_MANAGER);
         seedUser("accountant", "acc123", "Phạm Thị Kế Toán", "accountant@erp.com", "0956789012", RoleName.ROLE_ACCOUNTANT);
         seedUser("customer_agent", "cust123", "Đại Lý Minh Phát (B2B)", "minhphat@daily.com", "0967890123", RoleName.ROLE_CUSTOMER);
+
+        // 3. S4-10: Gắn tài khoản đại lý mẫu với một hồ sơ đại lý để test cổng đại lý (chỉ khi chưa gắn)
+        linkDemoPortalAccount("customer_agent");
+    }
+
+    /**
+     * Ưu tiên đại lý mã DL-HN-001, rồi đại lý tên có "Minh Phát", rồi đại lý đang hoạt động có id nhỏ nhất;
+     * bỏ qua nếu tài khoản đã gắn, hệ thống chưa có đại lý hoặc đại lý đã có tài khoản khác.
+     */
+    private void linkDemoPortalAccount(String username) {
+        userRepository.findByUsername(username).ifPresent(user -> {
+            if (customerRepository.findByPortalUser_Id(user.getId()).isPresent()) {
+                return;
+            }
+            List<Customer> customers = customerRepository.findAll(Sort.by("id"));
+            customers.stream().filter(c -> "DL-HN-001".equalsIgnoreCase(c.getCode()))
+                    .findFirst()
+                    .or(() -> customers.stream()
+                            .filter(c -> c.getName() != null && c.getName().toLowerCase().contains("minh phát")).findFirst())
+                    .or(() -> customers.stream().filter(c -> "ACTIVE".equalsIgnoreCase(c.getStatus())).findFirst())
+                    .filter(c -> c.getPortalUser() == null)
+                    .ifPresent(c -> {
+                        c.setPortalUser(user);
+                        customerRepository.save(c);
+                    });
+        });
     }
 
     private void seedUser(String username, String rawPassword, String fullName, String email, String phone, RoleName roleName) {
