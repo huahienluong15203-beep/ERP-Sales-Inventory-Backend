@@ -36,6 +36,7 @@ import static org.mockito.Mockito.when;
 class OrderQueryServiceTest {
 
     @Mock private SalesOrderRepository orderRepository;
+    @Mock private com.erp.backend.repository.CustomerRepository customerRepository;
 
     @InjectMocks private OrderQueryService service;
 

@@ -7,7 +7,10 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 
-/** S3-09: Đơn hàng (đơn nháp). id = null khi chỉ xem trước, chưa lưu. */
+/**
+ * S3-09 & S5-01: Đơn hàng (đơn nháp / đơn đã chốt). id = null khi chỉ xem trước, chưa lưu.
+ * hasShortage, shortageLineCount: S5-01 theo dõi tình trạng giao thiếu cho đại lý.
+ */
 public record OrderResponse(
         Long id,
         String code,
@@ -40,7 +43,46 @@ public record OrderResponse(
         // S4-06: Huỷ đơn hàng
         String cancelReason,
         LocalDateTime cancelledAt,
-        String cancelledByUsername) {
+        String cancelledByUsername,
+        // S5-01: Tình trạng giao thiếu hàng
+        Boolean hasShortage,
+        Integer shortageLineCount) {
+
+    public OrderResponse(
+            Long id,
+            String code,
+            String status,
+            Long customerId,
+            String customerCode,
+            String customerName,
+            String customerGroup,
+            String customerGroupLabel,
+            DeliveryAddressInfo deliveryAddress,
+            LocalDate desiredDeliveryDate,
+            String note,
+            List<OrderLineResponse> lines,
+            BigDecimal subtotal,
+            BigDecimal discountTotal,
+            BigDecimal totalAmount,
+            String createdByUsername,
+            LocalDateTime createdAt,
+            LocalDateTime updatedAt,
+            List<String> warnings,
+            CreditStatusResponse credit,
+            List<ApprovalReason> approvalReasons,
+            String lastApprovalComment,
+            LocalDateTime submittedAt,
+            LocalDateTime approvedAt,
+            String approvedByUsername,
+            String cancelReason,
+            LocalDateTime cancelledAt,
+            String cancelledByUsername) {
+        this(id, code, status, customerId, customerCode, customerName, customerGroup, customerGroupLabel,
+                deliveryAddress, desiredDeliveryDate, note, lines, subtotal, discountTotal, totalAmount,
+                createdByUsername, createdAt, updatedAt, warnings, credit, approvalReasons, lastApprovalComment,
+                submittedAt, approvedAt, approvedByUsername, cancelReason, cancelledAt, cancelledByUsername,
+                false, 0);
+    }
 
     public OrderResponse(
             Long id,
@@ -71,7 +113,8 @@ public record OrderResponse(
         this(id, code, status, customerId, customerCode, customerName, customerGroup, customerGroupLabel,
                 deliveryAddress, desiredDeliveryDate, note, lines, subtotal, discountTotal, totalAmount,
                 createdByUsername, createdAt, updatedAt, warnings, credit, approvalReasons, lastApprovalComment,
-                submittedAt, approvedAt, approvedByUsername, null, null, null);
+                submittedAt, approvedAt, approvedByUsername, null, null, null,
+                false, 0);
     }
 
     public record DeliveryAddressInfo(Long id, String label, String address, String receiverName, String receiverPhone) {

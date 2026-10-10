@@ -28,7 +28,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/orders")
 @RequiredArgsConstructor
-@PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'SALES_REP', 'ACCOUNTANT', 'WAREHOUSE', 'WH_MANAGER')")
+@PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'SALES_REP', 'ACCOUNTANT', 'WAREHOUSE', 'WH_MANAGER', 'CUSTOMER')")
 public class OrderController {
 
     private final OrderDraftService orderDraftService;
@@ -184,12 +184,25 @@ public class OrderController {
     /**
      * S4-06 / SCRUM-158: API chuyển trạng thái đơn hàng theo vòng đời:
      * APPROVED -> PICKING -> DISPATCHED -> DELIVERED -> CLOSED (hoặc CANCELLED).
+     * S5-01: Ghi nhận số lượng thực giao (DELIVERED) nếu có.
      */
     @PostMapping("/{id}/status")
     @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'WAREHOUSE', 'WH_MANAGER', 'SALES_REP')")
     public OrderResponse updateStatus(@PathVariable Long id,
                                       @Valid @RequestBody OrderStatusTransitionRequest request,
                                       @AuthenticationPrincipal UserDetailsImpl actor) {
-        return orderStatusService.transitionStatus(id, request.getStatus(), request.getNote(), actor);
+        return orderStatusService.transitionStatus(id, request.getStatus(), request.getNote(),
+                request.getLineDeliveries(), actor);
+    }
+
+    /**
+     * S5-01 / SCRUM-160: API cập nhật số lượng thực giao của từng dòng hàng (hỗ trợ ghi nhận giao thiếu).
+     */
+    @PatchMapping("/{id}/delivered-quantities")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'WAREHOUSE', 'WH_MANAGER', 'SALES_REP')")
+    public OrderResponse updateDeliveredQuantities(@PathVariable Long id,
+                                                  @Valid @RequestBody OrderLineDeliveryBatchRequest request,
+                                                  @AuthenticationPrincipal UserDetailsImpl actor) {
+        return orderStatusService.updateDeliveredQuantities(id, request.getLineDeliveries(), actor);
     }
 }

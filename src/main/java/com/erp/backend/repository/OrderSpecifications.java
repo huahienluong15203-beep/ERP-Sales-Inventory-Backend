@@ -12,8 +12,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * S4-07: Điều kiện lọc đơn hàng, dùng chung cho danh sách (phân trang) và tính tổng.
- * restrictedSalesRepId != null (NV kinh doanh): luôn chỉ lấy đơn của đại lý mình phụ trách.
+ * S4-07 & S5-01: Điều kiện lọc đơn hàng, dùng chung cho danh sách (phân trang) và tính tổng.
+ * - restrictedSalesRepId != null (NV kinh doanh): luôn chỉ lấy đơn của đại lý mình phụ trách.
+ * - restrictedCustomerId != null (Đại lý ROLE_CUSTOMER): luôn chỉ lấy đơn của chính mình (S5-01).
  */
 public final class OrderSpecifications {
 
@@ -21,13 +22,20 @@ public final class OrderSpecifications {
     }
 
     public static Specification<SalesOrder> search(OrderSearchCriteria c, Long restrictedSalesRepId) {
+        return search(c, restrictedSalesRepId, null);
+    }
+
+    public static Specification<SalesOrder> search(OrderSearchCriteria c, Long restrictedSalesRepId, Long restrictedCustomerId) {
         return (root, query, cb) -> {
             List<Predicate> ps = new ArrayList<>();
             Join<SalesOrder, Customer> customer = root.join("customer");
             if (c.statuses() != null && !c.statuses().isEmpty()) {
                 ps.add(root.get("status").in(c.statuses()));
             }
-            if (c.customerId() != null) {
+            if (restrictedCustomerId != null) {
+                // S5-01: Đại lý chỉ thấy đơn của chính mình
+                ps.add(cb.equal(customer.get("id"), restrictedCustomerId));
+            } else if (c.customerId() != null) {
                 ps.add(cb.equal(customer.get("id"), c.customerId()));
             }
             if (c.salesRepId() != null) {

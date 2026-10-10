@@ -53,4 +53,13 @@ public interface CustomerRepository extends JpaRepository<Customer, Long>, JpaSp
     long countBySalesRep_Id(Long salesRepId);
 
     long countByCustomerGroup(com.erp.backend.entity.CustomerGroup customerGroup);
+
+    // S5-01: Tìm đại lý gắn với tài khoản người dùng
+    Optional<Customer> findByUser_Id(Long userId);
+
+    Optional<Customer> findByEmailIgnoreCase(String email);
+
+    Optional<Customer> findByPhone(String phone);
+
+    Optional<Customer> findByCodeIgnoreCase(String code);
 }

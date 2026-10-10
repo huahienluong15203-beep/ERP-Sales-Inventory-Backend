@@ -19,6 +19,7 @@ public class DataInitializer implements CommandLineRunner {
 
     private final RoleRepository roleRepository;
     private final UserRepository userRepository;
+    private final com.erp.backend.repository.CustomerRepository customerRepository;
     private final PasswordEncoder passwordEncoder;
 
     @Override
@@ -77,5 +78,19 @@ public class DataInitializer implements CommandLineRunner {
             userRepository.save(user);
             System.out.println(">>> ĐÃ KHỞI TẠO TÀI KHOẢN MẪU: " + username + " / " + rawPassword + " (" + roleName + ") <<<");
         });
+
+        // S5-01: Tự động liên kết tài khoản đại lý với hồ sơ đại lý tương ứng (nếu có)
+        if (roleName == RoleName.ROLE_CUSTOMER) {
+            userRepository.findByUsername(username).ifPresent(u -> {
+                customerRepository.findByEmailIgnoreCase(u.getEmail())
+                        .or(() -> customerRepository.findByCodeIgnoreCase(u.getUsername()))
+                        .ifPresent(c -> {
+                            if (c.getUser() == null || !c.getUser().getId().equals(u.getId())) {
+                                c.setUser(u);
+                                customerRepository.save(c);
+                            }
+                        });
+            });
+        }
     }
 }
