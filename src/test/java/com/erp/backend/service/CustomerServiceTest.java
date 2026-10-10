@@ -43,6 +43,7 @@ class CustomerServiceTest {
     @Mock private PriceListRepository priceListRepository;
     @Mock private SalesOrderRepository orderRepository;
     @Mock private CustomerCreditService creditService;
+    @Mock private com.erp.backend.repository.WarehouseRepository warehouseRepository;
 
     @InjectMocks private CustomerService service;
 
@@ -52,6 +53,7 @@ class CustomerServiceTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(warehouseRepository.findByStatusOrderByNameAsc(any())).thenReturn(List.of());
         lenient().when(customerRepository.save(any(Customer.class))).thenAnswer(inv -> inv.getArgument(0));
         lenient().when(regionRepository.findById(1L)).thenReturn(Optional.of(region(1, "ACTIVE")));
         lenient().when(userRepository.getReferenceById(anyLong()))

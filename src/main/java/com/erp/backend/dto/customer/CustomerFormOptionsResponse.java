@@ -10,5 +10,15 @@ public record CustomerFormOptionsResponse(
         List<OptionItem> statuses,
         List<RefItem> regions,
         List<RefItem> salesReps,
-        List<PriceListOptionResponse> priceLists) {
+        List<PriceListOptionResponse> priceLists,
+        List<RefItem> warehouses) {
+
+    public CustomerFormOptionsResponse(
+            List<OptionItem> customerGroups,
+            List<OptionItem> statuses,
+            List<RefItem> regions,
+            List<RefItem> salesReps,
+            List<PriceListOptionResponse> priceLists) {
+        this(customerGroups, statuses, regions, salesReps, priceLists, List.of());
+    }
 }

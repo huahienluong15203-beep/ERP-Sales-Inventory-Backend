@@ -23,7 +23,6 @@ public class DataInitializer implements CommandLineRunner {
 
     private final RoleRepository roleRepository;
     private final UserRepository userRepository;
-    private final com.erp.backend.repository.CustomerRepository customerRepository;
     private final PasswordEncoder passwordEncoder;
     private final CustomerRepository customerRepository;
 

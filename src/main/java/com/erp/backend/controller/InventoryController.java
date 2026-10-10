@@ -47,8 +47,8 @@ public class InventoryController {
         return stockLedgerService.summary(warehouseId, categoryId, stockStatus, keyword, actor);
     }
 
-    /** Danh sách kho cho ô chọn kho. Vd: ?status=ACTIVE */
-    @GetMapping("/api/warehouses")
+    /** Danh sách kho cho ô chọn kho trên sổ tồn. Vd: ?status=ACTIVE */
+    @GetMapping("/api/inventory/warehouses")
     public List<WarehouseOptionResponse> warehouses(@RequestParam(required = false) String status,
                                                     @AuthenticationPrincipal UserDetailsImpl actor) {
         return stockLedgerService.warehouses(status, actor);
