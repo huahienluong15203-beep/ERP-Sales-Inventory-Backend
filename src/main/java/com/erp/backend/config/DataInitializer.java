@@ -23,7 +23,6 @@ public class DataInitializer implements CommandLineRunner {
 
     private final RoleRepository roleRepository;
     private final UserRepository userRepository;
-    private final com.erp.backend.repository.CustomerRepository customerRepository;
     private final PasswordEncoder passwordEncoder;
     private final CustomerRepository customerRepository;
 
@@ -63,14 +62,18 @@ public class DataInitializer implements CommandLineRunner {
                 return;
             }
             List<Customer> customers = customerRepository.findAll(Sort.by("id"));
-            customers.stream().filter(c -> "DL-HN-001".equalsIgnoreCase(c.getCode()))
+            // S5-01 đã gắn đại lý cho tài khoản (Customer.user) thì dùng luôn đại lý đó để 2 chức năng thống nhất
+            customers.stream().filter(c -> c.getUser() != null && user.getId().equals(c.getUser().getId()))
                     .findFirst()
+                    .or(() -> customers.stream().filter(c -> "DL-HN-001".equalsIgnoreCase(c.getCode())).findFirst())
                     .or(() -> customers.stream()
                             .filter(c -> c.getName() != null && c.getName().toLowerCase().contains("minh phát")).findFirst())
                     .or(() -> customers.stream().filter(c -> "ACTIVE".equalsIgnoreCase(c.getStatus())).findFirst())
                     .filter(c -> c.getPortalUser() == null)
+                    .filter(c -> c.getUser() == null || user.getId().equals(c.getUser().getId()))
                     .ifPresent(c -> {
                         c.setPortalUser(user);
+                        c.setUser(user);
                         customerRepository.save(c);
                     });
         });

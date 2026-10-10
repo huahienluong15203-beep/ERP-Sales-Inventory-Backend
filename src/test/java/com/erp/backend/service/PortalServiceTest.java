@@ -88,6 +88,15 @@ class PortalServiceTest {
     }
 
     @Test
+    @DisplayName("S4-10 + S5-01: Tài khoản gắn đại lý qua liên kết của S5-01 (Customer.user) vẫn vào được cổng đại lý")
+    void linkedByS501User_resolves() {
+        when(customerRepository.findByPortalUser_Id(52L)).thenReturn(Optional.empty());
+        when(customerRepository.findByUser_Id(52L)).thenReturn(Optional.of(customer));
+
+        assertThat(service.me(actor(52, "ROLE_CUSTOMER")).customerId()).isEqualTo(customer.getId());
+    }
+
+    @Test
     @DisplayName("S4-10: Đặt đơn -> đại lý lấy theo tài khoản, giá không lấy từ client, đơn đánh dấu PORTAL rồi gửi duyệt")
     void placeOrder_forcesCustomerAndPortalSource() {
         SalesOrder created = SalesOrder.builder().id(100L).code("DH261010-AAAA").customer(customer)

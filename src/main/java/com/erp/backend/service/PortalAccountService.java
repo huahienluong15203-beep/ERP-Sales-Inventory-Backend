@@ -57,8 +57,16 @@ public class PortalAccountService {
                         throw BusinessException.conflict("PORTAL_ACCOUNT_IN_USE", "Tài khoản " + target.getUsername()
                                 + " đã gắn với đại lý " + other.getName() + " (" + other.getCode() + ")", "userId");
                     });
+            customerRepository.findByUser_Id(userId)
+                    .filter(other -> !other.getId().equals(customer.getId()))
+                    .ifPresent(other -> {
+                        throw BusinessException.conflict("PORTAL_ACCOUNT_IN_USE", "Tài khoản " + target.getUsername()
+                                + " đã gắn với đại lý " + other.getName() + " (" + other.getCode() + ")", "userId");
+                    });
         }
         customer.setPortalUser(after);
+        // Giữ đồng bộ với liên kết tài khoản đại lý của S5-01 (theo dõi đơn hàng)
+        customer.setUser(after);
         customerRepository.save(customer);
 
         String reason = req != null && StringUtils.hasText(req.getReason()) ? req.getReason().trim()
