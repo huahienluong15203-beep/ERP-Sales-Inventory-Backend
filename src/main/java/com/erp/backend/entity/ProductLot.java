@@ -10,7 +10,8 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 /**
- * S5-04 & S5-07: Lưu thông tin Lô hàng & Hạn sử dụng theo kho.
+ * S5-04 & S5-07: Lưu thông tin Lô hàng & Hạn sử dụng (Batch/Lot & Expiration) theo kho.
+ * Phục vụ truy xuất nguồn gốc lô hàng lỗi, xuất kho theo nguyên tắc FEFO và chuyển kho nội bộ.
  */
 @Entity
 @Table(name = "product_lots", indexes = {
@@ -40,15 +41,23 @@ public class ProductLot {
     @JoinColumn(name = "warehouse_id", nullable = false)
     private Warehouse warehouse;
 
+    // Số lô sản xuất (vd: LOT-202610-01, VNM-L2610-01)
     @Column(name = "batch_number", nullable = false, length = 100)
     private String batchNumber;
 
+    // Hạn sử dụng của lô
     @Column(name = "expired_date")
     private LocalDate expiredDate;
 
+    // Số lượng tồn kho cơ sở còn lại trong lô
     @Column(nullable = false, precision = 15, scale = 4)
     @Builder.Default
     private BigDecimal quantity = BigDecimal.ZERO;
+
+    // Nhà cung cấp của lô
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "supplier_id")
+    private Supplier supplier;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false, columnDefinition = "timestamp default now()")
