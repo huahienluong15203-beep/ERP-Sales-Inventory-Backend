@@ -31,13 +31,20 @@ public class SalesOrder {
     public static final String STATUS_DRAFT = "DRAFT";
     public static final String STATUS_PENDING_APPROVAL = "PENDING_APPROVAL";
     public static final String STATUS_APPROVED = "APPROVED";
+    public static final String STATUS_PICKING = "PICKING";
+    public static final String STATUS_DISPATCHED = "DISPATCHED";
+    public static final String STATUS_DELIVERED = "DELIVERED";
+    public static final String STATUS_CLOSED = "CLOSED";
+    public static final String STATUS_CANCELLED = "CANCELLED";
     public static final String STATUS_REJECTED = "REJECTED";
 
     /**
      * S4-02: Trạng thái đơn đang tính vào công nợ của đại lý.
-     * Chưa có hoá đơn / phiếu thu nên tạm coi đơn đã duyệt là đang nợ; có module công nợ thì sửa ở đây.
+     * Chưa có hoá đơn / phiếu thu nên tạm coi đơn đã duyệt đến trước khi đóng là đang nợ; có module công nợ thì sửa ở đây.
      */
-    public static final List<String> OUTSTANDING_DEBT_STATUSES = List.of(STATUS_APPROVED);
+    public static final List<String> OUTSTANDING_DEBT_STATUSES = List.of(
+            STATUS_APPROVED, STATUS_PICKING, STATUS_DISPATCHED, STATUS_DELIVERED, STATUS_CLOSED
+    );
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -102,6 +109,19 @@ public class SalesOrder {
     // S4-05: ý kiến gần nhất của người duyệt (lý do Từ chối / Trả lại sửa) để NV kinh doanh xem và sửa
     @Column(name = "last_approval_comment", length = 500)
     private String lastApprovalComment;
+
+    // S4-06: Lý do huỷ đơn và thông tin người huỷ
+    @Column(name = "cancel_reason", length = 500)
+    private String cancelReason;
+
+    @Column(name = "cancelled_at")
+    private LocalDateTime cancelledAt;
+
+    @Column(name = "cancelled_by_id")
+    private Long cancelledById;
+
+    @Column(name = "cancelled_by_username", length = 50)
+    private String cancelledByUsername;
 
     // S4-05: mức vi phạm tính lúc chốt đơn (null = không vi phạm)
     @Column(name = "credit_exceeded_amount", precision = 18, scale = 2)

@@ -28,12 +28,13 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/orders")
 @RequiredArgsConstructor
-@PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'SALES_REP', 'ACCOUNTANT')")
+@PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'SALES_REP', 'ACCOUNTANT', 'WAREHOUSE', 'WH_MANAGER')")
 public class OrderController {
 
     private final OrderDraftService orderDraftService;
     private final OrderApprovalService orderApprovalService;
     private final OrderQueryService orderQueryService;
+    private final com.erp.backend.service.OrderStatusService orderStatusService;
 
     /**
      * S3-09 / S4-07: Danh sách đơn có bộ lọc. NV kinh doanh chỉ thấy đơn của đại lý mình phụ trách.
@@ -152,5 +153,29 @@ public class OrderController {
     public List<OrderApprovalHistoryResponse> approvalHistory(@PathVariable Long id,
                                                               @AuthenticationPrincipal UserDetailsImpl actor) {
         return orderApprovalService.history(id, actor);
+    }
+
+    /**
+     * S4-06 / SCRUM-158 AC2: Hủy đơn hàng và tự động nhả tồn đang giữ chỗ.
+     * Bắt buộc có lý do (AC2). Đơn đã xuất kho (DISPATCHED trở đi) thì nghiêm cấm hủy (AC3).
+     */
+    @PostMapping("/{id}/cancel")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'SALES_REP')")
+    public OrderResponse cancel(@PathVariable Long id,
+                                @Valid @RequestBody OrderCancelRequest request,
+                                @AuthenticationPrincipal UserDetailsImpl actor) {
+        return orderStatusService.cancel(id, request.getReason(), actor);
+    }
+
+    /**
+     * S4-06 / SCRUM-158: API chuyển trạng thái đơn hàng theo vòng đời:
+     * APPROVED -> PICKING -> DISPATCHED -> DELIVERED -> CLOSED (hoặc CANCELLED).
+     */
+    @PostMapping("/{id}/status")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'WAREHOUSE', 'WH_MANAGER', 'SALES_REP')")
+    public OrderResponse updateStatus(@PathVariable Long id,
+                                      @Valid @RequestBody OrderStatusTransitionRequest request,
+                                      @AuthenticationPrincipal UserDetailsImpl actor) {
+        return orderStatusService.transitionStatus(id, request.getStatus(), request.getNote(), actor);
     }
 }
