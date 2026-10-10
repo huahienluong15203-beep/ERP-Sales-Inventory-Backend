@@ -426,6 +426,20 @@ public class OrderDraftService {
         updateBelowFloorViolations(order);
     }
 
+    /**
+     * S5-02: Kiểm tra một dòng của đơn cũ còn đặt lại được theo bảng giá / danh mục hiện hành không.
+     * @return null nếu đặt được; ngược lại là lý do bị loại (ngừng kinh doanh, hết giá, ĐVT ngừng dùng...)
+     */
+    String reorderRejectReason(Customer customer, OrderLineRequest r) {
+        try {
+            buildLine(customer, r, 1, LocalDate.now(VN_ZONE));
+            return null;
+        } catch (BusinessException e) {
+            String msg = e.getMessage() != null ? e.getMessage() : "Không còn đặt được";
+            return msg.startsWith("Dòng 1: ") ? msg.substring("Dòng 1: ".length()) : msg;
+        }
+    }
+
     private SalesOrderLine buildLine(Customer customer, OrderLineRequest r, int lineNo, LocalDate today) {
         String prefix = "Dòng " + lineNo + ": ";
         Product product = findProduct(r.getProductSku(), prefix);

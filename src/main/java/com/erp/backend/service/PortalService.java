@@ -7,6 +7,7 @@ import com.erp.backend.dto.portal.*;
 import com.erp.backend.dto.user.PageResponse;
 import com.erp.backend.entity.Customer;
 import com.erp.backend.entity.SalesOrder;
+import com.erp.backend.entity.SalesOrderLine;
 import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.CustomerRepository;
 import com.erp.backend.repository.SalesOrderRepository;
@@ -19,6 +20,8 @@ import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.List;
 import java.util.Map;
 
@@ -121,6 +124,67 @@ public class PortalService {
         return toPortal(myOrder(id, actor));
     }
 
+    /**
+     * S5-02: Đặt lại đơn cũ (toàn bộ hoặc một phần dòng). Mặt hàng ngừng kinh doanh, hết giá trong bảng giá hiện hành
+     * hoặc ĐVT đã ngừng dùng bị loại kèm lý do; dòng còn lại tính giá theo bảng giá hiện hành (không lấy giá cũ).
+     */
+    @Transactional(readOnly = true)
+    public ReorderPreviewResponse reorderPreview(Long orderId, ReorderPreviewRequest req, UserDetailsImpl actor) {
+        Customer c = myCustomer(actor);
+        SalesOrder source = orderRepository.findById(orderId)
+                .filter(o -> o.getCustomer() != null && c.getId().equals(o.getCustomer().getId()))
+                .orElseThrow(() -> BusinessException.notFound("Không tìm thấy đơn hàng"));
+        List<SalesOrderLine> lines = source.getLines();
+        List<Long> wanted = req != null && req.getLineIds() != null ? req.getLineIds() : List.of();
+        if (!wanted.isEmpty()) {
+            Set<Long> ids = new HashSet<>();
+            lines.forEach(l -> ids.add(l.getId()));
+            List<Long> unknown = wanted.stream().filter(id -> !ids.contains(id)).toList();
+            if (!unknown.isEmpty()) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_ORDER_LINES",
+                        "Dòng hàng không thuộc đơn " + source.getCode() + ": " + unknown, "lineIds");
+            }
+            lines = lines.stream().filter(l -> wanted.contains(l.getId())).toList();
+        }
+        if (lines.isEmpty()) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "ORDER_EMPTY", "Đơn cũ không có dòng hàng để đặt lại", "lineIds");
+        }
+
+        List<PortalOrderLineRequest> kept = new ArrayList<>();
+        List<ReorderPreviewResponse.RemovedLine> removed = new ArrayList<>();
+        Set<String> seenSkus = new HashSet<>();
+        for (SalesOrderLine l : lines) {
+            OrderLineRequest check = new OrderLineRequest();
+            check.setProductSku(l.getProductSku());
+            check.setUnitName(l.getUnitName());
+            check.setQuantity(l.getQuantity());
+            String reason = seenSkus.contains(l.getProductSku() == null ? "" : l.getProductSku().toUpperCase())
+                    ? "Trùng mặt hàng đã có trong đơn mới"
+                    : orderDraftService.reorderRejectReason(c, check);
+            if (reason != null) {
+                removed.add(new ReorderPreviewResponse.RemovedLine(l.getProductSku(), l.getProductName(),
+                        l.getUnitName(), l.getQuantity(), reason));
+                continue;
+            }
+            seenSkus.add(l.getProductSku().toUpperCase());
+            PortalOrderLineRequest k = new PortalOrderLineRequest();
+            k.setProductSku(l.getProductSku());
+            k.setUnitName(l.getUnitName());
+            k.setQuantity(l.getQuantity());
+            kept.add(k);
+        }
+
+        PortalOrderResponse preview = null;
+        if (!kept.isEmpty()) {
+            PortalOrderRequest previewReq = new PortalOrderRequest();
+            previewReq.setDeliveryAddressId(null);
+            previewReq.setNote("Đặt lại từ đơn " + source.getCode());
+            previewReq.setLines(kept);
+            preview = toPortal(orderDraftService.preview(toDraftRequest(c, previewReq, false), actor));
+        }
+        return new ReorderPreviewResponse(source.getId(), source.getCode(), kept, removed, preview);
+    }
+
     // ======================= HÀM PHỤ =======================
 
     /** Đại lý gắn với tài khoản đang đăng nhập; chưa gắn thì báo rõ để Admin gắn (409, không dùng 403). */
@@ -182,7 +246,9 @@ public class PortalService {
                         l.unitName(), l.conversionFactor(), l.quantity(), l.pricePerUnit(), l.grossAmount(),
                         l.discountAmount(), l.netAmount(), l.availableStock(), l.isOverStock(), l.maxAllowedQuantity()))
                 .toList();
-        return new PortalOrderResponse(o.id(), o.code(), o.status(), STATUS_LABELS.getOrDefault(o.status(), o.status()),
+        // Đơn xem trước (chưa lưu) có thể chưa có trạng thái -> không tra nhãn (Map.of không nhận khoá null)
+        String statusLabel = o.status() == null ? null : STATUS_LABELS.getOrDefault(o.status(), o.status());
+        return new PortalOrderResponse(o.id(), o.code(), o.status(), statusLabel,
                 o.deliveryAddress(), o.desiredDeliveryDate(), o.note(), lines, o.subtotal(), o.discountTotal(),
                 o.totalAmount(), o.createdAt(), o.submittedAt(), o.approvedAt(), o.lastApprovalComment(),
                 o.cancelReason(),

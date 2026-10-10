@@ -77,6 +77,17 @@ public class PortalController {
         return portalService.orders(status, page, size, actor);
     }
 
+    /**
+     * S5-02: Đặt lại đơn cũ: chọn toàn bộ (lineIds trống) hoặc một phần dòng; hàng ngừng kinh doanh bị loại kèm lý do,
+     * giá áp lại theo bảng giá hiện hành. Đại lý xác nhận thì gửi keptLines qua POST /api/portal/orders.
+     */
+    @PostMapping("/orders/{id}/reorder-preview")
+    public ReorderPreviewResponse reorderPreview(@PathVariable Long id,
+                                                 @Valid @RequestBody(required = false) ReorderPreviewRequest request,
+                                                 @AuthenticationPrincipal UserDetailsImpl actor) {
+        return portalService.reorderPreview(id, request, actor);
+    }
+
     @GetMapping("/orders/{id}")
     public PortalOrderResponse order(@PathVariable Long id, @AuthenticationPrincipal UserDetailsImpl actor) {
         return portalService.order(id, actor);

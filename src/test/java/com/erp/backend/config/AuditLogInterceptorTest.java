@@ -11,6 +11,8 @@ class AuditLogInterceptorTest {
         assertThat(AuditLogInterceptor.isReadOnlyPost("/api/orders/preview")).isTrue();
         assertThat(AuditLogInterceptor.isReadOnlyPost("/api/orders/preview/")).isTrue();
         assertThat(AuditLogInterceptor.isReadOnlyPost("/api/admin/products/import/preview")).isTrue();
+        // S5-02: xem trước đặt lại đơn cũ chỉ tính thử
+        assertThat(AuditLogInterceptor.isReadOnlyPost("/api/portal/orders/300/reorder-preview")).isTrue();
     }
 
     @Test
