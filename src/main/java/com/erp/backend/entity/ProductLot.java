@@ -10,8 +10,8 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 /**
- * S5-04: Lưu thông tin Lô hàng & Hạn sử dụng (Batch/Lot & Expiration) theo kho.
- * Phục vụ truy xuất nguồn gốc lô hàng lỗi và xuất kho theo nguyên tắc FEFO.
+ * S5-04 & S5-07: Lưu thông tin Lô hàng & Hạn sử dụng (Batch/Lot & Expiration) theo kho.
+ * Phục vụ truy xuất nguồn gốc lô hàng lỗi, xuất kho theo nguyên tắc FEFO và chuyển kho nội bộ.
  */
 @Entity
 @Table(name = "product_lots", indexes = {

@@ -13,6 +13,8 @@ public interface ProductLotRepository extends JpaRepository<ProductLot, Long> {
 
     Optional<ProductLot> findByProduct_IdAndWarehouse_IdAndBatchNumber(Long productId, Long warehouseId, String batchNumber);
 
+    List<ProductLot> findByProduct_IdAndWarehouse_Id(Long productId, Long warehouseId);
+
     List<ProductLot> findByProduct_IdAndWarehouse_IdOrderByExpiredDateAsc(Long productId, Long warehouseId);
 
     List<ProductLot> findByWarehouse_Id(Long warehouseId);
