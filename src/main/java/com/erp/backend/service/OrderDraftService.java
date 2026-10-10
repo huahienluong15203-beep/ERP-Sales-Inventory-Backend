@@ -1,5 +1,6 @@
 package com.erp.backend.service;
 
+import com.erp.backend.config.AuditLogInterceptor;
 import com.erp.backend.dto.customer.CreditStatusResponse;
 import com.erp.backend.dto.discount.DiscountCalculationResponse;
 import com.erp.backend.dto.inventory.StockInfoDto;
@@ -15,6 +16,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -55,6 +59,7 @@ public class OrderDraftService {
     private final CustomerService customerService;
     private final CustomerCreditService creditService;
     private final InventoryService inventoryService;
+    private final AuditLogService auditLogService;
 
     // ======================= XEM TRƯỚC / LƯU NHÁP =======================
 
@@ -101,6 +106,130 @@ public class OrderDraftService {
     @Transactional(readOnly = true)
     public OrderResponse getById(Long id, UserDetailsImpl actor) {
         return toResponse(findOrder(id, actor));
+    }
+
+    /**
+     * S4-09 / SCRUM-159: Sao chép một đơn cũ thành đơn mới (để tạo đơn định kỳ cho khách quen trong vài giây).
+     * - AC1: Sao chép toàn bộ dòng hàng của đơn đã chọn.
+     * - AC2: Giá và chiết khấu được áp lại theo bảng giá hiện hành, không kế thừa giá cũ (isCustomPrice = false).
+     * - AC3: Bản sao luôn bắt đầu ở trạng thái Nháp (DRAFT).
+     */
+    @Transactional
+    public OrderResponse copyOrder(Long sourceOrderId, OrderCopyRequest request, UserDetailsImpl actor) {
+        SalesOrder source = findOrder(sourceOrderId, actor);
+        Customer customer = source.getCustomer();
+
+        // S4-02: Kiểm tra đại lý có đủ điều kiện đặt đơn mới (nợ quá hạn / ngừng giao dịch...)
+        try {
+            customerService.assertCanCreateOrder(customer);
+        } catch (BusinessException e) {
+            throw new BusinessException(HttpStatus.CONFLICT, e.getCode(), e.getMessage(), "customerId");
+        }
+
+        LocalDate today = LocalDate.now(VN_ZONE);
+
+        // Ngày giao mong muốn: ưu tiên từ request, nếu không có thì kế thừa ngày của đơn cũ (nếu >= today) hoặc ngày mai
+        LocalDate desiredDate;
+        if (request != null && request.getDesiredDeliveryDate() != null) {
+            if (request.getDesiredDeliveryDate().isBefore(today)) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_DELIVERY_DATE",
+                        "Ngày giao mong muốn không được trước hôm nay", "desiredDeliveryDate");
+            }
+            desiredDate = request.getDesiredDeliveryDate();
+        } else if (source.getDesiredDeliveryDate() != null && !source.getDesiredDeliveryDate().isBefore(today)) {
+            desiredDate = source.getDesiredDeliveryDate();
+        } else {
+            desiredDate = today.plusDays(1);
+        }
+
+        // Điểm giao hàng: ưu tiên từ request, nếu không thì lấy từ đơn cũ hoặc điểm mặc định
+        Long addressId = (request != null && request.getDeliveryAddressId() != null)
+                ? request.getDeliveryAddressId()
+                : (source.getDeliveryAddress() != null ? source.getDeliveryAddress().getId() : null);
+        CustomerDeliveryAddress deliveryAddress = resolveAddress(customer, addressId);
+
+        // Ghi chú: cho phép tuỳ biến qua request, hoặc tự động đánh dấu nguồn sao chép
+        String note;
+        if (request != null && StringUtils.hasText(request.getNote())) {
+            note = request.getNote().trim();
+        } else if (StringUtils.hasText(source.getNote())) {
+            note = source.getNote().trim() + " (Sao chép từ " + source.getCode() + ")";
+        } else {
+            note = "Sao chép từ đơn " + source.getCode();
+        }
+
+        // AC3: Bản sao luôn bắt đầu ở trạng thái Nháp (DRAFT)
+        SalesOrder copy = SalesOrder.builder()
+                .code(generateCode())
+                .status(SalesOrder.STATUS_DRAFT)
+                .customer(customer)
+                .deliveryAddress(deliveryAddress)
+                .desiredDeliveryDate(desiredDate)
+                .note(note)
+                .createdById(actor != null ? actor.getId() : null)
+                .createdByUsername(actor != null ? actor.getUsername() : null)
+                .build();
+
+        // AC1 & AC2: Sao chép toàn bộ dòng hàng và áp lại giá theo bảng giá hiện hành
+        List<SalesOrderLine> sourceLines = source.getLines();
+        if (sourceLines == null || sourceLines.isEmpty()) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "EMPTY_ORDER_LINES",
+                    "Đơn hàng gốc không có dòng hàng nào để sao chép", "lines");
+        }
+
+        BigDecimal subtotal = BigDecimal.ZERO;
+        BigDecimal discountTotal = BigDecimal.ZERO;
+        int lineNo = 1;
+        for (SalesOrderLine srcLine : sourceLines) {
+            OrderLineRequest lineReq = new OrderLineRequest();
+            lineReq.setProductSku(srcLine.getProductSku());
+            lineReq.setUnitName(srcLine.getUnitName());
+            lineReq.setQuantity(srcLine.getQuantity());
+            lineReq.setIsCustomPrice(false); // AC2: Bắt buộc không kế thừa giá cũ
+            lineReq.setUnitPrice(null);      // AC2: Tính lại theo bảng giá hiện hành
+
+            SalesOrderLine newLine = buildLine(customer, lineReq, lineNo, today);
+            copy.addLine(newLine);
+            subtotal = subtotal.add(newLine.getGrossAmount());
+            discountTotal = discountTotal.add(newLine.getDiscountAmount());
+            lineNo++;
+        }
+
+        copy.setSubtotal(subtotal.setScale(2, RoundingMode.HALF_UP));
+        copy.setDiscountTotal(discountTotal.setScale(2, RoundingMode.HALF_UP));
+        copy.setTotalAmount(subtotal.subtract(discountTotal).setScale(2, RoundingMode.HALF_UP));
+        updateBelowFloorViolations(copy);
+
+        SalesOrder saved = orderRepository.saveAndFlush(copy);
+
+        if (auditLogService != null) {
+            auditLogService.record(
+                    AuditModule.INVOICE,
+                    "COPY_ORDER",
+                    "SALES_ORDER",
+                    saved.getId(),
+                    saved.getCode(),
+                    source.getCode(),
+                    saved.getCode(),
+                    "Sao chép từ đơn [" + source.getCode() + "] thành đơn nháp mới [" + saved.getCode() + "]",
+                    actor
+            );
+            markAuditLogged();
+        }
+
+        return toResponse(saved);
+    }
+
+    @Transactional
+    public OrderResponse copyOrder(Long sourceOrderId, UserDetailsImpl actor) {
+        return copyOrder(sourceOrderId, null, actor);
+    }
+
+    private static void markAuditLogged() {
+        RequestAttributes attrs = RequestContextHolder.getRequestAttributes();
+        if (attrs instanceof ServletRequestAttributes attributes) {
+            attributes.getRequest().setAttribute(AuditLogInterceptor.AUDIT_LOGGED_ATTR, Boolean.TRUE);
+        }
     }
 
     /**
