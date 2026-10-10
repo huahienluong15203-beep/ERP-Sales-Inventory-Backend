@@ -213,6 +213,8 @@ public class OrderApprovalService {
     }
 
     private void markApproved(SalesOrder order, UserDetailsImpl approver, LocalDateTime now) {
+        // S5-06: đơn được duyệt -> tồn tiếp tục được giữ chỗ, gia hạn để kho kịp soạn hàng
+        inventoryService.renewReservation(order);
         order.setStatus(SalesOrder.STATUS_APPROVED);
         order.setApprovedAt(now);
         order.setApprovedById(approver != null ? approver.getId() : null);

@@ -38,6 +38,11 @@ public class SalesOrder {
     public static final String STATUS_CANCELLED = "CANCELLED";
     public static final String STATUS_REJECTED = "REJECTED";
 
+    // S5-06: trạng thái giữ chỗ tồn của đơn (null = đơn cũ trước S5-06, coi như đang giữ nếu đơn ở trạng thái giữ chỗ)
+    public static final String RESERVATION_RESERVED = "RESERVED";
+    public static final String RESERVATION_RELEASED = "RELEASED";
+    public static final String RESERVATION_DISPATCHED = "DISPATCHED";
+
     /**
      * S4-02: Trạng thái đơn đang tính vào công nợ của đại lý.
      * Chưa có hoá đơn / phiếu thu nên tạm coi đơn đã duyệt đến trước khi đóng là đang nợ; có module công nợ thì sửa ở đây.
@@ -109,6 +114,21 @@ public class SalesOrder {
     // S4-05: ý kiến gần nhất của người duyệt (lý do Từ chối / Trả lại sửa) để NV kinh doanh xem và sửa
     @Column(name = "last_approval_comment", length = 500)
     private String lastApprovalComment;
+
+    // S5-06: kho đã giữ chỗ (nhả / xuất đúng kho này, kể cả khi đại lý đổi khu vực sau đó)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "reserved_warehouse_id")
+    private Warehouse reservedWarehouse;
+
+    @Column(name = "reservation_status", length = 20)
+    private String reservationStatus;
+
+    @Column(name = "reserved_at")
+    private LocalDateTime reservedAt;
+
+    // S5-06: quá hạn mà đơn chưa soạn hàng thì hệ thống tự nhả tồn và huỷ đơn
+    @Column(name = "reservation_expires_at")
+    private LocalDateTime reservationExpiresAt;
 
     // S4-06: Lý do huỷ đơn và thông tin người huỷ
     @Column(name = "cancel_reason", length = 500)

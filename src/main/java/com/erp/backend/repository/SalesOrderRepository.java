@@ -51,6 +51,14 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, Long>, J
     Optional<SalesOrder> findFirstByCustomer_IdAndStatusInAndApprovedAtBeforeOrderByApprovedAtAsc(
             Long customerId, Collection<String> statuses, LocalDateTime dueBefore);
 
+    /** S5-06: Đơn đang giữ chỗ tồn đã quá hạn (đơn quá hạn lâu nhất lên trước). */
+    @Query("select o.id from SalesOrder o where o.status in :statuses and o.reservationStatus = :reservationStatus "
+            + "and o.reservationExpiresAt < :now order by o.reservationExpiresAt asc, o.id asc")
+    List<Long> findExpiredReservationOrderIds(@Param("statuses") Collection<String> statuses,
+                                              @Param("reservationStatus") String reservationStatus,
+                                              @Param("now") LocalDateTime now,
+                                              Pageable pageable);
+
     // ======================= S4-04: LỊCH SỬ MUA HÀNG CỦA ĐẠI LÝ =======================
     // Mốc thời gian của đơn = approvedAt (ngày duyệt), đơn cũ thiếu approvedAt thì dùng createdAt.
 
