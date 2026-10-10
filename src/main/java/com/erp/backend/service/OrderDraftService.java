@@ -613,7 +613,7 @@ public class OrderDraftService {
     private SalesOrder findOrder(Long id, UserDetailsImpl actor) {
         SalesOrder order = orderRepository.findById(id)
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy đơn hàng"));
-        CustomerAccess.checkCanAccess(actor, order.getCustomer());
+        CustomerAccess.checkCanAccess(actor, order.getCustomer(), customerRepository);
         return order;
     }
 
@@ -660,6 +660,14 @@ public class OrderDraftService {
                     BigDecimal maxAllowed = available.compareTo(BigDecimal.ZERO) > 0
                             ? available.divide(factor, 0, RoundingMode.FLOOR) : BigDecimal.ZERO;
 
+                    BigDecimal deliveredQty = l.getDeliveredQuantity();
+                    BigDecimal shortageQty = BigDecimal.ZERO;
+                    boolean isShortage = false;
+                    if (deliveredQty != null && l.getQuantity() != null && deliveredQty.compareTo(l.getQuantity()) < 0) {
+                        shortageQty = l.getQuantity().subtract(deliveredQty);
+                        isShortage = true;
+                    }
+
                     return new OrderLineResponse(
                             l.getId(), l.getLineNo(), l.getProduct().getId(), l.getProductSku(),
                             l.getProductName(), l.getUnitName(), l.getConversionFactor(), l.getQuantity(), l.getBaseUnit(),
@@ -672,9 +680,17 @@ public class OrderDraftService {
                             stock != null ? stock.reservedStock() : BigDecimal.ZERO,
                             available,
                             isOverStock,
-                            maxAllowed);
+                            maxAllowed,
+                            deliveredQty,
+                            shortageQty,
+                            isShortage,
+                            l.getShortageReason());
                 })
                 .toList();
+
+        int shortageLineCount = (int) lines.stream().filter(line -> Boolean.TRUE.equals(line.isShortage())).count();
+        boolean hasShortage = shortageLineCount > 0;
+
         // Đơn đã duyệt thì tiền đơn đã nằm trong công nợ hiện tại, chỉ tính cho đơn nháp
         CreditStatusResponse credit = SalesOrder.STATUS_DRAFT.equals(o.getStatus())
                 ? creditService.evaluate(c, o.getTotalAmount()) : null;
@@ -685,7 +701,8 @@ public class OrderDraftService {
                 o.getDesiredDeliveryDate(), o.getNote(), lines, o.getSubtotal(), o.getDiscountTotal(), o.getTotalAmount(),
                 o.getCreatedByUsername(), o.getCreatedAt(), o.getUpdatedAt(), warnings(c, credit, o, lines), credit,
                 OrderApprovalReasons.of(o), o.getLastApprovalComment(), o.getSubmittedAt(), o.getApprovedAt(),
-                o.getApprovedByUsername(), o.getCancelReason(), o.getCancelledAt(), o.getCancelledByUsername());
+                o.getApprovedByUsername(), o.getCancelReason(), o.getCancelledAt(), o.getCancelledByUsername(),
+                hasShortage, shortageLineCount);
     }
 
     /** S3-07 AC3: cảnh báo khi đại lý của đơn đang bị khoá giao dịch. S4-02: cảnh báo vượt hạn mức / nợ quá hạn. S4-01: cảnh báo bán dưới giá sàn. S4-03: cảnh báo vượt tồn kho khả dụng. */

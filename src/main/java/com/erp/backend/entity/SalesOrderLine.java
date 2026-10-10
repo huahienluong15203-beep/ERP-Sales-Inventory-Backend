@@ -86,4 +86,12 @@ public class SalesOrderLine {
 
     @Column(name = "net_amount", nullable = false, precision = 18, scale = 2)
     private BigDecimal netAmount;
+
+    // S5-01: Số lượng thực giao theo đơn vị tính đã chọn (unitName)
+    @Column(name = "delivered_quantity", precision = 15, scale = 4)
+    private BigDecimal deliveredQuantity;
+
+    // S5-01: Lý do giao thiếu nếu phát sinh giao thiếu so với số lượng đặt
+    @Column(name = "shortage_reason", length = 255)
+    private String shortageReason;
 }

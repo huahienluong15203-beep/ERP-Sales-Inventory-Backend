@@ -36,6 +36,7 @@ class OrderStatusServiceTest {
 
     @Mock private SalesOrderRepository orderRepository;
     @Mock private SalesOrderApprovalRepository approvalRepository;
+    @Mock private com.erp.backend.repository.CustomerRepository customerRepository;
     @Mock private InventoryService inventoryService;
     @Mock private AuditLogService auditLogService;
     @Mock private OrderDraftService orderDraftService;

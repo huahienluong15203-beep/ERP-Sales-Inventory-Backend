@@ -51,6 +51,11 @@ public class Customer {
     @JoinColumn(name = "sales_rep_id")
     private User salesRep;
 
+    // S5-01: Tài khoản đăng nhập tương ứng của đại lý (vai trò ROLE_CUSTOMER)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id")
+    private User user;
+
     @Column(name = "contact_name", length = 100)
     private String contactName;
 
