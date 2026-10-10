@@ -6,10 +6,12 @@ import com.erp.backend.security.UserDetailsImpl;
 import com.erp.backend.service.OrderApprovalService;
 import com.erp.backend.service.OrderDraftService;
 import com.erp.backend.service.OrderQueryService;
+import com.erp.backend.service.OrderPrintService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -35,6 +37,7 @@ public class OrderController {
     private final OrderDraftService orderDraftService;
     private final OrderApprovalService orderApprovalService;
     private final OrderQueryService orderQueryService;
+    private final OrderPrintService orderPrintService;
     private final com.erp.backend.service.OrderStatusService orderStatusService;
 
     /**
@@ -78,6 +81,20 @@ public class OrderController {
                                                               @RequestParam(defaultValue = "20") int size,
                                                               @AuthenticationPrincipal UserDetailsImpl actor) {
         return orderApprovalService.pending(keyword, page, size, actor);
+    }
+
+    /**
+     * S4-08: Mẫu in đơn hàng (HTML khổ A4) có mã đơn và mã vạch Code 128; in hoặc "Lưu dưới dạng PDF" từ trình duyệt.
+     * ?autoprint=true thì tự mở hộp thoại in khi tải xong. Quyền như xem đơn.
+     */
+    // Không khai báo produces để lỗi (404 / 409...) vẫn trả JSON chuẩn {code, message, ...}
+    @GetMapping("/{id}/print")
+    public ResponseEntity<String> print(@PathVariable Long id,
+                                        @RequestParam(defaultValue = "false") boolean autoprint,
+                                        @AuthenticationPrincipal UserDetailsImpl actor) {
+        return ResponseEntity.ok()
+                .contentType(new MediaType(MediaType.TEXT_HTML, java.nio.charset.StandardCharsets.UTF_8))
+                .body(orderPrintService.printHtml(id, autoprint, actor));
     }
 
     @GetMapping("/{id}")
