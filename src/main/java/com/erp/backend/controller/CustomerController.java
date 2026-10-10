@@ -6,6 +6,7 @@ import com.erp.backend.entity.CustomerGroup;
 import com.erp.backend.security.UserDetailsImpl;
 import com.erp.backend.service.CustomerDeliveryAddressService;
 import com.erp.backend.service.CustomerCreditService;
+import com.erp.backend.service.CustomerPurchaseHistoryService;
 import com.erp.backend.service.CustomerService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -36,6 +37,7 @@ public class CustomerController {
 
     private final CustomerService customerService;
     private final CustomerCreditService creditService;
+    private final CustomerPurchaseHistoryService purchaseHistoryService;
     private final CustomerDeliveryAddressService deliveryAddressService;
 
     // ======================= S3-08: TÌM KIẾM / XEM =======================
@@ -150,6 +152,18 @@ public class CustomerController {
                                              @RequestParam(required = false) BigDecimal orderAmount,
                                              @AuthenticationPrincipal UserDetailsImpl actor) {
         return creditService.getStatus(id, orderAmount, actor);
+    }
+
+    /**
+     * S4-04: Lịch sử mua hàng của đại lý trong N tháng gần nhất (mặc định 3, tối đa 12):
+     * mặt hàng đã mua kèm số lượng bình quân, đơn mua gần nhất để thêm nhanh vào đơn mới.
+     * NV kinh doanh chỉ xem được đại lý mình phụ trách.
+     */
+    @GetMapping("/{id}/purchase-history")
+    public CustomerPurchaseHistoryResponse purchaseHistory(@PathVariable Long id,
+                                                           @RequestParam(required = false) Integer months,
+                                                           @AuthenticationPrincipal UserDetailsImpl actor) {
+        return purchaseHistoryService.getHistory(id, months, actor);
     }
 
     // ======================= S3-04: ĐIỂM GIAO HÀNG =======================
