@@ -27,6 +27,8 @@ public class SalesOrderApproval {
     public static final String ACTION_APPROVE = "APPROVE";
     public static final String ACTION_REJECT = "REJECT";
     public static final String ACTION_RETURN = "RETURN";
+    public static final String ACTION_CANCEL = "CANCEL";
+    public static final String ACTION_CHANGE_STATUS = "CHANGE_STATUS";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

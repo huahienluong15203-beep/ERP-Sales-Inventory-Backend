@@ -542,7 +542,7 @@ public class OrderDraftService {
                 o.getDesiredDeliveryDate(), o.getNote(), lines, o.getSubtotal(), o.getDiscountTotal(), o.getTotalAmount(),
                 o.getCreatedByUsername(), o.getCreatedAt(), o.getUpdatedAt(), warnings(c, credit, o, lines), credit,
                 OrderApprovalReasons.of(o), o.getLastApprovalComment(), o.getSubmittedAt(), o.getApprovedAt(),
-                o.getApprovedByUsername());
+                o.getApprovedByUsername(), o.getCancelReason(), o.getCancelledAt(), o.getCancelledByUsername());
     }
 
     /** S3-07 AC3: cảnh báo khi đại lý của đơn đang bị khoá giao dịch. S4-02: cảnh báo vượt hạn mức / nợ quá hạn. S4-01: cảnh báo bán dưới giá sàn. S4-03: cảnh báo vượt tồn kho khả dụng. */

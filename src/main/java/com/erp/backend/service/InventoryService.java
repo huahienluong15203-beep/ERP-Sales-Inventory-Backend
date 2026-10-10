@@ -206,4 +206,52 @@ public class InventoryService {
             }
         }
     }
+
+    /**
+     * S4-06: Xuất kho đơn hàng (DISPATCHED).
+     * Trừ lượng tồn thực tế (physicalStock) và giải phóng lượng tồn đang giữ chỗ (reservedStock).
+     */
+    @Transactional
+    public void dispatchReservedStock(SalesOrder order) {
+        if (order == null || order.getLines() == null || order.getLines().isEmpty()) {
+            return;
+        }
+
+        Warehouse warehouse = resolveWarehouseForCustomer(order.getCustomer());
+
+        List<SalesOrderLine> sortedLines = new ArrayList<>(order.getLines());
+        sortedLines.sort(Comparator.comparing(l -> l.getProduct().getId()));
+
+        for (SalesOrderLine line : sortedLines) {
+            Product product = line.getProduct();
+            BigDecimal baseQty = line.getBaseQuantity() != null
+                    ? line.getBaseQuantity()
+                    : line.getQuantity().multiply(line.getConversionFactor()).setScale(4, RoundingMode.HALF_UP);
+
+            Inventory inventory = inventoryRepository.findByWarehouseIdAndProductIdForUpdate(warehouse.getId(), product.getId())
+                    .orElse(null);
+
+            if (inventory != null) {
+                // Trừ tồn thực tế
+                BigDecimal currentPhysical = inventory.getPhysicalStock() != null ? inventory.getPhysicalStock() : BigDecimal.ZERO;
+                BigDecimal updatedPhysical = currentPhysical.subtract(baseQty);
+                if (updatedPhysical.compareTo(BigDecimal.ZERO) < 0) {
+                    updatedPhysical = BigDecimal.ZERO;
+                }
+                inventory.setPhysicalStock(updatedPhysical);
+
+                // Giải phóng giữ chỗ
+                BigDecimal currentReserved = inventory.getReservedStock() != null ? inventory.getReservedStock() : BigDecimal.ZERO;
+                BigDecimal updatedReserved = currentReserved.subtract(baseQty);
+                if (updatedReserved.compareTo(BigDecimal.ZERO) < 0) {
+                    updatedReserved = BigDecimal.ZERO;
+                }
+                inventory.setReservedStock(updatedReserved);
+
+                inventoryRepository.save(inventory);
+                log.info("S4-06: Đã xuất kho đơn hàng {}: trừ tồn thực tế {} {} (còn {}), giải phóng giữ chỗ (còn {}) cho SKU {} tại kho {}",
+                        order.getCode(), baseQty, product.getBaseUnit(), updatedPhysical, updatedReserved, product.getSku(), warehouse.getCode());
+            }
+        }
+    }
 }

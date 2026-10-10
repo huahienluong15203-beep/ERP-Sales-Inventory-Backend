@@ -275,6 +275,11 @@ public class OrderApprovalService {
             case SalesOrderApproval.ACTION_APPROVE -> "Duyệt";
             case SalesOrderApproval.ACTION_REJECT -> "Từ chối";
             case SalesOrderApproval.ACTION_RETURN -> "Trả lại sửa";
+            case SalesOrderApproval.ACTION_CANCEL -> "Hủy đơn";
+            case "PICKING" -> "Soạn hàng";
+            case "DISPATCHED" -> "Xuất kho";
+            case "DELIVERED" -> "Đã giao hàng";
+            case "CLOSED" -> "Đóng đơn";
             default -> action;
         };
     }
