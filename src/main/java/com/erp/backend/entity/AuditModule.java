@@ -12,7 +12,6 @@ import lombok.RequiredArgsConstructor;
  * - CUSTOMER: Hồ sơ đại lý
  */
 @Getter
-@RequiredArgsConstructor
 public enum AuditModule {
     INVENTORY("Tồn kho"),
     PRICING("Bảng giá"),
@@ -21,4 +20,8 @@ public enum AuditModule {
     CUSTOMER("Đại lý");
 
     private final String label;
+
+    AuditModule(String label) {
+        this.label = label;
+    }
 }

@@ -41,4 +41,7 @@ public class CustomerProfileRequest {
 
     @Size(max = 500, message = "Ghi chú tối đa 500 ký tự")
     private String note;
+
+    // S5-03: Kho phục vụ mặc định của đại lý (tuỳ chọn)
+    private Long defaultWarehouseId;
 }

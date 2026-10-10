@@ -49,6 +49,7 @@ public class CustomerService {
     private final PriceListRepository priceListRepository;
     private final SalesOrderRepository orderRepository;
     private final CustomerCreditService creditService;
+    private final WarehouseRepository warehouseRepository;
 
     // ======================= S3-08: TÌM KIẾM / XEM =======================
 
@@ -141,7 +142,11 @@ public class CustomerService {
                         e.getKey().getLabel()))
                 .toList();
 
-        return new CustomerFormOptionsResponse(groups, statuses, regions, salesReps, priceLists);
+        List<RefItem> warehouses = warehouseRepository.findByStatusOrderByNameAsc(ACTIVE).stream()
+                .map(w -> new RefItem(w.getId(), w.getCode(), w.getName()))
+                .toList();
+
+        return new CustomerFormOptionsResponse(groups, statuses, regions, salesReps, priceLists, warehouses);
     }
 
     // ======================= S3-03: TẠO / SỬA HỒ SƠ =======================
@@ -617,6 +622,30 @@ public class CustomerService {
         customer.setEmail(email == null ? null : email.toLowerCase());
         customer.setAddress(blankToNull(req.getAddress()));
         customer.setNote(blankToNull(req.getNote()));
+
+        if (req.getDefaultWarehouseId() != null) {
+            Warehouse wh = warehouseRepository.findById(req.getDefaultWarehouseId())
+                    .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST, "WAREHOUSE_NOT_FOUND",
+                            "Kho phục vụ mặc định không tồn tại", "defaultWarehouseId"));
+            customer.setDefaultWarehouse(wh);
+        }
+    }
+
+    /** S5-03: Gán kho phục vụ mặc định cho đại lý */
+    @Transactional
+    public CustomerResponse assignDefaultWarehouse(Long id, Long warehouseId, UserDetailsImpl actor) {
+        Customer customer = findCustomer(id);
+        CustomerAccess.checkCanAccess(actor, customer);
+        if (warehouseId == null) {
+            customer.setDefaultWarehouse(null);
+        } else {
+            Warehouse wh = warehouseRepository.findById(warehouseId)
+                    .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST, "WAREHOUSE_NOT_FOUND",
+                            "Kho không tồn tại", "warehouseId"));
+            customer.setDefaultWarehouse(wh);
+        }
+        Customer saved = customerRepository.save(customer);
+        return toResponse(saved);
     }
 
     /** Người phụ trách phải thuộc bộ phận kinh doanh (nhân viên hoặc quản lý kinh doanh) và đang hoạt động. */
@@ -697,6 +726,8 @@ public class CustomerService {
 
     CustomerResponse toResponse(Customer c, RefItem priceListRef, Integer deliveryPointCount) {
         Region region = c.getRegion();
+        Warehouse defaultWh = c.getDefaultWarehouse();
+        RefItem defaultWhRef = defaultWh == null ? null : new RefItem(defaultWh.getId(), defaultWh.getCode(), defaultWh.getName());
         return new CustomerResponse(
                 c.getId(),
                 c.getCode(),
@@ -721,7 +752,8 @@ public class CustomerService {
                 c.getCreatedAt(),
                 c.getUpdatedAt(),
                 priceListRef,
-                deliveryPointCount != null ? deliveryPointCount : 0);
+                deliveryPointCount != null ? deliveryPointCount : 0,
+                defaultWhRef);
     }
 
     private RefItem toUserRef(User u) {

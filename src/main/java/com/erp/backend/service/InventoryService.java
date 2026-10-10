@@ -48,6 +48,12 @@ public class InventoryService {
             return getDefaultWarehouse();
         }
 
+        // S5-03: Ưu tiên kho phục vụ mặc định đã được gán trực tiếp cho đại lý
+        if (customer.getDefaultWarehouse() != null
+                && "ACTIVE".equalsIgnoreCase(customer.getDefaultWarehouse().getStatus())) {
+            return customer.getDefaultWarehouse();
+        }
+
         String regionCode = customer.getRegion() != null ? customer.getRegion().getCode() : "";
         String regionName = customer.getRegion() != null ? customer.getRegion().getName() : "";
         String address = customer.getAddress() != null ? customer.getAddress() : "";

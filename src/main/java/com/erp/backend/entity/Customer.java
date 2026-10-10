@@ -56,6 +56,11 @@ public class Customer {
     @JoinColumn(name = "user_id")
     private User user;
 
+    // S5-03: Kho phục vụ mặc định của đại lý
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "default_warehouse_id")
+    private Warehouse defaultWarehouse;
+
     @Column(name = "contact_name", length = 100)
     private String contactName;
 

@@ -93,6 +93,19 @@ class InventoryServiceTest {
         assertThat(result.getName()).isEqualTo("Kho Tổng Miền Nam");
     }
 
+    @Test
+    @DisplayName("S5-03: Đại lý đã được gán kho mặc định -> Ưu tiên trả về kho mặc định được gán")
+    void resolveWarehouse_defaultWarehouseAssigned() {
+        Warehouse customWh = Warehouse.builder().id(99L).code("WH-CUSTOM").name("Kho Riêng Đại Lý").status("ACTIVE").build();
+        Customer customer = Customer.builder().id(105L).code("DL-VIP").name("Đại lý VIP")
+                .defaultWarehouse(customWh).build();
+
+        Warehouse result = service.resolveWarehouseForCustomer(customer);
+
+        assertThat(result.getCode()).isEqualTo("WH-CUSTOM");
+        assertThat(result.getName()).isEqualTo("Kho Riêng Đại Lý");
+    }
+
     // =========================================================================
     // TIÊU CHÍ 2: Tồn khả dụng = Tồn thực tế - Tồn đang giữ chỗ cho đơn khác
     // =========================================================================
