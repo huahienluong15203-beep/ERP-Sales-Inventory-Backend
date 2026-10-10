@@ -38,6 +38,10 @@ public class SalesOrder {
     public static final String STATUS_CANCELLED = "CANCELLED";
     public static final String STATUS_REJECTED = "REJECTED";
 
+    // S4-10: nguồn tạo đơn: nhân viên gõ đơn hay đại lý tự đặt qua cổng đại lý
+    public static final String SOURCE_STAFF = "STAFF";
+    public static final String SOURCE_PORTAL = "PORTAL";
+
     // S5-06: trạng thái giữ chỗ tồn của đơn (null = đơn cũ trước S5-06, coi như đang giữ nếu đơn ở trạng thái giữ chỗ)
     public static final String RESERVATION_RESERVED = "RESERVED";
     public static final String RESERVATION_RELEASED = "RELEASED";
@@ -114,6 +118,12 @@ public class SalesOrder {
     // S4-05: ý kiến gần nhất của người duyệt (lý do Từ chối / Trả lại sửa) để NV kinh doanh xem và sửa
     @Column(name = "last_approval_comment", length = 500)
     private String lastApprovalComment;
+
+    // S4-10: đơn đại lý tự đặt (PORTAL) luôn chờ nhân viên phụ trách xác nhận.
+    // columnDefinition có DEFAULT để ddl-auto=update thêm cột được trên bảng đã có dữ liệu
+    @Column(name = "source", length = 20, columnDefinition = "varchar(20) default 'STAFF'")
+    @Builder.Default
+    private String source = SOURCE_STAFF;
 
     // S5-06: kho đã giữ chỗ (nhả / xuất đúng kho này, kể cả khi đại lý đổi khu vực sau đó)
     @ManyToOne(fetch = FetchType.LAZY)

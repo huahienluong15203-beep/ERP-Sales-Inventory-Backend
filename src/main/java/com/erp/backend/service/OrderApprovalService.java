@@ -127,14 +127,19 @@ public class OrderApprovalService {
     // ======================= DUYỆT =======================
 
     @Transactional(readOnly = true)
-    public PageResponse<PendingOrderResponse> pending(String keyword, int page, int size) {
+    public PageResponse<PendingOrderResponse> pending(String keyword, int page, int size, UserDetailsImpl actor) {
         int safePage = Math.max(page, 0);
         int safeSize = size <= 0 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
+        // S4-10: NV kinh doanh chỉ thấy đơn chờ duyệt của đại lý mình phụ trách (để xác nhận đơn đại lý tự đặt)
+        Long restrictedSalesRepId = CustomerAccess.restrictedSalesRepId(actor);
         Specification<SalesOrder> spec = (root, query, cb) -> {
             List<Predicate> ps = new ArrayList<>();
             ps.add(cb.equal(root.get("status"), SalesOrder.STATUS_PENDING_APPROVAL));
+            Join<SalesOrder, Customer> customer = root.join("customer");
+            if (restrictedSalesRepId != null) {
+                ps.add(cb.equal(customer.get("salesRep").get("id"), restrictedSalesRepId));
+            }
             if (StringUtils.hasText(keyword)) {
-                Join<SalesOrder, Customer> customer = root.join("customer");
                 String like = "%" + keyword.trim().toLowerCase() + "%";
                 ps.add(cb.or(cb.like(cb.lower(root.get("code")), like),
                         cb.like(cb.lower(customer.get("code")), like),
@@ -153,6 +158,7 @@ public class OrderApprovalService {
     @Transactional
     public OrderResponse approve(Long id, String comment, UserDetailsImpl actor) {
         SalesOrder order = lockPending(id, actor);
+        assertCanDecide(order, actor);
         String note = trimComment(comment, false);
         markApproved(order, actor, LocalDateTime.now(clock));
         order.setLastApprovalComment(note);
@@ -163,6 +169,7 @@ public class OrderApprovalService {
     public OrderResponse reject(Long id, String comment, UserDetailsImpl actor) {
         String note = trimComment(comment, true);
         SalesOrder order = lockPending(id, actor);
+        assertCanDecide(order, actor);
         // S4-03: Giải phóng hàng giữ chỗ khi đơn hàng bị từ chối
         inventoryService.releaseReservedStock(order);
         order.setStatus(SalesOrder.STATUS_REJECTED);
@@ -175,6 +182,7 @@ public class OrderApprovalService {
     public OrderResponse returnForEdit(Long id, String comment, UserDetailsImpl actor) {
         String note = trimComment(comment, true);
         SalesOrder order = lockPending(id, actor);
+        assertCanDecide(order, actor);
         // S4-03: Giải phóng hàng giữ chỗ khi đơn được trả lại để sửa
         inventoryService.releaseReservedStock(order);
         order.setStatus(SalesOrder.STATUS_DRAFT);
@@ -226,6 +234,30 @@ public class OrderApprovalService {
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy đơn hàng"));
         CustomerAccess.checkCanAccess(actor, order.getCustomer());
         return order;
+    }
+
+    /**
+     * S4-10: QL kinh doanh quyết định mọi đơn chờ duyệt. NV kinh doanh chỉ xác nhận đơn đại lý tự đặt qua cổng
+     * của đại lý mình phụ trách (đã kiểm ở lockPending) và đơn đó không vượt hạn mức / không dưới giá sàn.
+     * Trả 409 (không dùng 403 vì Frontend tự đăng xuất khi gặp 403).
+     */
+    static void assertCanDecide(SalesOrder order, UserDetailsImpl actor) {
+        if (hasRole(actor, "ROLE_SALES_MANAGER")) {
+            return;
+        }
+        if (!SalesOrder.SOURCE_PORTAL.equals(order.getSource())) {
+            throw BusinessException.conflict("ORDER_NEEDS_MANAGER",
+                    "Đơn " + order.getCode() + " do nhân viên tạo, chỉ Quản lý kinh doanh được duyệt", null);
+        }
+        if (OrderApprovalReasons.needsManager(order)) {
+            throw BusinessException.conflict("ORDER_NEEDS_MANAGER",
+                    "Đơn " + order.getCode() + " vượt hạn mức công nợ hoặc bán dưới giá sàn, cần Quản lý kinh doanh duyệt", null);
+        }
+    }
+
+    private static boolean hasRole(UserDetailsImpl actor, String role) {
+        return actor != null && actor.getAuthorities() != null
+                && actor.getAuthorities().stream().anyMatch(a -> role.equals(a.getAuthority()));
     }
 
     private SalesOrder lockPending(Long id, UserDetailsImpl actor) {

@@ -7,6 +7,9 @@ import com.erp.backend.security.UserDetailsImpl;
 import com.erp.backend.service.CustomerDeliveryAddressService;
 import com.erp.backend.service.CustomerCreditService;
 import com.erp.backend.service.CustomerPurchaseHistoryService;
+import com.erp.backend.service.PortalAccountService;
+import com.erp.backend.dto.portal.PortalAccountRequest;
+import com.erp.backend.dto.portal.PortalMeResponse;
 import com.erp.backend.service.CustomerService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -38,6 +41,7 @@ public class CustomerController {
     private final CustomerService customerService;
     private final CustomerCreditService creditService;
     private final CustomerPurchaseHistoryService purchaseHistoryService;
+    private final PortalAccountService portalAccountService;
     private final CustomerDeliveryAddressService deliveryAddressService;
 
     // ======================= S3-08: TÌM KIẾM / XEM =======================
@@ -164,6 +168,17 @@ public class CustomerController {
                                                            @RequestParam(required = false) Integer months,
                                                            @AuthenticationPrincipal UserDetailsImpl actor) {
         return purchaseHistoryService.getHistory(id, months, actor);
+    }
+
+    /**
+     * S4-10: Gắn tài khoản đăng nhập cổng đại lý (vai trò Đại lý) với hồ sơ đại lý; userId = null là gỡ. Chỉ Admin.
+     */
+    @PutMapping("/{id}/portal-account")
+    @PreAuthorize("hasRole('ADMIN')")
+    public PortalMeResponse linkPortalAccount(@PathVariable Long id,
+                                              @Valid @RequestBody PortalAccountRequest request,
+                                              @AuthenticationPrincipal UserDetailsImpl actor) {
+        return portalAccountService.link(id, request, actor);
     }
 
     // ======================= S3-04: ĐIỂM GIAO HÀNG =======================
