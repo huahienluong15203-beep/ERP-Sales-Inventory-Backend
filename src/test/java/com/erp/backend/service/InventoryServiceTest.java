@@ -49,6 +49,56 @@ class InventoryServiceTest {
     // =========================================================================
 
     @Test
+    @DisplayName("S4-03 (S403-07): Đại lý miền Bắc địa chỉ 'Nam Từ Liêm' vẫn ra kho miền Bắc, không nhầm miền Nam")
+    void resolveWarehouse_northRegion_addressHasNam() {
+        Region north = Region.builder().id(1L).code("MB").name("Miền Bắc").build();
+        Customer customer = Customer.builder().id(7L).region(north).address("12 Mỹ Đình, Nam Từ Liêm, Hà Nội").build();
+        when(warehouseRepository.findByCodeIgnoreCase("WH-MB01")).thenReturn(Optional.of(whNorth));
+
+        assertThat(service.resolveWarehouseForCustomer(customer).getCode()).isEqualTo("WH-MB01");
+        verify(warehouseRepository, never()).findByCodeIgnoreCase("WH-MN01");
+    }
+
+    @Test
+    @DisplayName("S4-03 (S403-08): Đại lý miền Bắc địa chỉ 'Trung Kính' vẫn ra kho miền Bắc, không nhầm miền Trung")
+    void resolveWarehouse_northRegion_addressHasTrung() {
+        Region north = Region.builder().id(1L).code("MB").name("Miền Bắc").build();
+        Customer customer = Customer.builder().id(5L).region(north).address("Trung Kính, Cầu Giấy, Hà Nội").build();
+        when(warehouseRepository.findByCodeIgnoreCase("WH-MB01")).thenReturn(Optional.of(whNorth));
+
+        assertThat(service.resolveWarehouseForCustomer(customer).getCode()).isEqualTo("WH-MB01");
+        verify(warehouseRepository, never()).findByCodeIgnoreCase("WH-MT01");
+    }
+
+    @Test
+    @DisplayName("S4-03: Chưa gán khu vực -> đoán theo tỉnh / thành trong địa chỉ (có dấu hoặc không dấu)")
+    void resolveWarehouse_noRegion_guessByProvince() {
+        when(warehouseRepository.findByCodeIgnoreCase("WH-MN01")).thenReturn(Optional.of(whSouth));
+        when(warehouseRepository.findByCodeIgnoreCase("WH-MT01")).thenReturn(Optional.of(whCentral));
+        when(warehouseRepository.findByCodeIgnoreCase("WH-MB01")).thenReturn(Optional.of(whNorth));
+
+        assertThat(service.resolveWarehouseForCustomer(Customer.builder().address("Quận 1, TP. Hồ Chí Minh").build())
+                .getCode()).isEqualTo("WH-MN01");
+        assertThat(service.resolveWarehouseForCustomer(Customer.builder().address("Hai Chau, Da Nang").build())
+                .getCode()).isEqualTo("WH-MT01");
+        // Phố Huế ở Hà Nội, Hai Bà Trưng: không phải miền Trung
+        assertThat(service.resolveWarehouseForCustomer(Customer.builder().address("45 Phố Huế, Hai Bà Trưng, Hà Nội").build())
+                .getCode()).isEqualTo("WH-MB01");
+        // Nam Định, Hà Nam là tỉnh miền Bắc
+        assertThat(service.resolveWarehouseForCustomer(Customer.builder().address("TP Nam Định").build())
+                .getCode()).isEqualTo("WH-MB01");
+    }
+
+    @Test
+    @DisplayName("S4-03: Nhận miền theo mã hoặc tên khu vực")
+    void zoneOfRegion_codeOrName() {
+        assertThat(InventoryService.zoneOfRegion(Region.builder().code("mt").build())).isEqualTo("MT");
+        assertThat(InventoryService.zoneOfRegion(Region.builder().code("R-09").name("Miền Nam").build())).isEqualTo("MN");
+        assertThat(InventoryService.zoneOfRegion(Region.builder().code("R-10").name("Tây Nguyên").build())).isNull();
+        assertThat(InventoryService.zoneOfRegion(null)).isNull();
+    }
+
+    @Test
     @DisplayName("S4-03 AC1: Đại lý ở Miền Bắc -> Kho phục vụ là WH-MB01 (Kho Tổng Miền Bắc)")
     void resolveWarehouse_northRegion() {
         Region north = Region.builder().id(1L).code("MB").name("Miền Bắc").build();
