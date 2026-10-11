@@ -39,7 +39,7 @@ import java.util.stream.Collectors;
  * - Chốt (NV kinh doanh): tính lại giá, kiểm tra đại lý; không vi phạm -> Đã duyệt ngay, vi phạm -> Chờ duyệt kèm lý do + mức vi phạm.
  * - QL kinh doanh: Duyệt / Từ chối / Trả lại sửa; Từ chối và Trả lại sửa bắt buộc nhập ý kiến.
  * - Mỗi bước ghi vào lịch sử duyệt (chỉ thêm, không sửa / xoá) và nhật ký hệ thống.
- * - S5-06: đơn sang Đã duyệt thì giữ chỗ tồn (làm ở S5-06, gọi tại onApproved).
+ * - S5-06: tồn được giữ chỗ ngay lúc chốt (InventoryService.checkAndReserveStock), đơn được duyệt thì gia hạn giữ chỗ.
  */
 @Service
 @RequiredArgsConstructor
@@ -103,9 +103,6 @@ public class OrderApprovalService {
         SalesOrder saved = orderRepository.saveAndFlush(order);
         audit(saved, needsApproval ? "SUBMIT_ORDER_FOR_APPROVAL" : "AUTO_APPROVE_ORDER",
                 SalesOrder.STATUS_DRAFT, comment, actor);
-        if (!needsApproval) {
-            onApproved(saved);
-        }
         return orderDraftService.toResponse(saved);
     }
 
@@ -209,15 +206,7 @@ public class OrderApprovalService {
         saveHistory(order, action, SalesOrder.STATUS_PENDING_APPROVAL, note, actor);
         SalesOrder saved = orderRepository.saveAndFlush(order);
         audit(saved, auditAction, SalesOrder.STATUS_PENDING_APPROVAL, note, actor);
-        if (SalesOrder.STATUS_APPROVED.equals(saved.getStatus())) {
-            onApproved(saved);
-        }
         return orderDraftService.toResponse(saved);
-    }
-
-    /** S5-06: giữ chỗ tồn cho đơn vừa được duyệt (cùng transaction với việc duyệt). */
-    void onApproved(SalesOrder order) {
-        // Chưa có sổ tồn kho (S5-03, S5-04 của Lê Hồng Phong); S5-06 sẽ giữ chỗ tồn tại đây.
     }
 
     private void markApproved(SalesOrder order, UserDetailsImpl approver, LocalDateTime now) {
