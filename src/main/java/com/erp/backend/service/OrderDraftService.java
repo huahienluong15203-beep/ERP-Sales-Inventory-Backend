@@ -633,10 +633,35 @@ public class OrderDraftService {
         throw new IllegalStateException("Không sinh được mã đơn hàng, vui lòng thử lại");
     }
 
+    /** Đơn đang giữ chỗ tồn (S4-03 giữ khi chốt; đơn cũ trước S5-06 chưa có reservationStatus thì xét theo trạng thái). */
+    static boolean holdsReservation(SalesOrder o) {
+        if (o.getReservationStatus() != null) {
+            return SalesOrder.RESERVATION_RESERVED.equals(o.getReservationStatus());
+        }
+        return SalesOrder.STATUS_PENDING_APPROVAL.equals(o.getStatus())
+                || SalesOrder.STATUS_APPROVED.equals(o.getStatus())
+                || SalesOrder.STATUS_PICKING.equals(o.getStatus());
+    }
+
+    /** Đơn đã xuất kho hoặc đã kết thúc (huỷ / từ chối): không còn kiểm tồn khả dụng. */
+    static boolean isStockSettled(SalesOrder o) {
+        String st = o.getStatus();
+        return SalesOrder.RESERVATION_DISPATCHED.equals(o.getReservationStatus())
+                || SalesOrder.STATUS_DISPATCHED.equals(st) || SalesOrder.STATUS_DELIVERED.equals(st)
+                || SalesOrder.STATUS_CLOSED.equals(st) || SalesOrder.STATUS_CANCELLED.equals(st)
+                || SalesOrder.STATUS_REJECTED.equals(st);
+    }
+
     OrderResponse toResponse(SalesOrder o) {
         Customer c = o.getCustomer();
         CustomerDeliveryAddress a = o.getDeliveryAddress();
-        Warehouse warehouse = inventoryService != null ? inventoryService.resolveWarehouseForCustomer(c) : null;
+        // Đơn đang giữ chỗ: tồn khả dụng của chính đơn phải cộng lại phần đơn đang giữ (không tự báo vượt tồn trên mình).
+        // Đơn đã xuất kho / kết thúc: không cảnh báo tồn nữa.
+        boolean holdsReservation = holdsReservation(o);
+        boolean stockSettled = isStockSettled(o);
+        Warehouse warehouse = holdsReservation && o.getReservedWarehouse() != null
+                ? o.getReservedWarehouse()
+                : (inventoryService != null ? inventoryService.resolveWarehouseForCustomer(c) : null);
 
         List<OrderLineResponse> lines = o.getLines().stream()
                 .map(l -> {
@@ -652,9 +677,12 @@ public class OrderDraftService {
 
                     StockInfoDto stock = (inventoryService != null && warehouse != null && l.getProduct() != null)
                             ? inventoryService.getStockInfo(warehouse, l.getProduct()) : null;
-                    BigDecimal available = stock != null ? stock.availableStock() : BigDecimal.ZERO;
                     BigDecimal baseQty = l.getBaseQuantity() != null ? l.getBaseQuantity() : BigDecimal.ZERO;
-                    boolean isOverStock = baseQty.compareTo(available) > 0;
+                    BigDecimal available = stock != null ? stock.availableStock() : BigDecimal.ZERO;
+                    if (holdsReservation) {
+                        available = available.add(baseQty);
+                    }
+                    boolean isOverStock = !stockSettled && baseQty.compareTo(available) > 0;
                     BigDecimal factor = l.getConversionFactor() != null && l.getConversionFactor().signum() > 0
                             ? l.getConversionFactor() : BigDecimal.ONE;
                     BigDecimal maxAllowed = available.compareTo(BigDecimal.ZERO) > 0
