@@ -21,7 +21,7 @@ public class OrderReservationExpiryJob {
 
     private final OrderReservationExpiryService expiryService;
 
-    @Scheduled(cron = "0 5 * * * *", zone = "Asia/Ho_Chi_Minh")
+    @Scheduled(cron = "${erp.order.reservation-expiry.cron:0 5 * * * *}", zone = "Asia/Ho_Chi_Minh")
     public void run() {
         runOnce();
     }

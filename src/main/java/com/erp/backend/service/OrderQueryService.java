@@ -61,7 +61,7 @@ public class OrderQueryService {
             }
             restrictedCustId = cust.getId();
         } else {
-            restrictedRepId = CustomerAccess.restrictedSalesRepId(actor);
+            restrictedRepId = CustomerAccess.restrictedSalesRepIdForOrders(actor);
         }
 
         return PageResponse.of(orderRepository.findAll(
@@ -85,7 +85,7 @@ public class OrderQueryService {
             }
             restrictedCustId = cust.getId();
         } else {
-            restrictedRepId = CustomerAccess.restrictedSalesRepId(actor);
+            restrictedRepId = CustomerAccess.restrictedSalesRepIdForOrders(actor);
         }
 
         return orderRepository.sumTotals(OrderSpecifications.search(c, restrictedRepId, restrictedCustId));

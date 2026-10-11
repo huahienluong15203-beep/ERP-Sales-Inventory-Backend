@@ -21,6 +21,8 @@ public final class CustomerAccess {
     static final Set<String> FULL_ACCESS_ROLES = Set.of("ROLE_ADMIN", "ROLE_SALES_MANAGER", "ROLE_ACCOUNTANT");
     public static final String SALES_REP_ROLE = "ROLE_SALES_REP";
     public static final String CUSTOMER_ROLE = "ROLE_CUSTOMER";
+    /** Kho soạn, xuất, giao hàng nên được xem / xử lý mọi đơn (không xem hồ sơ đại lý ở CustomerController). */
+    static final Set<String> ORDER_WAREHOUSE_ROLES = Set.of("ROLE_WAREHOUSE", "ROLE_WH_MANAGER");
 
     private CustomerAccess() {
     }
@@ -31,6 +33,22 @@ public final class CustomerAccess {
 
     public static boolean isCustomer(UserDetailsImpl actor) {
         return hasAnyRole(actor, Set.of(CUSTOMER_ROLE));
+    }
+
+    /** Nhân viên kho / Quản lý kho (dùng cho đơn hàng: tra cứu, soạn, xuất, giao). */
+    public static boolean isWarehouseOrderHandler(UserDetailsImpl actor) {
+        return hasAnyRole(actor, ORDER_WAREHOUSE_ROLES);
+    }
+
+    /**
+     * Giới hạn theo NV kinh doanh khi xem DANH SÁCH ĐƠN: như restrictedSalesRepId nhưng kho được xem mọi đơn
+     * (để soạn / xuất hàng, tra cứu bằng mã vạch trên phiếu in).
+     */
+    public static Long restrictedSalesRepIdForOrders(UserDetailsImpl actor) {
+        if (!hasFullAccess(actor) && !hasAnyRole(actor, Set.of(SALES_REP_ROLE)) && isWarehouseOrderHandler(actor)) {
+            return null;
+        }
+        return restrictedSalesRepId(actor);
     }
 
     public static boolean isSalesRep(UserDetailsImpl actor) {
@@ -109,6 +127,10 @@ public final class CustomerAccess {
 
     public static void checkCanAccess(UserDetailsImpl actor, Customer customer, CustomerRepository customerRepository) {
         if (hasFullAccess(actor)) {
+            return;
+        }
+        // Chỉ dùng cho đơn hàng: kho xem / chuyển trạng thái đơn để soạn, xuất, giao (S4-06, S4-08, S5-06)
+        if (!isCustomer(actor) && !hasAnyRole(actor, Set.of(SALES_REP_ROLE)) && isWarehouseOrderHandler(actor)) {
             return;
         }
         if (isCustomer(actor)) {

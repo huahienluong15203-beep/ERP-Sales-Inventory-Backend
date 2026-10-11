@@ -278,6 +278,9 @@ public class InventoryService {
         List<SalesOrderLine> sortedLines = new ArrayList<>(order.getLines());
         sortedLines.sort(Comparator.comparing(l -> l.getProduct().getId()));
 
+        // Bước 1: khoá mọi dòng tồn và kiểm tra đủ tồn thực tế trước khi trừ (thiếu -> báo lỗi, không trừ âm rồi ép về 0)
+        List<Inventory> inventories = new ArrayList<>();
+        List<BigDecimal> baseQuantities = new ArrayList<>();
         for (SalesOrderLine line : sortedLines) {
             Product product = line.getProduct();
             BigDecimal baseQty = line.getBaseQuantity() != null
@@ -285,29 +288,41 @@ public class InventoryService {
                     : line.getQuantity().multiply(line.getConversionFactor()).setScale(4, RoundingMode.HALF_UP);
 
             Inventory inventory = inventoryRepository.findByWarehouseIdAndProductIdForUpdate(warehouse.getId(), product.getId())
-                    .orElse(null);
-
-            if (inventory != null) {
-                // Trừ tồn thực tế
-                BigDecimal currentPhysical = inventory.getPhysicalStock() != null ? inventory.getPhysicalStock() : BigDecimal.ZERO;
-                BigDecimal updatedPhysical = currentPhysical.subtract(baseQty);
-                if (updatedPhysical.compareTo(BigDecimal.ZERO) < 0) {
-                    updatedPhysical = BigDecimal.ZERO;
-                }
-                inventory.setPhysicalStock(updatedPhysical);
-
-                // Giải phóng giữ chỗ (đơn đã nhả trước đó thì không trừ lần nữa)
-                BigDecimal currentReserved = inventory.getReservedStock() != null ? inventory.getReservedStock() : BigDecimal.ZERO;
-                BigDecimal updatedReserved = wasReleased ? currentReserved : currentReserved.subtract(baseQty);
-                if (updatedReserved.compareTo(BigDecimal.ZERO) < 0) {
-                    updatedReserved = BigDecimal.ZERO;
-                }
-                inventory.setReservedStock(updatedReserved);
-
-                inventoryRepository.save(inventory);
-                log.info("S4-06: Đã xuất kho đơn hàng {}: trừ tồn thực tế {} {} (còn {}), giải phóng giữ chỗ (còn {}) cho SKU {} tại kho {}",
-                        order.getCode(), baseQty, product.getBaseUnit(), updatedPhysical, updatedReserved, product.getSku(), warehouse.getCode());
+                    .orElseThrow(() -> BusinessException.conflict("INVENTORY_NOT_FOUND",
+                            "Mặt hàng '" + line.getProductName() + "' (" + line.getProductSku() + ") chưa có dòng tồn tại "
+                                    + warehouse.getName() + ", không xuất kho được", "lines"));
+            BigDecimal currentPhysical = inventory.getPhysicalStock() != null ? inventory.getPhysicalStock() : BigDecimal.ZERO;
+            if (currentPhysical.compareTo(baseQty) < 0) {
+                throw BusinessException.conflict("INSUFFICIENT_PHYSICAL_STOCK",
+                        "Mặt hàng '" + line.getProductName() + "' (" + line.getProductSku() + ") tại " + warehouse.getName()
+                                + " chỉ còn " + currentPhysical.stripTrailingZeros().toPlainString() + " " + product.getBaseUnit()
+                                + " thực tế, cần xuất " + baseQty.stripTrailingZeros().toPlainString() + " " + product.getBaseUnit()
+                                + ". Kiểm tra lại kiểm kê / nhập kho trước khi xuất.", "lines");
             }
+            inventories.add(inventory);
+            baseQuantities.add(baseQty);
+        }
+
+        // Bước 2: trừ tồn thực tế và giải phóng giữ chỗ
+        for (int i = 0; i < sortedLines.size(); i++) {
+            Product product = sortedLines.get(i).getProduct();
+            Inventory inventory = inventories.get(i);
+            BigDecimal baseQty = baseQuantities.get(i);
+
+            BigDecimal updatedPhysical = inventory.getPhysicalStock().subtract(baseQty);
+            inventory.setPhysicalStock(updatedPhysical);
+
+            // Giải phóng giữ chỗ (đơn đã nhả trước đó thì không trừ lần nữa)
+            BigDecimal currentReserved = inventory.getReservedStock() != null ? inventory.getReservedStock() : BigDecimal.ZERO;
+            BigDecimal updatedReserved = wasReleased ? currentReserved : currentReserved.subtract(baseQty);
+            if (updatedReserved.compareTo(BigDecimal.ZERO) < 0) {
+                updatedReserved = BigDecimal.ZERO;
+            }
+            inventory.setReservedStock(updatedReserved);
+
+            inventoryRepository.save(inventory);
+            log.info("S4-06: Đã xuất kho đơn hàng {}: trừ tồn thực tế {} {} (còn {}), giải phóng giữ chỗ (còn {}) cho SKU {} tại kho {}",
+                    order.getCode(), baseQty, product.getBaseUnit(), updatedPhysical, updatedReserved, product.getSku(), warehouse.getCode());
         }
         order.setReservationStatus(SalesOrder.RESERVATION_DISPATCHED);
         order.setReservationExpiresAt(null);

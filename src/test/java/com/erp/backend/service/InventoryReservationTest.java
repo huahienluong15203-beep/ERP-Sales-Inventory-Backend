@@ -142,6 +142,44 @@ class InventoryReservationTest {
     }
 
     @Test
+    @DisplayName("S5-06: Xuất kho trừ tồn thực tế và giải phóng đúng phần giữ chỗ của đơn")
+    void dispatch_reducesPhysicalAndReserved() {
+        Inventory stock = inv(north, beer, "50", "20");
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(1L, 10L)).thenReturn(Optional.of(stock));
+        SalesOrder o = order(beer, "15");
+        o.setReservedWarehouse(north);
+        o.setReservationStatus(SalesOrder.RESERVATION_RESERVED);
+
+        service.dispatchReservedStock(o);
+
+        assertThat(stock.getPhysicalStock()).isEqualByComparingTo("35");
+        assertThat(stock.getReservedStock()).isEqualByComparingTo("5");
+        assertThat(o.getReservationStatus()).isEqualTo(SalesOrder.RESERVATION_DISPATCHED);
+    }
+
+    @Test
+    @DisplayName("S5-06: Tồn thực tế không đủ (vd sau kiểm kê) -> 409, không dòng nào bị trừ, không ép tồn về 0")
+    void dispatch_insufficientPhysical_conflictNoChange() {
+        Inventory beerStock = inv(north, beer, "50", "20");
+        Inventory cocaStock = inv(north, coca, "3", "10");
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(1L, 10L)).thenReturn(Optional.of(beerStock));
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(1L, 11L)).thenReturn(Optional.of(cocaStock));
+        SalesOrder o = order(beer, "15");
+        o.addLine(line(coca, "10"));
+        o.setReservedWarehouse(north);
+        o.setReservationStatus(SalesOrder.RESERVATION_RESERVED);
+
+        assertThatThrownBy(() -> service.dispatchReservedStock(o))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "INSUFFICIENT_PHYSICAL_STOCK");
+        assertThat(beerStock.getPhysicalStock()).isEqualByComparingTo("50");
+        assertThat(beerStock.getReservedStock()).isEqualByComparingTo("20");
+        assertThat(cocaStock.getPhysicalStock()).isEqualByComparingTo("3");
+        assertThat(o.getReservationStatus()).isEqualTo(SalesOrder.RESERVATION_RESERVED);
+        verify(inventoryRepository, never()).save(any(Inventory.class));
+    }
+
+    @Test
     @DisplayName("S5-06: Đơn được duyệt -> gia hạn giữ chỗ thêm 7 ngày tính từ lúc duyệt")
     void renew_onApproval() {
         SalesOrder o = order(beer, "1");
