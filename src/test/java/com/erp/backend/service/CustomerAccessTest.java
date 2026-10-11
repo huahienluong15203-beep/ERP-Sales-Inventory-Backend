@@ -43,6 +43,23 @@ class CustomerAccessTest {
     }
 
     @Test
+    @DisplayName("S4-06 / S5-06: Kho xem và xử lý được mọi đơn hàng (soạn, xuất, giao) nhưng vẫn không xem danh sách đại lý")
+    void warehouse_canHandleOrders_butNotCustomers() {
+        var staff = actor(9, "ROLE_WAREHOUSE");
+        var manager = actor(10, "ROLE_WH_MANAGER");
+
+        assertThat(CustomerAccess.restrictedSalesRepIdForOrders(staff)).isNull();
+        assertThat(CustomerAccess.restrictedSalesRepIdForOrders(manager)).isNull();
+        assertThatCode(() -> CustomerAccess.checkCanAccess(staff, customer(2, salesRep(8)), null))
+                .doesNotThrowAnyException();
+        // Hồ sơ đại lý vẫn mặc định từ chối
+        assertThatThrownBy(() -> CustomerAccess.checkCanAccess(staff, customer(2, salesRep(8))))
+                .isInstanceOf(BusinessException.class);
+        // NV kinh doanh kiêm kho: danh sách đơn vẫn chỉ của đại lý mình
+        assertThat(CustomerAccess.restrictedSalesRepIdForOrders(actor(7, "ROLE_SALES_REP", "ROLE_WAREHOUSE"))).isEqualTo(7L);
+    }
+
+    @Test
     @DisplayName("NV kinh doanh mở đại lý của người khác hoặc chưa gán -> 404 (không lộ dữ liệu)")
     void salesRep_cannotAccessOthersCustomer() {
         var me = actor(7, "ROLE_SALES_REP");
