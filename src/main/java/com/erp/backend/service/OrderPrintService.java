@@ -13,6 +13,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Map;
 
 /**
  * S4-08: Mẫu in / xuất PDF đơn hàng.
@@ -27,6 +28,13 @@ public class OrderPrintService {
     static final String COMPANY = "NHÀ PHÂN PHỐI ERP";
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("dd/MM/yyyy");
     private static final DateTimeFormatter DATE_TIME = DateTimeFormatter.ofPattern("HH:mm dd/MM/yyyy");
+
+    /** Đơn chưa / không còn hiệu lực: in kèm dấu chìm và dòng cảnh báo để không bị dùng nhầm làm chứng từ giao hàng. */
+    static final Map<String, String> STAMPS = Map.of(
+            "DRAFT", "BẢN NHÁP",
+            "CANCELLED", "ĐÃ HUỶ",
+            "REJECTED", "BỊ TỪ CHỐI");
+    static final String BARCODE_ERROR = "<div class=\"nobarcode\">Không tạo được mã vạch cho mã đơn này.<br>Vui lòng tra cứu theo mã đơn.</div>";
 
     private final OrderDraftService orderDraftService;
 
@@ -57,11 +65,13 @@ public class OrderPrintService {
         OrderResponse.DeliveryAddressInfo a = o.deliveryAddress();
         String barcode;
         try {
-            barcode = o.code() != null ? Code128Svg.svg(o.code(), 2, 56) : "";
+            barcode = o.code() != null ? Code128Svg.svg(o.code(), 2, 56) : BARCODE_ERROR;
         } catch (IllegalArgumentException e) {
-            barcode = "";
+            // Mã đơn có ký tự ngoài bảng Code 128: vẫn in đơn nhưng báo rõ trên phiếu để kho tra cứu theo mã đơn
+            barcode = BARCODE_ERROR;
         }
         String status = o.status() == null ? "" : PortalService.STATUS_LABELS.getOrDefault(o.status(), o.status());
+        String stamp = o.status() == null ? null : STAMPS.get(o.status());
 
         return "<!doctype html><html lang=\"vi\"><head><meta charset=\"utf-8\">"
                 + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
@@ -76,13 +86,21 @@ public class OrderPrintService {
                 + ".tot{width:320px;margin-left:auto;margin-top:10px}.tot td{border:none;padding:3px 6px}.tot .big td{font-size:15px;font-weight:bold;border-top:1px solid #111}"
                 + ".sign{display:grid;grid-template-columns:repeat(3,1fr);text-align:center;margin-top:36px}.sign i{display:block;color:#666;font-size:12px;margin-top:2px}"
                 + ".barcode{max-width:100%;height:auto}@media print{body{padding:0}}"
+                + ".nobarcode{border:1px dashed #c00;color:#c00;padding:6px 8px;font-size:12px;max-width:240px}"
+                + ".stamp{position:fixed;top:40%;left:0;right:0;text-align:center;transform:rotate(-30deg);font-size:96px;"
+                + "font-weight:bold;color:rgba(200,0,0,.18);letter-spacing:8px;pointer-events:none;z-index:0}"
+                + ".warn{border:2px solid #c00;color:#c00;font-weight:bold;padding:8px 10px;margin-top:10px;border-radius:6px}"
+                + "@media print{.stamp{color:rgba(200,0,0,.25);-webkit-print-color-adjust:exact;print-color-adjust:exact}}"
                 + "</style></head><body>"
+                + (stamp == null ? "" : "<div class=\"stamp\">" + esc(stamp) + "</div>")
                 + "<div class=\"head\"><div><div class=\"muted\">" + esc(COMPANY) + "</div>"
                 + "<h1>ĐƠN ĐẶT HÀNG</h1>"
                 + "<div>Mã đơn: <b>" + esc(o.code()) + "</b></div>"
                 + "<div>Ngày tạo: " + dateTime(o.createdAt()) + " · Trạng thái: " + esc(status) + "</div>"
                 + "<div>Người lập: " + esc(o.createdByUsername()) + "</div></div>"
                 + "<div>" + barcode + "</div></div>"
+                + (stamp == null ? "" : "<div class=\"warn\">Đơn " + esc(stamp.toLowerCase()) + " – không dùng làm chứng từ giao hàng"
+                + (o.cancelReason() != null && !o.cancelReason().isBlank() ? ". Lý do: " + esc(o.cancelReason()) : "") + "</div>")
                 + "<div class=\"grid\"><div class=\"box\"><b>Đại lý</b>"
                 + esc(o.customerName()) + " (" + esc(o.customerCode()) + ")<br>"
                 + "Nhóm: " + esc(o.customerGroupLabel()) + "</div>"

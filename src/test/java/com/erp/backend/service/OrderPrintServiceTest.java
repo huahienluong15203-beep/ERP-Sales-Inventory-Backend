@@ -100,6 +100,40 @@ class OrderPrintServiceTest {
     }
 
     @Test
+    @DisplayName("S4-08 (TC408-28): In đơn đã huỷ -> có dấu chìm ĐÃ HUỶ, cảnh báo không dùng làm chứng từ và lý do huỷ")
+    void print_cancelledOrder_hasStampAndWarning() {
+        OrderResponse o = order("Đại lý Minh Phát", null);
+        when(o.status()).thenReturn("CANCELLED");
+        when(o.cancelReason()).thenReturn("Khách đổi ý");
+        when(orderDraftService.getById(100L, rep)).thenReturn(o);
+
+        String html = service.printHtml(100L, false, rep);
+
+        assertThat(html).contains("class=\"stamp\">ĐÃ HUỶ<", "không dùng làm chứng từ giao hàng", "Lý do: Khách đổi ý");
+    }
+
+    @Test
+    @DisplayName("S4-08: Đơn đã duyệt in bình thường, không có dấu chìm")
+    void print_approvedOrder_noStamp() {
+        OrderResponse o = order("Đại lý Minh Phát", null);
+        when(orderDraftService.getById(100L, rep)).thenReturn(o);
+
+        assertThat(service.printHtml(100L, false, rep)).doesNotContain("class=\"stamp\"").doesNotContain("class=\"warn\"");
+    }
+
+    @Test
+    @DisplayName("S4-08 (TC408-29): Mã đơn không tạo được mã vạch -> phiếu in báo rõ thay vì để trống")
+    void print_barcodeError_showsNotice() {
+        OrderResponse o = order("Đại lý Minh Phát", null);
+        when(o.code()).thenReturn("ĐH-LỖI-01");
+        when(orderDraftService.getById(100L, rep)).thenReturn(o);
+
+        String html = service.printHtml(100L, false, rep);
+
+        assertThat(html).contains("Không tạo được mã vạch").doesNotContain("<svg");
+    }
+
+    @Test
     @DisplayName("S4-08: Bảng Code 128 đủ 107 ký hiệu, mỗi ký hiệu rộng 11 mô-đun (Stop 13)")
     void code128_tableIsValid() {
         assertThat(Code128Svg.PATTERNS).hasSize(107);
