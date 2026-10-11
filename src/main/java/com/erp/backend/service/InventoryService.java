@@ -54,21 +54,22 @@ public class InventoryService {
             return customer.getDefaultWarehouse();
         }
 
-        String regionCode = customer.getRegion() != null ? customer.getRegion().getCode() : "";
-        String regionName = customer.getRegion() != null ? customer.getRegion().getName() : "";
-        String address = customer.getAddress() != null ? customer.getAddress() : "";
-        String text = (regionCode + " " + regionName + " " + address).toLowerCase();
+        // Khu vực đã gán cho đại lý (MB / MT / MN) quyết định kho; chỉ khi chưa gán khu vực mới đoán theo địa chỉ.
+        // Không dò chuỗi con (vd "Nam Từ Liêm", "Trung Kính" là địa danh Hà Nội, không phải miền Nam / miền Trung).
+        String zone = zoneOfRegion(customer.getRegion());
+        if (zone == null) {
+            zone = zoneOfAddress(customer.getAddress());
+        }
 
         // 1. Miền Trung
-        if (text.contains("mt") || text.contains("trung") || text.contains("đà nẵng") || text.contains("huế") || text.contains("quảng")) {
+        if (ZONE_CENTRAL.equals(zone)) {
             Optional<Warehouse> wh = warehouseRepository.findByCodeIgnoreCase("WH-MT01")
                     .or(() -> findFirstActiveWarehouseMatching("MT", "Trung"));
             if (wh.isPresent()) return wh.get();
         }
 
         // 2. Miền Nam
-        if (text.contains("mn") || text.contains("nam") || text.contains("hồ chí minh") || text.contains("hcm")
-                || text.contains("sài gòn") || text.contains("bình dương") || text.contains("đồng nai") || text.contains("cần thơ")) {
+        if (ZONE_SOUTH.equals(zone)) {
             Optional<Warehouse> wh = warehouseRepository.findByCodeIgnoreCase("WH-MN01")
                     .or(() -> warehouseRepository.findByCodeIgnoreCase("KHO-HCM"))
                     .or(() -> findFirstActiveWarehouseMatching("MN", "Nam", "TP.HCM"));
@@ -81,6 +82,67 @@ public class InventoryService {
                 .or(() -> findFirstActiveWarehouseMatching("MB", "Bắc", "Hà Nội"));
 
         return northWh.orElseGet(this::getDefaultWarehouse);
+    }
+
+    static final String ZONE_NORTH = "MB";
+    static final String ZONE_CENTRAL = "MT";
+    static final String ZONE_SOUTH = "MN";
+
+    /** Địa danh rõ ràng thuộc miền Bắc: có thì giữ miền Bắc dù địa chỉ có tên đường trùng tỉnh miền khác (vd phố Đà Nẵng, Hải Phòng). */
+    private static final List<String> NORTH_PLACES = List.of("mien bac", "ha noi", "hai phong", "bac ninh", "hai duong",
+            "hung yen", "quang ninh", "thai nguyen", "vinh phuc", "nam dinh", "ha nam", "thai binh", "ninh binh");
+    /** Tỉnh / thành miền Trung (viết không dấu, so khớp nguyên cụm từ). */
+    private static final List<String> CENTRAL_PLACES = List.of(
+            "mien trung", "da nang", "tp hue", "thanh pho hue", "thua thien", "quang nam", "quang ngai", "quang binh", "quang tri",
+            "binh dinh", "quy nhon", "phu yen", "khanh hoa", "nha trang", "ninh thuan", "binh thuan", "phan thiet",
+            "nghe an", "ha tinh", "thanh hoa", "kon tum", "gia lai", "pleiku", "dak lak", "dak nong",
+            "buon ma thuot", "lam dong", "da lat");
+    /** Tỉnh / thành miền Nam (viết không dấu, so khớp nguyên cụm từ). */
+    private static final List<String> SOUTH_PLACES = List.of(
+            "mien nam", "ho chi minh", "tp hcm", "tphcm", "hcm", "sai gon", "binh duong", "dong nai", "ba ria",
+            "vung tau", "tay ninh", "binh phuoc", "long an", "tien giang", "ben tre", "tra vinh", "vinh long",
+            "dong thap", "an giang", "kien giang", "can tho", "hau giang", "soc trang", "bac lieu", "ca mau");
+
+    /** Mã khu vực MB / MT / MN, hoặc tên khu vực "Miền Bắc / Trung / Nam"; không xác định được thì null. */
+    static String zoneOfRegion(Region region) {
+        if (region == null) {
+            return null;
+        }
+        String code = region.getCode() != null ? region.getCode().trim().toUpperCase(Locale.ROOT) : "";
+        if (ZONE_NORTH.equals(code) || ZONE_CENTRAL.equals(code) || ZONE_SOUTH.equals(code)) {
+            return code;
+        }
+        String name = normalize(region.getName());
+        if (containsPhrase(name, "mien bac")) return ZONE_NORTH;
+        if (containsPhrase(name, "mien trung")) return ZONE_CENTRAL;
+        if (containsPhrase(name, "mien nam")) return ZONE_SOUTH;
+        return null;
+    }
+
+    /** Đoán miền theo tỉnh / thành trong địa chỉ (so khớp nguyên cụm từ, không dấu); không thấy thì null. */
+    static String zoneOfAddress(String address) {
+        String text = normalize(address);
+        if (text.isEmpty()) {
+            return null;
+        }
+        if (NORTH_PLACES.stream().anyMatch(p -> containsPhrase(text, p))) return ZONE_NORTH;
+        if (SOUTH_PLACES.stream().anyMatch(p -> containsPhrase(text, p))) return ZONE_SOUTH;
+        if (CENTRAL_PLACES.stream().anyMatch(p -> containsPhrase(text, p))) return ZONE_CENTRAL;
+        return null;
+    }
+
+    /** Chữ thường, bỏ dấu tiếng Việt, đổi ký tự không phải chữ / số thành khoảng trắng. */
+    static String normalize(String s) {
+        if (s == null) {
+            return "";
+        }
+        String noMarks = java.text.Normalizer.normalize(s.toLowerCase(Locale.ROOT).replace('đ', 'd'),
+                java.text.Normalizer.Form.NFD).replaceAll("\\p{M}+", "");
+        return " " + noMarks.replaceAll("[^a-z0-9]+", " ").trim() + " ";
+    }
+
+    private static boolean containsPhrase(String normalizedText, String phrase) {
+        return normalizedText.contains(" " + phrase + " ");
     }
 
     private Optional<Warehouse> findFirstActiveWarehouseMatching(String... keywords) {

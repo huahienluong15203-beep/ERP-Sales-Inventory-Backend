@@ -492,6 +492,37 @@ class OrderDraftServiceTest {
     }
 
     @Test
+    @DisplayName("S4-01 (TC38): Nhóm có 2 bảng giá cùng hiệu lực -> SKU chỉ có ở bảng cũ vẫn có giá, khớp với xem trước đơn")
+    void productOptions_multipleEffectivePriceLists_matchesPreview() {
+        PriceList newer = PriceList.builder().id(2L).code("BG-MOI").name("Bảng giá mới").build();
+        PriceList older = PriceList.builder().id(28L).code("PL-QA-TC28").name("Bảng giá QA").build();
+        when(priceListRepository.findEffectiveByCustomerGroup(eq(CustomerGroup.DEALER_LEVEL_1), any()))
+                .thenReturn(List.of(newer, older));
+        Product uom = Product.builder().id(40L).sku("SKU-UOM-1").name("Hàng QA").baseUnit("Cái").status("ACTIVE").build();
+        // SP-COCA có ở cả 2 bảng: lấy giá bảng mới nhất; SKU-UOM-1 chỉ có ở bảng cũ
+        when(priceItemRepository.findByPriceListIdAndKeyword(eq(2L), eq(""), any(Pageable.class)))
+                .thenReturn(List.of(PriceListItem.builder().priceList(newer).product(coca).productSku("SP-COCA")
+                        .productName("Coca lon").price(new BigDecimal("11000")).floorPrice(new BigDecimal("9000")).build()));
+        when(priceItemRepository.findByPriceListIdAndKeyword(eq(28L), eq(""), any(Pageable.class)))
+                .thenReturn(List.of(
+                        PriceListItem.builder().priceList(older).product(coca).productSku("SP-COCA")
+                                .productName("Coca lon").price(new BigDecimal("10000")).build(),
+                        PriceListItem.builder().priceList(older).product(uom).productSku("SKU-UOM-1")
+                                .productName("Hàng QA").price(new BigDecimal("10000")).build()));
+
+        List<ProductOptionResponse> res = service.productOptions(6L, null, rep);
+
+        assertThat(res).extracting(ProductOptionResponse::sku).containsExactly("SKU-UOM-1", "SP-COCA");
+        ProductOptionResponse uomOpt = res.get(0);
+        assertThat(uomOpt.priceAvailable()).isTrue();
+        assertThat(uomOpt.unitPrice()).isEqualByComparingTo("10000");
+        assertThat(uomOpt.priceListCode()).isEqualTo("PL-QA-TC28");
+        ProductOptionResponse cocaOpt = res.get(1);
+        assertThat(cocaOpt.unitPrice()).isEqualByComparingTo("11000");
+        assertThat(cocaOpt.priceListCode()).isEqualTo("BG-MOI");
+    }
+
+    @Test
     @DisplayName("S4-03: Gợi ý sản phẩm kèm tồn khả dụng của kho phục vụ đại lý")
     void productOptions_shouldIncludeStockInfo() {
         when(priceListRepository.findEffectiveByCustomerGroup(eq(CustomerGroup.DEALER_LEVEL_1), any()))
@@ -533,6 +564,58 @@ class OrderDraftServiceTest {
         assertThat(line.isOverStock()).isTrue();
         assertThat(line.availableStock()).isEqualByComparingTo("10");
         assertThat(line.maxAllowedQuantity()).isEqualByComparingTo("0"); // 10 lon / 24 lon mỗi thùng (FLOOR) = 0 thùng
+    }
+
+    private SalesOrder reservedOrder(String status, String reservationStatus) {
+        SalesOrder o = SalesOrder.builder().id(143L).code("DH261010-8XWR").status(status).customer(customer)
+                .reservationStatus(reservationStatus)
+                .reservedWarehouse(Warehouse.builder().id(1L).code("WH-MB01").name("Kho Tổng Miền Bắc").build())
+                .build();
+        o.addLine(SalesOrderLine.builder().lineNo(1).product(coca).productSku("SP-COCA").productName("Coca lon")
+                .unitName("Lon").conversionFactor(BigDecimal.ONE).quantity(new BigDecimal("800")).baseUnit("Lon")
+                .baseQuantity(new BigDecimal("800")).unitPrice(new BigDecimal("10000")).pricePerUnit(new BigDecimal("10000"))
+                .grossAmount(new BigDecimal("8000000")).discountAmount(BigDecimal.ZERO).netAmount(new BigDecimal("8000000"))
+                .build());
+        return o;
+    }
+
+    @Test
+    @DisplayName("S4-03 (S403-22): Đơn vừa chốt đang giữ 800 / 1000 lon -> không tự báo vượt tồn trên chính nó")
+    void toResponse_ownReservation_notOverStock() {
+        // Tồn thực tế 1000, đang giữ 800 (chính là đơn này) -> khả dụng chung 200
+        when(inventoryService.getStockInfo(any(), eq(coca)))
+                .thenReturn(StockInfoDto.of("WH-MB01", "Kho Tổng Miền Bắc", new BigDecimal("1000"), new BigDecimal("800"), new BigDecimal("200")));
+
+        OrderResponse res = service.toResponse(reservedOrder(SalesOrder.STATUS_PENDING_APPROVAL, SalesOrder.RESERVATION_RESERVED));
+
+        OrderLineResponse line = res.lines().get(0);
+        assertThat(line.isOverStock()).isFalse();
+        assertThat(line.availableStock()).isEqualByComparingTo("1000");
+        assertThat(res.warnings()).noneMatch(w -> w.contains("vượt quá tồn khả dụng"));
+    }
+
+    @Test
+    @DisplayName("S4-03: Đơn đã giữ chỗ nhưng tồn bị người khác chiếm thêm vẫn báo đúng khi thật sự thiếu")
+    void toResponse_ownReservation_stillFlagsRealShortage() {
+        // Tồn thực tế 900, giữ chỗ 1000 (800 của đơn này + 200 của đơn khác) -> khả dụng chung -100, cho đơn này 700 < 800
+        when(inventoryService.getStockInfo(any(), eq(coca)))
+                .thenReturn(StockInfoDto.of("WH-MB01", "Kho Tổng Miền Bắc", new BigDecimal("900"), new BigDecimal("1000"), new BigDecimal("-100")));
+
+        OrderResponse res = service.toResponse(reservedOrder(SalesOrder.STATUS_APPROVED, SalesOrder.RESERVATION_RESERVED));
+
+        assertThat(res.lines().get(0).isOverStock()).isTrue();
+    }
+
+    @Test
+    @DisplayName("S4-03: Đơn đã xuất kho / đã huỷ không còn cảnh báo tồn")
+    void toResponse_settledOrder_noStockWarning() {
+        lenient().when(inventoryService.getStockInfo(any(), eq(coca)))
+                .thenReturn(StockInfoDto.of("WH-MB01", "Kho Tổng Miền Bắc", BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
+
+        assertThat(service.toResponse(reservedOrder(SalesOrder.STATUS_DISPATCHED, SalesOrder.RESERVATION_DISPATCHED))
+                .lines().get(0).isOverStock()).isFalse();
+        assertThat(service.toResponse(reservedOrder(SalesOrder.STATUS_CANCELLED, SalesOrder.RESERVATION_RELEASED))
+                .lines().get(0).isOverStock()).isFalse();
     }
 
     // ================================= S4-09: SAO CHÉP ĐƠN HÀNG =================================
