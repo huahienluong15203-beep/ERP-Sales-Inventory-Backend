@@ -45,6 +45,8 @@ public class OrderDraftService {
 
     static final ZoneId VN_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
     static final int MAX_LINES = 200;
+    /** Số dòng giá tối đa lấy từ mỗi bảng giá cho danh sách chọn sản phẩm. */
+    static final int MAX_PRODUCT_OPTIONS = 500;
     static final BigDecimal MAX_QUANTITY = new BigDecimal("1000000");
     private static final String CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -249,14 +251,30 @@ public class OrderDraftService {
         List<ProductOptionResponse> result = new ArrayList<>();
 
         if (!effectivePriceLists.isEmpty()) {
-            PriceList activePriceList = effectivePriceLists.get(0);
-            List<PriceListItem> items = priceItemRepository.findByPriceListIdAndKeyword(
-                    activePriceList.getId(), kw, PageRequest.of(0, 100));
+            // Nhóm có thể có nhiều bảng giá cùng hiệu lực: mỗi SKU lấy giá ở bảng giá mới nhất có chứa SKU đó,
+            // giống hệt cách tính giá khi xem trước / chốt đơn (findPrice), để 2 API luôn khớp nhau.
+            Map<String, PriceListItem> itemBySku = new LinkedHashMap<>();
+            Map<String, PriceList> listBySku = new HashMap<>();
+            for (PriceList priceList : effectivePriceLists) {
+                for (PriceListItem item : priceItemRepository.findByPriceListIdAndKeyword(
+                        priceList.getId(), kw, PageRequest.of(0, MAX_PRODUCT_OPTIONS))) {
+                    if (item.getProductSku() == null) {
+                        continue;
+                    }
+                    String key = item.getProductSku().toUpperCase();
+                    if (itemBySku.putIfAbsent(key, item) == null) {
+                        listBySku.put(key, priceList);
+                    }
+                }
+            }
+            List<PriceListItem> items = new ArrayList<>(itemBySku.values());
+            items.sort(Comparator.comparing(i -> i.getProductSku().toUpperCase()));
 
             Set<String> pricedSkus = new HashSet<>();
             for (PriceListItem item : items) {
                 if (item.getProduct() != null && "ACTIVE".equalsIgnoreCase(item.getProduct().getStatus())) {
                     Product p = item.getProduct();
+                    PriceList activePriceList = listBySku.get(item.getProductSku().toUpperCase());
                     pricedSkus.add(item.getProductSku().toUpperCase());
                     StockInfoDto stock = (inventoryService != null && warehouse != null)
                             ? inventoryService.getStockInfo(warehouse, p) : null;
