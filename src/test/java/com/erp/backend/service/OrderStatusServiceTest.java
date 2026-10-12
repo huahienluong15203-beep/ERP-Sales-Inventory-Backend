@@ -101,7 +101,7 @@ class OrderStatusServiceTest {
         assertThat(approval.getComment()).isEqualTo("Đại lý yêu cầu đổi số lượng, huỷ đơn cũ");
 
         // Kiểm tra ghi audit log
-        verify(auditLogService).record(eq(AuditModule.INVOICE), eq("CANCEL_ORDER"), eq("SALES_ORDER"),
+        verify(auditLogService).record(eq(AuditModule.ORDER), eq("CANCEL_ORDER"), eq("SALES_ORDER"),
                 eq(100L), eq("DH2610-00100"), eq(SalesOrder.STATUS_PENDING_APPROVAL),
                 eq(SalesOrder.STATUS_CANCELLED), eq("Đại lý yêu cầu đổi số lượng, huỷ đơn cũ"), eq(rep));
     }
@@ -309,5 +309,62 @@ class OrderStatusServiceTest {
 
         assertThat(order.getStatus()).isEqualTo(SalesOrder.STATUS_CANCELLED);
         verify(inventoryService).releaseReservedStock(order);
+    }
+
+    @Test
+    @DisplayName("S4-06 (TC406-16): Kho không được huỷ đơn qua API /status -> 403, đơn và tồn giữ nguyên")
+    void transition_warehouseCancelViaStatus_forbidden() {
+        UserDetailsImpl whStaff = actor(20, "ROLE_WAREHOUSE");
+
+        assertThatThrownBy(() -> service.transitionStatus(100L, "CANCELLED", "test", whStaff))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "STATUS_CHANGE_NOT_ALLOWED")
+                .hasFieldOrPropertyWithValue("status", org.springframework.http.HttpStatus.FORBIDDEN);
+        verifyNoInteractions(orderRepository, inventoryService);
+    }
+
+    @Test
+    @DisplayName("S4-06 (TC406-17): NV kinh doanh không tự soạn hàng / xuất kho -> 403, không trừ tồn")
+    void transition_salesRepDispatch_forbidden() {
+        assertThatThrownBy(() -> service.transitionStatus(100L, "PICKING", null, rep))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "STATUS_CHANGE_NOT_ALLOWED");
+        assertThatThrownBy(() -> service.transitionStatus(100L, "DISPATCHED", null, rep))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "STATUS_CHANGE_NOT_ALLOWED");
+        verifyNoInteractions(orderRepository, inventoryService);
+    }
+
+    @Test
+    @DisplayName("S4-06: Nhân viên kho soạn hàng được")
+    void transition_warehousePicking_allowed() {
+        order.setStatus(SalesOrder.STATUS_APPROVED);
+        when(orderRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(order));
+        when(orderRepository.saveAndFlush(any(SalesOrder.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.transitionStatus(100L, "PICKING", null, actor(20, "ROLE_WAREHOUSE"));
+
+        assertThat(order.getStatus()).isEqualTo(SalesOrder.STATUS_PICKING);
+        verify(auditLogService).record(eq(AuditModule.ORDER), eq("CHANGE_STATUS_PICKING"), eq("SALES_ORDER"),
+                eq(100L), any(), eq(SalesOrder.STATUS_APPROVED), eq(SalesOrder.STATUS_PICKING), any(), any());
+    }
+
+    @Test
+    @DisplayName("S4-06 (TC406-21): Giao nhiều hơn số đã đặt -> 400, đơn không chuyển Đã giao")
+    void transition_deliveredMoreThanOrdered_badRequest() {
+        SalesOrderLine line = SalesOrderLine.builder().id(1L).productSku("SP-COCA").unitName("Lon")
+                .quantity(new BigDecimal("10")).build();
+        order.getLines().add(line);
+        order.setStatus(SalesOrder.STATUS_DISPATCHED);
+        when(orderRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(order));
+        com.erp.backend.dto.order.OrderLineDeliveryRequest d = new com.erp.backend.dto.order.OrderLineDeliveryRequest();
+        d.setLineId(1L);
+        d.setDeliveredQuantity(new BigDecimal("15"));
+
+        assertThatThrownBy(() -> service.transitionStatus(100L, "DELIVERED", null, java.util.List.of(d), manager))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "DELIVERED_EXCEEDS_ORDERED");
+        assertThat(order.getStatus()).isEqualTo(SalesOrder.STATUS_DISPATCHED);
+        assertThat(line.getDeliveredQuantity()).isNull();
     }
 }

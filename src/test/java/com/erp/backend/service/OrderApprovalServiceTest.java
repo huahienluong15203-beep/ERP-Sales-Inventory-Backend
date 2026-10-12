@@ -216,7 +216,7 @@ class OrderApprovalServiceTest {
         assertThat(h.getAction()).isEqualTo(SalesOrderApproval.ACTION_APPROVE);
         assertThat(h.getComment()).isEqualTo("Khách quen, đồng ý");
         assertThat(h.getActorFullName()).isEqualTo("Người dùng 3");
-        verify(auditLogService).record(eq(AuditModule.INVOICE), eq("APPROVE_ORDER"), eq("SALES_ORDER"), eq(100L),
+        verify(auditLogService).record(eq(AuditModule.ORDER), eq("APPROVE_ORDER"), eq("SALES_ORDER"), eq(100L),
                 eq("DH261008-AAAA"), eq(SalesOrder.STATUS_PENDING_APPROVAL), eq(SalesOrder.STATUS_APPROVED), any(), eq(manager));
     }
 

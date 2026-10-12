@@ -26,6 +26,7 @@ import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Set;
 
 /**
  * S4-06 / SCRUM-158 & S5-01: Quản lý vòng đời và chuyển trạng thái đơn hàng:
@@ -41,6 +42,10 @@ public class OrderStatusService {
 
     static final ZoneId VN_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
     static final int MAX_COMMENT = 500;
+    /** Huỷ đơn: cùng quyền với POST /api/orders/{id}/cancel (kho không được huỷ đơn). */
+    static final Set<String> CANCEL_ROLES = Set.of("ROLE_ADMIN", "ROLE_SALES_MANAGER", "ROLE_SALES_REP");
+    /** Soạn hàng / xuất kho (trừ tồn thực tế): việc của kho; QL kinh doanh và Admin được làm thay khi cần. NV kinh doanh không. */
+    static final Set<String> WAREHOUSE_STEP_ROLES = Set.of("ROLE_ADMIN", "ROLE_SALES_MANAGER", "ROLE_WAREHOUSE", "ROLE_WH_MANAGER");
 
     private final SalesOrderRepository orderRepository;
     private final SalesOrderApprovalRepository approvalRepository;
@@ -135,9 +140,14 @@ public class OrderStatusService {
         }
         String cleanTarget = targetStatus.trim().toUpperCase();
 
-        // Nếu chuyển sang CANCELLED thì đi theo quy trình huỷ đơn (bắt buộc lý do & nhả tồn)
+        // Nếu chuyển sang CANCELLED thì đi theo quy trình huỷ đơn (bắt buộc lý do & nhả tồn).
+        // Phải kiểm quyền như API /cancel, không để kho lách quyền huỷ đơn qua API /status.
         if (SalesOrder.STATUS_CANCELLED.equals(cleanTarget)) {
+            requireAnyRole(actor, CANCEL_ROLES, "Bạn không có quyền huỷ đơn hàng");
             return cancel(id, note, actor);
+        }
+        if (SalesOrder.STATUS_PICKING.equals(cleanTarget) || SalesOrder.STATUS_DISPATCHED.equals(cleanTarget)) {
+            requireAnyRole(actor, WAREHOUSE_STEP_ROLES, "Soạn hàng và xuất kho do bộ phận kho thực hiện");
         }
 
         SalesOrder order = orderRepository.findByIdForUpdate(id)
@@ -240,6 +250,14 @@ public class OrderStatusService {
                 throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_DELIVERED_QUANTITY",
                         "Số lượng thực giao không được để trống hoặc âm", "deliveredQuantity");
             }
+            // Không giao nhiều hơn số đã đặt / đã xuất kho
+            if (targetLine.getQuantity() != null && req.getDeliveredQuantity().compareTo(targetLine.getQuantity()) > 0) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST, "DELIVERED_EXCEEDS_ORDERED",
+                        "Dòng " + targetLine.getProductSku() + ": số thực giao ("
+                                + req.getDeliveredQuantity().stripTrailingZeros().toPlainString() + ") vượt số lượng đặt ("
+                                + targetLine.getQuantity().stripTrailingZeros().toPlainString() + " " + targetLine.getUnitName() + ")",
+                        "deliveredQuantity");
+            }
 
             targetLine.setDeliveredQuantity(req.getDeliveredQuantity());
             if (StringUtils.hasText(req.getShortageReason())) {
@@ -247,6 +265,14 @@ public class OrderStatusService {
             } else if (req.getDeliveredQuantity().compareTo(targetLine.getQuantity()) >= 0) {
                 targetLine.setShortageReason(null);
             }
+        }
+    }
+
+    private static void requireAnyRole(UserDetailsImpl actor, Set<String> roles, String message) {
+        boolean ok = actor != null && actor.getAuthorities() != null
+                && actor.getAuthorities().stream().anyMatch(a -> roles.contains(a.getAuthority()));
+        if (!ok) {
+            throw new BusinessException(HttpStatus.FORBIDDEN, "STATUS_CHANGE_NOT_ALLOWED", message, "status");
         }
     }
 
@@ -297,7 +323,7 @@ public class OrderStatusService {
 
     private void audit(SalesOrder order, String action, String fromStatus, String toStatus, String comment,
                        UserDetailsImpl actor) {
-        auditLogService.record(AuditModule.INVOICE, action, "SALES_ORDER", order.getId(), order.getCode(),
+        auditLogService.record(AuditModule.ORDER, action, "SALES_ORDER", order.getId(), order.getCode(),
                 fromStatus, toStatus, comment, actor);
         markAuditLogged();
     }

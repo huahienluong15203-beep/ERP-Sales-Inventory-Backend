@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
  * - DEBT_LIMIT: Hạn mức công nợ, số ngày nợ, khóa/mở giao dịch đại lý
  * - INVOICE: Hóa đơn, thanh toán, công nợ
  * - CUSTOMER: Hồ sơ đại lý
+ * - ORDER: Đơn hàng bán (chốt, duyệt, chuyển trạng thái, huỷ, sao chép)
  */
 @Getter
 public enum AuditModule {
@@ -17,7 +18,8 @@ public enum AuditModule {
     PRICING("Bảng giá"),
     DEBT_LIMIT("Hạn mức công nợ"),
     INVOICE("Hóa đơn"),
-    CUSTOMER("Đại lý");
+    CUSTOMER("Đại lý"),
+    ORDER("Đơn hàng");
 
     private final String label;
 

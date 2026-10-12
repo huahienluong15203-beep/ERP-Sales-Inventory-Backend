@@ -206,7 +206,7 @@ public class OrderDraftService {
 
         if (auditLogService != null) {
             auditLogService.record(
-                    AuditModule.INVOICE,
+                    AuditModule.ORDER,
                     "COPY_ORDER",
                     "SALES_ORDER",
                     saved.getId(),

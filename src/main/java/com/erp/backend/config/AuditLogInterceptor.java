@@ -106,7 +106,10 @@ public class AuditLogInterceptor implements HandlerInterceptor {
         if (lower.contains("/pricing") || lower.contains("/prices") || lower.contains("/cost-price")) {
             return AuditModule.PRICING;
         }
-        if (lower.contains("/invoices") || lower.contains("/orders")) {
+        if (lower.contains("/orders")) {
+            return AuditModule.ORDER;
+        }
+        if (lower.contains("/invoices")) {
             return AuditModule.INVOICE;
         }
         return null;

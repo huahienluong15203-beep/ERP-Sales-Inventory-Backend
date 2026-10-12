@@ -30,7 +30,7 @@ public class AuditLog {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    // Phân hệ: INVENTORY, PRICING, DEBT_LIMIT, INVOICE, CUSTOMER
+    // Phân hệ: INVENTORY, PRICING, DEBT_LIMIT, INVOICE, CUSTOMER, ORDER
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
     private AuditModule module;

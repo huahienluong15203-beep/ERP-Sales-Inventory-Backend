@@ -4,6 +4,7 @@ import com.erp.backend.dto.inventory.transfer.*;
 import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.*;
+import com.erp.backend.config.AuditLogInterceptor;
 import com.erp.backend.security.UserDetailsImpl;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -13,6 +14,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -32,6 +35,7 @@ public class StockTransferService {
     private final ProductRepository productRepository;
     private final InventoryRepository inventoryRepository;
     private final UserRepository userRepository;
+    private final AuditLogService auditLogService;
 
     /**
      * S5-07: Tìm kiếm danh sách phiếu chuyển kho theo bộ lọc.
@@ -96,6 +100,8 @@ public class StockTransferService {
         Warehouse sourceWh = warehouseRepository.findByCodeIgnoreCase(payload.getSourceWarehouseCode())
                 .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST, "SOURCE_WAREHOUSE_NOT_FOUND",
                         "Không tìm thấy kho xuất với mã " + payload.getSourceWarehouseCode()));
+
+        assertAssignedWarehouse(actor, sourceWh, "lập phiếu chuyển từ");
 
         if (!"ACTIVE".equalsIgnoreCase(sourceWh.getStatus())) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "SOURCE_WAREHOUSE_INACTIVE",
@@ -162,7 +168,12 @@ public class StockTransferService {
                     .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST, "PRODUCT_NOT_FOUND",
                             "Không tìm thấy sản phẩm ID " + lineReq.getProductId()));
 
-            BigDecimal transferQty = lineReq.getTransferQuantity();
+            // Quy đổi về ĐVT cơ sở: sổ tồn luôn lưu theo ĐVT cơ sở (vd 2 Thùng x 24 = 48 Lon)
+            BigDecimal factor = conversionFactor(product, lineReq.getUnit());
+            BigDecimal transferQty = lineReq.getTransferQuantity().multiply(factor).stripTrailingZeros();
+            if (transferQty.scale() < 0) {
+                transferQty = transferQty.setScale(0);
+            }
 
             // Kiểm tra tồn khả dụng tại kho đi
             Inventory sourceInv = inventoryRepository.findByWarehouseIdAndProductIdForUpdate(sourceWh.getId(), product.getId())
@@ -192,7 +203,7 @@ public class StockTransferService {
                     .productSku(product.getSku())
                     .productName(product.getName())
                     .category(product.getCategory())
-                    .unit(StringUtils.hasText(lineReq.getUnit()) ? lineReq.getUnit() : product.getBaseUnit())
+                    .unit(product.getBaseUnit())
                     .sourceAvailableStock(available)
                     .transferQuantity(transferQty)
                     .batchNumber(StringUtils.hasText(lineReq.getBatchNumber()) ? lineReq.getBatchNumber().trim() : null)
@@ -203,12 +214,16 @@ public class StockTransferService {
 
             // AC2: Nếu xuất kho ngay (IN_TRANSIT) -> trừ tồn kho nguồn ngay, CHƯA cộng kho đến
             if (StockTransfer.STATUS_IN_TRANSIT.equalsIgnoreCase(targetStatus)) {
+                BigDecimal before = sourceInv.getPhysicalStock();
                 sourceInv.setPhysicalStock(sourceInv.getPhysicalStock().subtract(transferQty));
                 inventoryRepository.save(sourceInv);
+                auditStock("TRANSFER_DISPATCH", sourceInv, sourceWh, product.getSku(), before,
+                        "Xuất chuyển kho phiếu " + code + " sang " + destWh.getCode(), actor);
             }
         }
 
         StockTransfer saved = stockTransferRepository.save(transfer);
+        markAuditLogged();
         log.info("S5-07: Đã tạo phiếu chuyển kho {} từ {} sang {}, trạng thái: {}",
                 saved.getCode(), saved.getSourceWarehouseCode(), saved.getDestWarehouseCode(), saved.getStatus());
 
@@ -221,7 +236,7 @@ public class StockTransferService {
      */
     @Transactional
     public StockTransferResponse dispatchTransfer(Long id, UserDetailsImpl actor) {
-        StockTransfer transfer = stockTransferRepository.findById(id)
+        StockTransfer transfer = stockTransferRepository.findByIdForUpdate(id)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND, "TRANSFER_NOT_FOUND",
                         "Không tìm thấy phiếu chuyển kho với ID " + id));
 
@@ -231,6 +246,7 @@ public class StockTransferService {
         }
 
         Warehouse sourceWh = transfer.getSourceWarehouse();
+        assertAssignedWarehouse(actor, sourceWh, "xuất kho từ");
 
         for (StockTransferLine line : transfer.getLines()) {
             Product product = line.getProduct();
@@ -249,14 +265,18 @@ public class StockTransferService {
             }
 
             // Trừ tồn kho nguồn
+            BigDecimal before = sourceInv.getPhysicalStock();
             sourceInv.setPhysicalStock(sourceInv.getPhysicalStock().subtract(transferQty));
             inventoryRepository.save(sourceInv);
+            auditStock("TRANSFER_DISPATCH", sourceInv, sourceWh, line.getProductSku(), before,
+                    "Xuất chuyển kho phiếu " + transfer.getCode() + " sang " + transfer.getDestWarehouseCode(), actor);
         }
 
         transfer.setStatus(StockTransfer.STATUS_IN_TRANSIT);
         transfer.setDispatchedAt(LocalDateTime.now());
 
         StockTransfer saved = stockTransferRepository.save(transfer);
+        markAuditLogged();
         log.info("S5-07: Đã xuất kho phiếu chuyển kho {} (AC2: Trừ kho đi, ghi nhận Đang trên đường)", saved.getCode());
         return toResponse(saved);
     }
@@ -268,7 +288,7 @@ public class StockTransferService {
      */
     @Transactional
     public StockTransferResponse receiveTransfer(Long id, ReceiveTransferPayload payload, UserDetailsImpl actor) {
-        StockTransfer transfer = stockTransferRepository.findById(id)
+        StockTransfer transfer = stockTransferRepository.findByIdForUpdate(id)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND, "TRANSFER_NOT_FOUND",
                         "Không tìm thấy phiếu chuyển kho với ID " + id));
 
@@ -278,6 +298,7 @@ public class StockTransferService {
         }
 
         Warehouse destWh = transfer.getDestWarehouse();
+        assertAssignedWarehouse(actor, destWh, "nhận hàng vào");
         boolean hasDiscrepancy = false;
 
         Map<String, ReceiveTransferLineItem> receivedMap = new HashMap<>();
@@ -297,6 +318,12 @@ public class StockTransferService {
             if (receivedQty.compareTo(BigDecimal.ZERO) < 0) {
                 throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_RECEIVED_QUANTITY",
                         "Số lượng nhận không được âm");
+            }
+            if (receivedQty.compareTo(line.getTransferQuantity()) > 0) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST, "RECEIVED_EXCEEDS_TRANSFERRED",
+                        "Mặt hàng [" + line.getProductName() + "]: số nhận (" + receivedQty.stripTrailingZeros().toPlainString()
+                                + ") vượt số đã chuyển (" + line.getTransferQuantity().stripTrailingZeros().toPlainString()
+                                + " " + line.getUnit() + ")");
             }
 
             BigDecimal diff = line.getTransferQuantity().subtract(receivedQty);
@@ -336,8 +363,13 @@ public class StockTransferService {
                         return inventoryRepository.save(newInv);
                     });
 
+            BigDecimal before = destInv.getPhysicalStock();
             destInv.setPhysicalStock(destInv.getPhysicalStock().add(receivedQty));
             inventoryRepository.save(destInv);
+            auditStock("TRANSFER_RECEIVE", destInv, destWh, line.getProductSku(), before,
+                    "Nhận hàng phiếu chuyển " + transfer.getCode() + " từ " + transfer.getSourceWarehouseCode()
+                            + (diff.signum() != 0 ? " (chênh lệch " + diff.stripTrailingZeros().toPlainString()
+                            + (StringUtils.hasText(reason) ? ": " + reason.trim() : "") + ")" : ""), actor);
 
             // Cập nhật lô hàng tại kho đích nếu có số lô
             if (StringUtils.hasText(line.getBatchNumber())) {
@@ -367,8 +399,65 @@ public class StockTransferService {
         }
 
         StockTransfer saved = stockTransferRepository.save(transfer);
+        markAuditLogged();
         log.info("S5-07: Kho đến đã xác nhận nhận hàng cho phiếu {} (Trạng thái: {})", saved.getCode(), saved.getStatus());
         return toResponse(saved);
+    }
+
+    /** Nhân viên kho (không phải QL kho / Admin) chỉ thao tác trên kho mình được phân công. */
+    private void assertAssignedWarehouse(UserDetailsImpl actor, Warehouse warehouse, String action) {
+        if (actor == null || actor.getAuthorities() == null || warehouse == null) {
+            return;
+        }
+        Set<String> roles = new HashSet<>();
+        actor.getAuthorities().forEach(a -> roles.add(a.getAuthority()));
+        if (roles.contains("ROLE_ADMIN") || roles.contains("ROLE_WH_MANAGER") || !roles.contains("ROLE_WAREHOUSE")) {
+            return;
+        }
+        boolean assigned = userRepository.findById(actor.getId())
+                .map(u -> u.getWarehouses().stream().anyMatch(w -> Objects.equals(w.getId(), warehouse.getId())))
+                .orElse(false);
+        if (!assigned) {
+            throw new BusinessException(HttpStatus.FORBIDDEN, "TRANSFER_WAREHOUSE_NOT_ASSIGNED",
+                    "Bạn không được phân công kho " + warehouse.getName() + " nên không thể " + action + " kho này");
+        }
+    }
+
+    /** Nhật ký tồn kho trước / sau cho từng dòng (quy tắc 9). */
+    private void auditStock(String action, Inventory inv, Warehouse warehouse, String sku, BigDecimal before,
+                            String reason, UserDetailsImpl actor) {
+        auditLogService.record(AuditModule.INVENTORY, action, "INVENTORY", inv.getId(),
+                warehouse.getCode() + ":" + sku, plain(before), plain(inv.getPhysicalStock()), reason, actor);
+    }
+
+    private static String plain(BigDecimal v) {
+        return v == null ? null : v.stripTrailingZeros().toPlainString();
+    }
+
+    private static void markAuditLogged() {
+        try {
+            ServletRequestAttributes attributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+            if (attributes != null && attributes.getRequest() != null) {
+                attributes.getRequest().setAttribute(AuditLogInterceptor.AUDIT_LOGGED_ATTR, Boolean.TRUE);
+            }
+        } catch (Exception ignored) {
+            // ngoài HTTP request (test) thì bỏ qua
+        }
+    }
+
+    /** Hệ số quy đổi của ĐVT nhập về ĐVT cơ sở; ĐVT trống hoặc trùng ĐVT cơ sở = 1; ĐVT lạ -> 400. */
+    static BigDecimal conversionFactor(Product product, String unit) {
+        if (!StringUtils.hasText(unit) || unit.trim().equalsIgnoreCase(product.getBaseUnit())) {
+            return BigDecimal.ONE;
+        }
+        return product.getUnitConversions().stream()
+                .filter(c -> !"INACTIVE".equalsIgnoreCase(c.getStatus()))
+                .filter(c -> c.getUnitName() != null && c.getUnitName().trim().equalsIgnoreCase(unit.trim()))
+                .map(ProductUnitConversion::getConversionFactor)
+                .filter(f -> f != null && f.signum() > 0)
+                .findFirst()
+                .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_UNIT",
+                        "Mặt hàng [" + product.getName() + "] không có đơn vị tính '" + unit.trim() + "'"));
     }
 
     private synchronized String generateTransferCode(LocalDate date) {
