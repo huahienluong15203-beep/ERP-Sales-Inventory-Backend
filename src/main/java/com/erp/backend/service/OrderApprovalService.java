@@ -286,7 +286,7 @@ public class OrderApprovalService {
     }
 
     private void audit(SalesOrder order, String action, String fromStatus, String comment, UserDetailsImpl actor) {
-        auditLogService.record(AuditModule.INVOICE, action, "SALES_ORDER", order.getId(), order.getCode(),
+        auditLogService.record(AuditModule.ORDER, action, "SALES_ORDER", order.getId(), order.getCode(),
                 fromStatus, order.getStatus(), comment, actor);
         markAuditLogged();
     }

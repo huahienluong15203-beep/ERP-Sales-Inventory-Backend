@@ -669,7 +669,7 @@ class OrderDraftServiceTest {
         // Bảng giá hiện hành: 10,000 / lon * 24 = 240,000 / thùng (khác với 120,000 cũ)
         assertThat(copiedLine.pricePerUnit()).isEqualByComparingTo("240000");
 
-        verify(auditLogService).record(eq(AuditModule.INVOICE), eq("COPY_ORDER"), eq("SALES_ORDER"),
+        verify(auditLogService).record(eq(AuditModule.ORDER), eq("COPY_ORDER"), eq("SALES_ORDER"),
                 eq(100L), any(), eq("DH261001-OLD1"), any(), contains("DH261001-OLD1"), eq(rep));
     }
 
