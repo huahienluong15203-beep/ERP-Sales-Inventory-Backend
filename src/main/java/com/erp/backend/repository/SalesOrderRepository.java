@@ -37,6 +37,12 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, Long>, J
     BigDecimal sumTotalAmountByCustomerAndStatuses(@Param("customerId") Long customerId,
                                                    @Param("statuses") Collection<String> statuses);
 
+    /** S4-02: Tổng tiền các đơn đang tính vào công nợ theo danh sách đại lý (dùng để nạp công nợ hàng loạt cho danh sách). */
+    @Query("select o.customer.id, coalesce(sum(o.totalAmount), 0) from SalesOrder o "
+            + "where o.customer.id in :customerIds and o.status in :statuses group by o.customer.id")
+    List<Object[]> sumTotalAmountByCustomerIdsAndStatuses(@Param("customerIds") Collection<Long> customerIds,
+                                                           @Param("statuses") Collection<String> statuses);
+
     /** S4-02: Tổng tiền các đơn nợ đã quá hạn (duyệt trước mốc dueBefore). */
     @Query("select coalesce(sum(o.totalAmount), 0) from SalesOrder o "
             + "where o.customer.id = :customerId and o.status in :statuses and o.approvedAt < :dueBefore")
