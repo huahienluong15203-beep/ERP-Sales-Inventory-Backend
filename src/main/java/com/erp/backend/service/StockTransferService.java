@@ -162,7 +162,12 @@ public class StockTransferService {
                     .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST, "PRODUCT_NOT_FOUND",
                             "Không tìm thấy sản phẩm ID " + lineReq.getProductId()));
 
-            BigDecimal transferQty = lineReq.getTransferQuantity();
+            // Quy đổi về ĐVT cơ sở: sổ tồn luôn lưu theo ĐVT cơ sở (vd 2 Thùng x 24 = 48 Lon)
+            BigDecimal factor = conversionFactor(product, lineReq.getUnit());
+            BigDecimal transferQty = lineReq.getTransferQuantity().multiply(factor).stripTrailingZeros();
+            if (transferQty.scale() < 0) {
+                transferQty = transferQty.setScale(0);
+            }
 
             // Kiểm tra tồn khả dụng tại kho đi
             Inventory sourceInv = inventoryRepository.findByWarehouseIdAndProductIdForUpdate(sourceWh.getId(), product.getId())
@@ -192,7 +197,7 @@ public class StockTransferService {
                     .productSku(product.getSku())
                     .productName(product.getName())
                     .category(product.getCategory())
-                    .unit(StringUtils.hasText(lineReq.getUnit()) ? lineReq.getUnit() : product.getBaseUnit())
+                    .unit(product.getBaseUnit())
                     .sourceAvailableStock(available)
                     .transferQuantity(transferQty)
                     .batchNumber(StringUtils.hasText(lineReq.getBatchNumber()) ? lineReq.getBatchNumber().trim() : null)
@@ -221,7 +226,7 @@ public class StockTransferService {
      */
     @Transactional
     public StockTransferResponse dispatchTransfer(Long id, UserDetailsImpl actor) {
-        StockTransfer transfer = stockTransferRepository.findById(id)
+        StockTransfer transfer = stockTransferRepository.findByIdForUpdate(id)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND, "TRANSFER_NOT_FOUND",
                         "Không tìm thấy phiếu chuyển kho với ID " + id));
 
@@ -268,7 +273,7 @@ public class StockTransferService {
      */
     @Transactional
     public StockTransferResponse receiveTransfer(Long id, ReceiveTransferPayload payload, UserDetailsImpl actor) {
-        StockTransfer transfer = stockTransferRepository.findById(id)
+        StockTransfer transfer = stockTransferRepository.findByIdForUpdate(id)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND, "TRANSFER_NOT_FOUND",
                         "Không tìm thấy phiếu chuyển kho với ID " + id));
 
@@ -297,6 +302,12 @@ public class StockTransferService {
             if (receivedQty.compareTo(BigDecimal.ZERO) < 0) {
                 throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_RECEIVED_QUANTITY",
                         "Số lượng nhận không được âm");
+            }
+            if (receivedQty.compareTo(line.getTransferQuantity()) > 0) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST, "RECEIVED_EXCEEDS_TRANSFERRED",
+                        "Mặt hàng [" + line.getProductName() + "]: số nhận (" + receivedQty.stripTrailingZeros().toPlainString()
+                                + ") vượt số đã chuyển (" + line.getTransferQuantity().stripTrailingZeros().toPlainString()
+                                + " " + line.getUnit() + ")");
             }
 
             BigDecimal diff = line.getTransferQuantity().subtract(receivedQty);
@@ -369,6 +380,21 @@ public class StockTransferService {
         StockTransfer saved = stockTransferRepository.save(transfer);
         log.info("S5-07: Kho đến đã xác nhận nhận hàng cho phiếu {} (Trạng thái: {})", saved.getCode(), saved.getStatus());
         return toResponse(saved);
+    }
+
+    /** Hệ số quy đổi của ĐVT nhập về ĐVT cơ sở; ĐVT trống hoặc trùng ĐVT cơ sở = 1; ĐVT lạ -> 400. */
+    static BigDecimal conversionFactor(Product product, String unit) {
+        if (!StringUtils.hasText(unit) || unit.trim().equalsIgnoreCase(product.getBaseUnit())) {
+            return BigDecimal.ONE;
+        }
+        return product.getUnitConversions().stream()
+                .filter(c -> !"INACTIVE".equalsIgnoreCase(c.getStatus()))
+                .filter(c -> c.getUnitName() != null && c.getUnitName().trim().equalsIgnoreCase(unit.trim()))
+                .map(ProductUnitConversion::getConversionFactor)
+                .filter(f -> f != null && f.signum() > 0)
+                .findFirst()
+                .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_UNIT",
+                        "Mặt hàng [" + product.getName() + "] không có đơn vị tính '" + unit.trim() + "'"));
     }
 
     private synchronized String generateTransferCode(LocalDate date) {

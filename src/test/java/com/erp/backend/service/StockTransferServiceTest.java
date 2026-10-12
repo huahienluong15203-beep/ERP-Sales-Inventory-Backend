@@ -94,10 +94,12 @@ class StockTransferServiceTest {
             return t;
         });
 
+        sampleProduct.addUnitConversion(ProductUnitConversion.builder().id(5L).unitName("Thùng")
+                .conversionFactor(new BigDecimal("24")).status("ACTIVE").build());
         CreateStockTransferLinePayload line = CreateStockTransferLinePayload.builder()
                 .productId(10L)
                 .unit("Thùng")
-                .transferQuantity(BigDecimal.valueOf(100))
+                .transferQuantity(BigDecimal.valueOf(10))
                 .build();
 
         CreateStockTransferPayload req = CreateStockTransferPayload.builder()
@@ -118,6 +120,76 @@ class StockTransferServiceTest {
 
         // Chưa xuất kho nên tồn kho nguồn chưa bị trừ
         assertThat(sourceInventory.getPhysicalStock()).isEqualByComparingTo(BigDecimal.valueOf(500));
+        // Dòng phiếu lưu theo ĐVT cơ sở: 10 Thùng x 24 = 240 Lon
+        assertThat(res.getLines().get(0).getUnit()).isEqualTo("Lon");
+        assertThat(res.getLines().get(0).getTransferQuantity()).isEqualByComparingTo("240");
+    }
+
+    @Test
+    @DisplayName("S5-07 (TC507-14): Lập và xuất ngay 2 Thùng -> kho đi trừ 48 Lon (quy đổi ĐVT cơ sở)")
+    void createTransfer_inTransit_convertsUnitToBase() {
+        sampleProduct.addUnitConversion(ProductUnitConversion.builder().id(5L).unitName("Thùng")
+                .conversionFactor(new BigDecimal("24")).status("ACTIVE").build());
+        when(warehouseRepository.findByCodeIgnoreCase("WH-MB01")).thenReturn(Optional.of(sourceWh));
+        when(warehouseRepository.findByCodeIgnoreCase("WH-MT01")).thenReturn(Optional.of(destWh));
+        when(productRepository.findById(10L)).thenReturn(Optional.of(sampleProduct));
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(1L, 10L)).thenReturn(Optional.of(sourceInventory));
+        when(stockTransferRepository.findCodesByPrefix(anyString())).thenReturn(Collections.emptyList());
+        when(stockTransferRepository.save(any(StockTransfer.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        CreateStockTransferPayload req = CreateStockTransferPayload.builder()
+                .sourceWarehouseCode("WH-MB01").destWarehouseCode("WH-MT01").transferDate("2026-10-12")
+                .status("IN_TRANSIT")
+                .lines(List.of(CreateStockTransferLinePayload.builder().productId(10L).unit("thùng")
+                        .transferQuantity(BigDecimal.valueOf(2)).build()))
+                .build();
+
+        stockTransferService.createTransfer(req, whStaffActor);
+
+        assertThat(sourceInventory.getPhysicalStock()).isEqualByComparingTo("452");
+    }
+
+    @Test
+    @DisplayName("S5-07: ĐVT không có trong danh mục của sản phẩm -> 400 INVALID_UNIT")
+    void createTransfer_unknownUnit_badRequest() {
+        when(warehouseRepository.findByCodeIgnoreCase("WH-MB01")).thenReturn(Optional.of(sourceWh));
+        when(warehouseRepository.findByCodeIgnoreCase("WH-MT01")).thenReturn(Optional.of(destWh));
+        when(productRepository.findById(10L)).thenReturn(Optional.of(sampleProduct));
+        when(stockTransferRepository.findCodesByPrefix(anyString())).thenReturn(Collections.emptyList());
+
+        CreateStockTransferPayload req = CreateStockTransferPayload.builder()
+                .sourceWarehouseCode("WH-MB01").destWarehouseCode("WH-MT01").transferDate("2026-10-12")
+                .lines(List.of(CreateStockTransferLinePayload.builder().productId(10L).unit("Két")
+                        .transferQuantity(BigDecimal.ONE).build()))
+                .build();
+
+        assertThatThrownBy(() -> stockTransferService.createTransfer(req, whStaffActor))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "INVALID_UNIT");
+    }
+
+    @Test
+    @DisplayName("S5-07 (TC507-15): Nhận nhiều hơn số đã chuyển -> 400, kho đến không được cộng")
+    void receiveTransfer_moreThanTransferred_badRequest() {
+        StockTransferLine line = StockTransferLine.builder().id(1L).product(sampleProduct)
+                .productSku(sampleProduct.getSku()).productName(sampleProduct.getName()).unit("Lon")
+                .transferQuantity(BigDecimal.valueOf(10)).build();
+        StockTransfer transfer = StockTransfer.builder().id(50L).code("TRF-202610-001").sourceWarehouse(sourceWh)
+                .destWarehouse(destWh).status(StockTransfer.STATUS_IN_TRANSIT)
+                .lines(new ArrayList<>(List.of(line))).build();
+        line.setStockTransfer(transfer);
+        when(stockTransferRepository.findByIdForUpdate(50L)).thenReturn(Optional.of(transfer));
+
+        ReceiveTransferPayload payload = ReceiveTransferPayload.builder()
+                .receivedLines(List.of(ReceiveTransferLineItem.builder().lineId("1")
+                        .receivedQuantity(BigDecimal.valueOf(12)).discrepancyReason("Thừa 2").build()))
+                .build();
+
+        assertThatThrownBy(() -> stockTransferService.receiveTransfer(50L, payload, whStaffActor))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "RECEIVED_EXCEEDS_TRANSFERRED");
+        verify(inventoryRepository, never()).save(any(Inventory.class));
+        assertThat(transfer.getStatus()).isEqualTo(StockTransfer.STATUS_IN_TRANSIT);
     }
 
     @Test
@@ -183,7 +255,7 @@ class StockTransferServiceTest {
                 .build();
         line.setStockTransfer(transfer);
 
-        when(stockTransferRepository.findById(50L)).thenReturn(Optional.of(transfer));
+        when(stockTransferRepository.findByIdForUpdate(50L)).thenReturn(Optional.of(transfer));
         when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(1L, 10L)).thenReturn(Optional.of(sourceInventory));
         when(stockTransferRepository.save(any(StockTransfer.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -230,7 +302,7 @@ class StockTransferServiceTest {
                 .reservedStock(BigDecimal.ZERO)
                 .build();
 
-        when(stockTransferRepository.findById(50L)).thenReturn(Optional.of(transfer));
+        when(stockTransferRepository.findByIdForUpdate(50L)).thenReturn(Optional.of(transfer));
         when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(2L, 10L)).thenReturn(Optional.of(destInventory));
         when(stockTransferRepository.save(any(StockTransfer.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -274,7 +346,7 @@ class StockTransferServiceTest {
                 .build();
         line.setStockTransfer(transfer);
 
-        when(stockTransferRepository.findById(50L)).thenReturn(Optional.of(transfer));
+        when(stockTransferRepository.findByIdForUpdate(50L)).thenReturn(Optional.of(transfer));
 
         // Nhận 95/100 (thiếu 5 lon) nhưng không nhập lý do
         ReceiveTransferPayload payload = ReceiveTransferPayload.builder()
@@ -323,7 +395,7 @@ class StockTransferServiceTest {
                 .physicalStock(BigDecimal.ZERO)
                 .build();
 
-        when(stockTransferRepository.findById(50L)).thenReturn(Optional.of(transfer));
+        when(stockTransferRepository.findByIdForUpdate(50L)).thenReturn(Optional.of(transfer));
         when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(2L, 10L)).thenReturn(Optional.of(destInventory));
         when(stockTransferRepository.save(any(StockTransfer.class))).thenAnswer(inv -> inv.getArgument(0));
 
