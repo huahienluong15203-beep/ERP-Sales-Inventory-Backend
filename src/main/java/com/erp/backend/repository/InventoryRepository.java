@@ -40,4 +40,6 @@ public interface InventoryRepository extends JpaRepository<Inventory, Long>, Jpa
     @Query("SELECT i FROM Inventory i WHERE LOWER(i.warehouse.code) = LOWER(:warehouseCode) AND LOWER(i.product.sku) = LOWER(:productSku)")
     Optional<Inventory> findByWarehouseCodeAndProductSkuForUpdate(@Param("warehouseCode") String warehouseCode,
                                                                  @Param("productSku") String productSku);
+
+    boolean existsByWarehouse_Id(Long warehouseId);
 }

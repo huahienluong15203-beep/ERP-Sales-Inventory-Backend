@@ -804,4 +804,16 @@ class CustomerServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting("status").isEqualTo(HttpStatus.NOT_FOUND);
     }
+
+    @Test
+    @DisplayName("Mục 12: NV kinh doanh kiểm tra tạo đơn của đại lý người khác -> 404, không lộ hạn mức")
+    void checkOrderCreation_otherRepsCustomer_notFound() {
+        Customer c = customer(1L, salesRep(50L));
+        when(customerRepository.findById(1L)).thenReturn(Optional.of(c));
+        UserDetailsImpl otherRep = actor(51L, "ROLE_SALES_REP");
+
+        assertThatThrownBy(() -> service.checkOrderCreation(1L, otherRep))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("CUSTOMER_NOT_FOUND");
+    }
 }

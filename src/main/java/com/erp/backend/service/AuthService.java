@@ -261,11 +261,14 @@ public class AuthService {
 
         // Đổi mật khẩu thành công: Hash BCrypt và reset trạng thái khoá
         User user = resetToken.getUser();
+        // Mục 12 (S1-10): chỉ mở khoá tạm 15 phút do nhập sai mật khẩu (có lockUntil).
+        // Tài khoản bị Admin khoá (không có lockUntil) vẫn giữ nguyên khoá dù đổi mật khẩu qua email.
+        boolean tempLocked = "LOCKED".equalsIgnoreCase(user.getStatus()) && user.getLockUntil() != null;
         user.setPassword(passwordEncoder.encode(newPassword));
         user.setFailedLoginAttempts(0);
-        user.setLockUntil(null);
-        if ("LOCKED".equalsIgnoreCase(user.getStatus())) {
+        if (tempLocked) {
             user.setStatus("ACTIVE");
+            user.setLockUntil(null);
         }
         userRepository.save(user);
 

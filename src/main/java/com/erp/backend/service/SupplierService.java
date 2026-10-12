@@ -7,6 +7,8 @@ import com.erp.backend.dto.supplier.SupplierResponse;
 import com.erp.backend.dto.user.PageResponse;
 import com.erp.backend.entity.Supplier;
 import com.erp.backend.exception.BusinessException;
+import com.erp.backend.repository.GoodsReceiptRepository;
+import com.erp.backend.repository.ProductLotRepository;
 import com.erp.backend.repository.SupplierRepository;
 import com.erp.backend.repository.SupplierSpecifications;
 import lombok.RequiredArgsConstructor;
@@ -33,6 +35,8 @@ public class SupplierService {
     static final String INACTIVE = "INACTIVE";
 
     private final SupplierRepository supplierRepository;
+    private final GoodsReceiptRepository goodsReceiptRepository;
+    private final ProductLotRepository productLotRepository;
 
     @Transactional(readOnly = true)
     public PageResponse<SupplierResponse> search(String keyword, String status, int page, int size) {
@@ -111,6 +115,12 @@ public class SupplierService {
     @Transactional
     public void delete(Long id) {
         Supplier supplier = findSupplier(id);
+        // Góp ý GV mục 12 + quy tắc 8: NCC đã phát sinh phiếu nhập / lô hàng thì không xoá cứng
+        // (trước đây ném lỗi khoá ngoại -> 500). Báo rõ để người dùng chuyển sang Ngừng giao dịch.
+        if (goodsReceiptRepository.existsBySupplier_Id(id) || productLotRepository.existsBySupplier_Id(id)) {
+            throw new BusinessException(HttpStatus.CONFLICT, "SUPPLIER_IN_USE",
+                    "Nhà cung cấp đã có phiếu nhập kho nên không thể xoá. Hãy chuyển sang Ngừng giao dịch.");
+        }
         supplierRepository.delete(supplier);
     }
 

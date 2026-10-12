@@ -36,4 +36,6 @@ public interface UserRepository extends JpaRepository<User, Long>, JpaSpecificat
     List<User> findDistinctByRoles_NameAndStatusOrderByFullNameAsc(RoleName roleName, String status);
 
     List<User> findDistinctByRoles_NameInAndStatusOrderByFullNameAsc(java.util.Collection<RoleName> roleNames, String status);
+
+    boolean existsByWarehouses_Id(Long warehouseId);
 }

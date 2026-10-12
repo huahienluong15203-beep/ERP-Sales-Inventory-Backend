@@ -8,6 +8,10 @@ import com.erp.backend.entity.Warehouse;
 import com.erp.backend.entity.WarehouseLocation;
 import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.CustomerRepository;
+import com.erp.backend.repository.InventoryRepository;
+import com.erp.backend.repository.GoodsReceiptRepository;
+import com.erp.backend.repository.StockTransferRepository;
+import com.erp.backend.repository.SalesOrderRepository;
 import com.erp.backend.repository.UserRepository;
 import com.erp.backend.repository.WarehouseLocationRepository;
 import com.erp.backend.repository.WarehouseRepository;
@@ -40,6 +44,10 @@ public class WarehouseService {
     private final UserRepository userRepository;
     private final CustomerRepository customerRepository;
     private final CustomerService customerService;
+    private final InventoryRepository inventoryRepository;
+    private final GoodsReceiptRepository goodsReceiptRepository;
+    private final StockTransferRepository stockTransferRepository;
+    private final SalesOrderRepository salesOrderRepository;
 
     // ==============================================================
     // 1. QUẢN LÝ KHO HÀNG (WAREHOUSE CRUD)
@@ -159,7 +167,7 @@ public class WarehouseService {
                 .filter(c -> c.getDefaultWarehouse() != null && id.equals(c.getDefaultWarehouse().getId()))
                 .count();
 
-        if (locCount > 0 || customerCount > 0) {
+        if (locCount > 0 || customerCount > 0 || hasTransactions(id)) {
             // Có dữ liệu ràng buộc -> Soft delete (chuyển sang INACTIVE)
             warehouse.setStatus(STATUS_INACTIVE);
             warehouseRepository.save(warehouse);
@@ -169,6 +177,18 @@ public class WarehouseService {
             warehouseRepository.delete(warehouse);
             log.info("S5-03: Đã xóa hoàn toàn kho id={}", id);
         }
+    }
+
+    /**
+     * Góp ý GV mục 12 + quy tắc 8: kho đã có tồn, phiếu nhập, phiếu chuyển, đơn giữ chỗ hoặc nhân viên được gắn
+     * thì không xoá cứng (trước đây xoá -> lỗi khoá ngoại 500), chỉ chuyển Ngừng hoạt động.
+     */
+    private boolean hasTransactions(Long id) {
+        return inventoryRepository.existsByWarehouse_Id(id)
+                || goodsReceiptRepository.existsByWarehouse_Id(id)
+                || stockTransferRepository.existsBySourceWarehouse_IdOrDestWarehouse_Id(id, id)
+                || salesOrderRepository.existsByReservedWarehouse_Id(id)
+                || userRepository.existsByWarehouses_Id(id);
     }
 
     // ==============================================================

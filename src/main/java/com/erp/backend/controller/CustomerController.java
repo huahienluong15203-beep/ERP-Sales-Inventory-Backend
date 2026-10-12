@@ -143,8 +143,9 @@ public class CustomerController {
      * Cho phép các nền tảng bán hàng kiểm tra trước khi tạo đơn.
      */
     @GetMapping("/{id}/check-order-creation")
-    public OrderCreationCheckResponse checkOrderCreation(@PathVariable Long id) {
-        return customerService.checkOrderCreation(id);
+    public OrderCreationCheckResponse checkOrderCreation(@PathVariable Long id,
+                                                         @AuthenticationPrincipal UserDetailsImpl actor) {
+        return customerService.checkOrderCreation(id, actor);
     }
 
     /**

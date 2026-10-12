@@ -112,6 +112,7 @@ public class GoodsReceiptService {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "WAREHOUSE_INACTIVE",
                     "Kho hàng [" + warehouse.getName() + "] đang ngưng hoạt động, không thể nhập hàng");
         }
+        assertAssignedWarehouse(actor, warehouse);
 
         // 3. Phân tích ngày nhập kho
         LocalDate receiptDate;
@@ -160,9 +161,10 @@ public class GoodsReceiptService {
                     .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST, "PRODUCT_NOT_FOUND",
                             "Không tìm thấy sản phẩm ID " + lineReq.getProductId()));
 
-            // Tính hệ số quy đổi và số lượng cơ sở (AC2)
-            BigDecimal factor = lineReq.getConversionFactor() != null && lineReq.getConversionFactor().compareTo(BigDecimal.ZERO) > 0
-                    ? lineReq.getConversionFactor() : BigDecimal.ONE;
+            // Tính hệ số quy đổi và số lượng cơ sở (AC2).
+            // Lấy hệ số từ cấu hình đơn vị của sản phẩm trên server, KHÔNG tin số client gửi lên
+            // (trước đây gửi conversionFactor=240 thì cộng tồn gấp 10 lần).
+            BigDecimal factor = StockTransferService.conversionFactor(product, lineReq.getSelectedUnit());
 
             BigDecimal qty = lineReq.getQuantity() != null && lineReq.getQuantity().compareTo(BigDecimal.ZERO) > 0
                     ? lineReq.getQuantity() : BigDecimal.ZERO;
@@ -245,9 +247,11 @@ public class GoodsReceiptService {
      */
     @Transactional
     public GoodsReceiptResponse confirmReceipt(Long id, UserDetailsImpl actor) {
-        GoodsReceipt receipt = goodsReceiptRepository.findById(id)
+        // Khoá dòng phiếu: 2 người bấm Xác nhận cùng lúc thì người sau thấy phiếu đã CONFIRMED (không cộng tồn 2 lần)
+        GoodsReceipt receipt = goodsReceiptRepository.findByIdForUpdate(id)
                 .orElseThrow(() -> new BusinessException(HttpStatus.NOT_FOUND, "RECEIPT_NOT_FOUND",
                         "Không tìm thấy phiếu nhập kho với ID " + id));
+        assertAssignedWarehouse(actor, receipt.getWarehouse());
 
         // AC5: Phiếu đã xác nhận không sửa được, chỉ lập phiếu điều chỉnh
         if (GoodsReceipt.STATUS_CONFIRMED.equalsIgnoreCase(receipt.getStatus())) {
@@ -395,5 +399,27 @@ public class GoodsReceiptService {
                 .createdAt(r.getCreatedAt() != null ? r.getCreatedAt().toString() : null)
                 .updatedAt(r.getUpdatedAt() != null ? r.getUpdatedAt().toString() : null)
                 .build();
+    }
+
+    /**
+     * Góp ý GV mục 12: NV kho chỉ lập / xác nhận phiếu nhập cho kho mình được phân công.
+     * QL kho và Admin làm được mọi kho.
+     */
+    private void assertAssignedWarehouse(UserDetailsImpl actor, Warehouse warehouse) {
+        if (actor == null || actor.getAuthorities() == null || warehouse == null) {
+            return;
+        }
+        java.util.Set<String> roles = new java.util.HashSet<>();
+        actor.getAuthorities().forEach(a -> roles.add(a.getAuthority()));
+        if (roles.contains("ROLE_ADMIN") || roles.contains("ROLE_WH_MANAGER") || !roles.contains("ROLE_WAREHOUSE")) {
+            return;
+        }
+        boolean assigned = userRepository.findById(actor.getId())
+                .map(u -> u.getWarehouses().stream().anyMatch(w -> java.util.Objects.equals(w.getId(), warehouse.getId())))
+                .orElse(false);
+        if (!assigned) {
+            throw new BusinessException(HttpStatus.FORBIDDEN, "RECEIPT_WAREHOUSE_NOT_ASSIGNED",
+                    "Bạn không được phân công kho " + warehouse.getName() + " nên không thể nhập hàng vào kho này");
+        }
     }
 }

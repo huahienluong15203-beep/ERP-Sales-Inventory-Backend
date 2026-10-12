@@ -43,6 +43,8 @@ public class MinStockAlertController {
      * Khai báo / Cập nhật định mức tồn tối thiểu cho SKU tại kho (AC1).
      */
     @PostMapping
+    // Mục 12: Kế toán / QL kinh doanh chỉ xem cảnh báo, không sửa ngưỡng tồn tối thiểu
+    @PreAuthorize("hasAnyRole('WAREHOUSE', 'WH_MANAGER', 'ADMIN')")
     public MinStockAlertResponse updateThreshold(
             @Valid @RequestBody UpdateMinThresholdPayload payload,
             @AuthenticationPrincipal UserDetailsImpl actor) {
