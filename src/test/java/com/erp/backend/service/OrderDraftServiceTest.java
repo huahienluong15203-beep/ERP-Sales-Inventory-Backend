@@ -1,5 +1,6 @@
 package com.erp.backend.service;
 
+import com.erp.backend.dto.user.PageResponse;
 import com.erp.backend.dto.customer.CreditStatusResponse;
 import com.erp.backend.dto.discount.DiscountCalculationResponse;
 import com.erp.backend.dto.inventory.StockInfoDto;
@@ -23,6 +24,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
@@ -520,6 +522,46 @@ class OrderDraftServiceTest {
         ProductOptionResponse cocaOpt = res.get(1);
         assertThat(cocaOpt.unitPrice()).isEqualByComparingTo("11000");
         assertThat(cocaOpt.priceListCode()).isEqualTo("BG-MOI");
+    }
+
+    @Test
+    @DisplayName("Góp ý GV: gợi ý sản phẩm phân trang - mỗi trang đúng số lượng, chỉ tra tồn cho trang đang lấy")
+    void productOptionsPage_slicesInSkuOrder_andLooksUpStockOnlyForPage() {
+        when(priceListRepository.findEffectiveByCustomerGroup(eq(CustomerGroup.DEALER_LEVEL_1), any()))
+                .thenReturn(List.of(priceList));
+        List<PriceListItem> items = new ArrayList<>();
+        for (int i = 1; i <= 5; i++) {
+            Product p = Product.builder().id(100L + i).sku("SKU-0" + i).name("Hàng " + i).baseUnit("Lon").status("ACTIVE").build();
+            items.add(PriceListItem.builder().priceList(priceList).product(p).productSku("SKU-0" + i)
+                    .productName("Hàng " + i).price(new BigDecimal("1000")).build());
+        }
+        Collections.reverse(items);
+        when(priceItemRepository.findByPriceListIdAndKeyword(eq(priceList.getId()), eq(""), any(Pageable.class)))
+                .thenReturn(items);
+
+        PageResponse<ProductOptionResponse> first = service.productOptionsPage(6L, null, 0, 2, rep);
+        PageResponse<ProductOptionResponse> last = service.productOptionsPage(6L, null, 2, 2, rep);
+        PageResponse<ProductOptionResponse> beyond = service.productOptionsPage(6L, null, 9, 2, rep);
+
+        assertThat(first.content()).extracting(ProductOptionResponse::sku).containsExactly("SKU-01", "SKU-02");
+        assertThat(first.totalElements()).isEqualTo(5);
+        assertThat(first.totalPages()).isEqualTo(3);
+        assertThat(last.content()).extracting(ProductOptionResponse::sku).containsExactly("SKU-05");
+        assertThat(beyond.content()).isEmpty();
+        // 3 lần gọi, tổng cộng chỉ dựng 3 sản phẩm -> chỉ tra tồn 3 lần chứ không phải 15 lần
+        verify(inventoryService, times(3)).getStockInfo(any(), any(Product.class));
+    }
+
+    @Test
+    @DisplayName("Góp ý GV: kích thước trang bị giới hạn (size <= 0 thành 1, quá lớn thành tối đa)")
+    void productOptionsPage_clampsPageSize() {
+        when(priceListRepository.findEffectiveByCustomerGroup(eq(CustomerGroup.DEALER_LEVEL_1), any()))
+                .thenReturn(List.of());
+
+        assertThat(service.productOptionsPage(6L, null, 0, 0, rep).size()).isEqualTo(1);
+        assertThat(service.productOptionsPage(6L, null, -3, 10_000, rep).size())
+                .isEqualTo(OrderDraftService.MAX_PRODUCT_OPTIONS_PAGE_SIZE);
+        assertThat(service.productOptionsPage(6L, null, -3, 10, rep).page()).isZero();
     }
 
     @Test
