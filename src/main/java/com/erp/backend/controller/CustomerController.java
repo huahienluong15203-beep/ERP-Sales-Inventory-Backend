@@ -174,7 +174,7 @@ public class CustomerController {
      * S4-10: Gắn tài khoản đăng nhập cổng đại lý (vai trò Đại lý) với hồ sơ đại lý; userId = null là gỡ. Chỉ Admin.
      */
     @PutMapping("/{id}/portal-account")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER')")
     public PortalMeResponse linkPortalAccount(@PathVariable Long id,
                                               @Valid @RequestBody PortalAccountRequest request,
                                               @AuthenticationPrincipal UserDetailsImpl actor) {
