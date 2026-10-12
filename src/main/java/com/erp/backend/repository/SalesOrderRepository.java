@@ -127,4 +127,6 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, Long>, J
     List<SalesOrder> findLatestPurchasedOrders(@Param("customerId") Long customerId,
                                                @Param("statuses") Collection<String> statuses,
                                                Pageable pageable);
+
+    boolean existsByReservedWarehouse_Id(Long warehouseId);
 }

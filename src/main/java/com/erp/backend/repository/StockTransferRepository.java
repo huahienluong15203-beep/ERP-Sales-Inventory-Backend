@@ -31,4 +31,6 @@ public interface StockTransferRepository extends JpaRepository<StockTransfer, Lo
     List<StockTransfer> findBySourceWarehouse_Id(Long sourceWarehouseId);
 
     List<StockTransfer> findByDestWarehouse_Id(Long destWarehouseId);
+
+    boolean existsBySourceWarehouse_IdOrDestWarehouse_Id(Long sourceWarehouseId, Long destWarehouseId);
 }

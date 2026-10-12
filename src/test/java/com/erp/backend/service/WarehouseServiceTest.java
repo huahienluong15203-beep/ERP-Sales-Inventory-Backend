@@ -37,6 +37,10 @@ class WarehouseServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private CustomerRepository customerRepository;
     @Mock private CustomerService customerService;
+    @Mock private com.erp.backend.repository.InventoryRepository inventoryRepository;
+    @Mock private com.erp.backend.repository.GoodsReceiptRepository goodsReceiptRepository;
+    @Mock private com.erp.backend.repository.StockTransferRepository stockTransferRepository;
+    @Mock private com.erp.backend.repository.SalesOrderRepository salesOrderRepository;
 
     @InjectMocks private WarehouseService warehouseService;
 
@@ -177,6 +181,20 @@ class WarehouseServiceTest {
         warehouseService.delete(10L, whManagerActor);
 
         verify(warehouseRepository).delete(sampleWarehouse);
+    }
+
+    @Test
+    @DisplayName("Mục 12: Xoá kho đã có tồn / phiếu -> chuyển Ngừng hoạt động, không xoá cứng (không còn lỗi 500)")
+    void deleteWarehouse_withStock_softDeletes() {
+        when(warehouseRepository.findById(10L)).thenReturn(Optional.of(sampleWarehouse));
+        when(locationRepository.countByWarehouse_Id(10L)).thenReturn(0L);
+        when(customerRepository.findAll()).thenReturn(List.of());
+        when(inventoryRepository.existsByWarehouse_Id(10L)).thenReturn(true);
+
+        warehouseService.delete(10L, whManagerActor);
+
+        assertThat(sampleWarehouse.getStatus()).isEqualTo("INACTIVE");
+        verify(warehouseRepository, never()).delete(any());
     }
 
     // ==============================================================

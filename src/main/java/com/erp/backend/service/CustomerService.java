@@ -428,6 +428,17 @@ public class CustomerService {
      * S3-07 & S4-02: Kiểm tra đại lý có đủ điều kiện tạo đơn hàng mới hay không.
      * Chặn tạo đơn mới trên mọi nền tảng nếu bị khóa giao dịch hoặc ngừng hoạt động.
      */
+    /**
+     * Mục 12: bản dùng cho API - NV kinh doanh chỉ kiểm tra được đại lý mình phụ trách
+     * (trước đây gọi được với mọi id, lộ hạn mức / nợ quá hạn của đại lý người khác).
+     */
+    @Transactional(readOnly = true)
+    public OrderCreationCheckResponse checkOrderCreation(Long id, UserDetailsImpl actor) {
+        Customer customer = findCustomer(id);
+        CustomerAccess.checkCanAccess(actor, customer);
+        return checkOrderCreation(id);
+    }
+
     @Transactional(readOnly = true)
     public OrderCreationCheckResponse checkOrderCreation(Long id) {
         Customer customer = findCustomer(id);

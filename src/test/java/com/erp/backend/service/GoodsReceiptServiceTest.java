@@ -71,6 +71,13 @@ class GoodsReceiptServiceTest {
                 .category("Sữa")
                 .status("ACTIVE")
                 .build();
+        sampleProduct.addUnitConversion(ProductUnitConversion.builder()
+                .product(sampleProduct).unitName("Thùng").conversionFactor(BigDecimal.valueOf(48)).build());
+
+        // NV kho được phân công kho WH-MB01
+        User whUser = User.builder().id(1L).username("wh_staff").build();
+        whUser.getWarehouses().add(sampleWarehouse);
+        lenient().when(userRepository.findById(1L)).thenReturn(Optional.of(whUser));
     }
 
     @Test
@@ -287,7 +294,7 @@ class GoodsReceiptServiceTest {
                 .build();
         line.setGoodsReceipt(draftReceipt);
 
-        when(goodsReceiptRepository.findById(20L)).thenReturn(Optional.of(draftReceipt));
+        when(goodsReceiptRepository.findByIdForUpdate(20L)).thenReturn(Optional.of(draftReceipt));
 
         Inventory inventory = Inventory.builder()
                 .id(5L)
@@ -314,7 +321,7 @@ class GoodsReceiptServiceTest {
                 .status(GoodsReceipt.STATUS_CONFIRMED)
                 .build();
 
-        when(goodsReceiptRepository.findById(20L)).thenReturn(Optional.of(confirmedReceipt));
+        when(goodsReceiptRepository.findByIdForUpdate(20L)).thenReturn(Optional.of(confirmedReceipt));
 
         assertThatThrownBy(() -> goodsReceiptService.confirmReceipt(20L, whStaffActor))
                 .isInstanceOf(BusinessException.class)
@@ -329,5 +336,41 @@ class GoodsReceiptServiceTest {
         assertThatThrownBy(() -> goodsReceiptService.getReceiptById(999L))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("Không tìm thấy phiếu nhập kho với ID 999");
+    }
+
+    @Test
+    @DisplayName("Mục 12: Hệ số quy đổi lấy từ cấu hình sản phẩm, bỏ qua số client gửi (gửi 240 vẫn tính 48)")
+    void createReceipt_ignoresClientConversionFactor() {
+        when(supplierRepository.findById(1L)).thenReturn(Optional.of(sampleSupplier));
+        when(warehouseRepository.findByCodeIgnoreCase("WH-MB01")).thenReturn(Optional.of(sampleWarehouse));
+        when(productRepository.findById(100L)).thenReturn(Optional.of(sampleProduct));
+        when(goodsReceiptRepository.save(any(GoodsReceipt.class))).thenAnswer(inv -> inv.getArgument(0));
+        lenient().when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(anyLong(), anyLong()))
+                .thenReturn(Optional.empty());
+
+        GoodsReceiptLineCreateRequest line = GoodsReceiptLineCreateRequest.builder()
+                .productId(100L).selectedUnit("Thùng").conversionFactor(BigDecimal.valueOf(240))
+                .quantity(BigDecimal.valueOf(10)).unitPrice(BigDecimal.ONE).build();
+        GoodsReceiptCreateRequest req = GoodsReceiptCreateRequest.builder()
+                .supplierId(1L).warehouseCode("WH-MB01").documentNumber("HD-1").receiptDate("2026-10-13")
+                .status(GoodsReceipt.STATUS_DRAFT).lines(List.of(line)).build();
+
+        GoodsReceiptResponse res = goodsReceiptService.createReceipt(req, whStaffActor);
+
+        assertThat(res.getLines().get(0).getBaseQuantity()).isEqualByComparingTo("480");
+    }
+
+    @Test
+    @DisplayName("Mục 12: NV kho xác nhận phiếu của kho mình không được phân công -> 403")
+    void confirmReceipt_otherWarehouse_forbidden() {
+        Warehouse other = Warehouse.builder().id(99L).code("WH-MN01").name("Kho Miền Nam").status("ACTIVE").build();
+        GoodsReceipt draft = GoodsReceipt.builder().id(21L).code("PNK-1").warehouse(other)
+                .status(GoodsReceipt.STATUS_DRAFT).lines(new ArrayList<>()).build();
+        when(goodsReceiptRepository.findByIdForUpdate(21L)).thenReturn(Optional.of(draft));
+
+        assertThatThrownBy(() -> goodsReceiptService.confirmReceipt(21L, whStaffActor))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("RECEIPT_WAREHOUSE_NOT_ASSIGNED");
+        verify(inventoryRepository, never()).save(any());
     }
 }

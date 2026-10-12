@@ -56,6 +56,8 @@ public class GoodsReceiptController {
      * Lập phiếu nhập kho mới (Lưu nháp hoặc Xác nhận).
      */
     @PostMapping
+    // Góp ý GV mục 12: Kế toán chỉ xem, không lập / xác nhận phiếu nhập
+    @PreAuthorize("hasAnyRole('WAREHOUSE', 'WH_MANAGER', 'ADMIN')")
     public ResponseEntity<GoodsReceiptResponse> createReceipt(
             @Valid @RequestBody GoodsReceiptCreateRequest request,
             @AuthenticationPrincipal UserDetailsImpl actor
@@ -68,6 +70,7 @@ public class GoodsReceiptController {
      * Xác nhận phiếu nhập kho (AC4: Cộng tồn kho khi xác nhận).
      */
     @PostMapping("/{id}/confirm")
+    @PreAuthorize("hasAnyRole('WAREHOUSE', 'WH_MANAGER', 'ADMIN')")
     public ResponseEntity<GoodsReceiptResponse> confirmReceipt(
             @PathVariable Long id,
             @AuthenticationPrincipal UserDetailsImpl actor

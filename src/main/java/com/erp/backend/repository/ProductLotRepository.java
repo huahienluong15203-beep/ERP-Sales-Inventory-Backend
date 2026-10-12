@@ -22,4 +22,6 @@ public interface ProductLotRepository extends JpaRepository<ProductLot, Long> {
     List<ProductLot> findByBatchNumber(String batchNumber);
 
     List<ProductLot> findByExpiredDateBefore(LocalDate date);
+
+    boolean existsBySupplier_Id(Long supplierId);
 }
