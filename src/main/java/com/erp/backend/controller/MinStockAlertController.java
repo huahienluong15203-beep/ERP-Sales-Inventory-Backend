@@ -7,6 +7,8 @@ import com.erp.backend.security.UserDetailsImpl;
 import com.erp.backend.service.MinStockAlertService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import com.erp.backend.dto.user.PageResponse;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -29,14 +31,36 @@ public class MinStockAlertController {
 
     /**
      * Lấy danh sách cấu hình định mức & trạng thái cảnh báo tồn kho (AC1 & AC2).
+     * Hỗ trợ phân trang (?page=0&size=50) để load nhanh tức thì.
      */
     @GetMapping
-    public List<MinStockAlertResponse> fetchConfigs(
+    public ResponseEntity<?> fetchConfigs(
             @RequestParam(required = false) String warehouseCode,
             @RequestParam(required = false) Boolean belowThresholdOnly,
             @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer size,
+            @RequestParam(required = false) Integer limit,
             @AuthenticationPrincipal UserDetailsImpl actor) {
-        return minStockAlertService.fetchMinStockConfigs(warehouseCode, belowThresholdOnly, keyword, actor);
+        if (page != null || size != null) {
+            int p = (page != null && page >= 0) ? page : 0;
+            int s = (size != null && size > 0) ? size : 50;
+            PageResponse<MinStockAlertResponse> pageRes = minStockAlertService.fetchMinStockConfigsPage(
+                    warehouseCode, belowThresholdOnly, keyword, p, s, actor);
+            return ResponseEntity.ok()
+                    .header("X-Total-Count", String.valueOf(pageRes.totalElements()))
+                    .header("X-Total-Pages", String.valueOf(pageRes.totalPages()))
+                    .body(pageRes);
+        }
+
+        List<MinStockAlertResponse> list = minStockAlertService.fetchMinStockConfigs(
+                warehouseCode, belowThresholdOnly, keyword, actor);
+        if (limit != null && limit > 0) {
+            list = list.stream().limit(limit).toList();
+        }
+        return ResponseEntity.ok()
+                .header("X-Total-Count", String.valueOf(list.size()))
+                .body(list);
     }
 
     /**

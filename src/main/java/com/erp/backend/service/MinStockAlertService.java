@@ -3,6 +3,7 @@ package com.erp.backend.service;
 import com.erp.backend.dto.inventory.alert.MinStockAlertResponse;
 import com.erp.backend.dto.inventory.alert.MinStockSummaryResponse;
 import com.erp.backend.dto.inventory.alert.UpdateMinThresholdPayload;
+import com.erp.backend.dto.user.PageResponse;
 import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.*;
@@ -74,13 +75,18 @@ public class MinStockAlertService {
             return Collections.emptyList();
         }
 
-        // Lấy toàn bộ sản phẩm đang hoạt động
-        List<Product> products = productRepository.findAll().stream()
-                .filter(p -> !"INACTIVE".equalsIgnoreCase(p.getStatus()))
-                .toList();
-
         String kw = StringUtils.hasText(keyword) ? keyword.trim().toLowerCase() : null;
         boolean filterBelowOnly = Boolean.TRUE.equals(belowThresholdOnly);
+
+        // Lấy toàn bộ sản phẩm đang hoạt động (lọc theo từ khóa ngay nếu có để tối ưu tốc độ)
+        List<Product> products = productRepository.findAll().stream()
+                .filter(p -> !"INACTIVE".equalsIgnoreCase(p.getStatus()))
+                .filter(p -> kw == null || (
+                        (p.getSku() != null && p.getSku().toLowerCase().contains(kw)) ||
+                        (p.getName() != null && p.getName().toLowerCase().contains(kw)) ||
+                        (p.getCategory() != null && p.getCategory().toLowerCase().contains(kw))
+                ))
+                .toList();
 
         List<MinStockAlertResponse> result = new ArrayList<>();
 
@@ -103,15 +109,6 @@ public class MinStockAlertService {
                     ));
 
             for (Product p : products) {
-                // Lọc theo từ khóa nếu có
-                if (kw != null) {
-                    boolean matchSku = p.getSku() != null && p.getSku().toLowerCase().contains(kw);
-                    boolean matchName = p.getName() != null && p.getName().toLowerCase().contains(kw);
-                    boolean matchCat = p.getCategory() != null && p.getCategory().toLowerCase().contains(kw);
-                    if (!matchSku && !matchName && !matchCat) {
-                        continue;
-                    }
-                }
 
                 Inventory inv = invMap.get(p.getId());
                 MinStockThreshold thresh = threshMap.get(p.getId());
@@ -293,6 +290,28 @@ public class MinStockAlertService {
                 .suggestedReorderQuantity(stripZeros(suggestedReorder))
                 .updatedAt(threshold.getUpdatedAt() != null ? threshold.getUpdatedAt().format(ISO_FORMATTER) : null)
                 .build();
+    }
+
+    /**
+     * Lấy danh sách cấu hình định mức phân trang (mặc định 50 bản ghi/trang để tải nhanh).
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<MinStockAlertResponse> fetchMinStockConfigsPage(
+            String warehouseCode,
+            Boolean belowThresholdOnly,
+            String keyword,
+            int page,
+            int size,
+            UserDetailsImpl actor) {
+        List<MinStockAlertResponse> all = fetchMinStockConfigs(warehouseCode, belowThresholdOnly, keyword, actor);
+        int total = all.size();
+        int s = Math.max(1, size);
+        int totalPages = (int) Math.ceil((double) total / s);
+        int p = Math.max(0, page);
+        int start = Math.min(p * s, total);
+        int end = Math.min(start + s, total);
+        List<MinStockAlertResponse> content = new ArrayList<>(all.subList(start, end));
+        return new PageResponse<>(content, p, s, total, totalPages);
     }
 
     /**
