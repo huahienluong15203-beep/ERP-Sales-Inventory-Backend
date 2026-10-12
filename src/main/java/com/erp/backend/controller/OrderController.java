@@ -111,6 +111,20 @@ public class OrderController {
         return orderDraftService.productOptions(customerId, keyword, actor);
     }
 
+    /**
+     * Gợi ý sản phẩm có phân trang cho màn lên đơn: mỗi lần lấy một ít (mặc định 20), cuộn xuống mới tải thêm.
+     * Vd: ?customerId=6&keyword=coca&page=0&size=20
+     */
+    @GetMapping("/product-options/paged")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'SALES_REP')")
+    public PageResponse<ProductOptionResponse> productOptionsPage(@RequestParam Long customerId,
+                                                                  @RequestParam(required = false) String keyword,
+                                                                  @RequestParam(defaultValue = "0") int page,
+                                                                  @RequestParam(defaultValue = "20") int size,
+                                                                  @AuthenticationPrincipal UserDetailsImpl actor) {
+        return orderDraftService.productOptionsPage(customerId, keyword, page, size, actor);
+    }
+
     /** Tính tổng tiền hàng, chiết khấu, tổng phải thu khi thêm / sửa dòng hàng (không lưu). */
     @PostMapping("/preview")
     @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'SALES_REP')")

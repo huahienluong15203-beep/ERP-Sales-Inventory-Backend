@@ -1,6 +1,7 @@
 package com.erp.backend.service;
 
 import com.erp.backend.config.AuditLogInterceptor;
+import com.erp.backend.dto.user.PageResponse;
 import com.erp.backend.dto.customer.CreditStatusResponse;
 import com.erp.backend.dto.discount.DiscountCalculationResponse;
 import com.erp.backend.dto.inventory.StockInfoDto;
@@ -27,6 +28,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.function.Supplier;
 
 /**
  * S3-09: Khởi tạo đơn hàng (đơn nháp).
@@ -47,6 +49,8 @@ public class OrderDraftService {
     static final int MAX_LINES = 200;
     /** Số dòng giá tối đa lấy từ mỗi bảng giá cho danh sách chọn sản phẩm. */
     static final int MAX_PRODUCT_OPTIONS = 500;
+    /** Số sản phẩm tối đa mỗi lần tải ở màn lên đơn (cuộn xuống mới tải thêm). */
+    static final int MAX_PRODUCT_OPTIONS_PAGE_SIZE = 50;
     static final BigDecimal MAX_QUANTITY = new BigDecimal("1000000");
     private static final String CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -236,9 +240,35 @@ public class OrderDraftService {
 
     /**
      * Gợi ý / hiển thị sản phẩm theo bảng giá của cấp đại lý (tự động load, kèm tìm kiếm SKU/tên nếu có).
+     * Trả về toàn bộ danh sách (dùng cho cổng đại lý). Màn lên đơn dùng {@link #productOptionsPage} để tải dần.
      */
     @Transactional(readOnly = true)
     public List<ProductOptionResponse> productOptions(Long customerId, String keyword, UserDetailsImpl actor) {
+        return optionBuilders(customerId, keyword, actor).stream().map(Supplier::get).toList();
+    }
+
+    /**
+     * Góp ý của thầy: không lấy hết sản phẩm một lần mà chia trang, cuộn xuống mới tải thêm.
+     * Thứ tự giống hệt {@link #productOptions}; chỉ tra tồn kho cho các sản phẩm của trang đang lấy.
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<ProductOptionResponse> productOptionsPage(Long customerId, String keyword, int page, int size,
+                                                                  UserDetailsImpl actor) {
+        int safeSize = Math.min(Math.max(size, 1), MAX_PRODUCT_OPTIONS_PAGE_SIZE);
+        int safePage = Math.max(page, 0);
+        List<Supplier<ProductOptionResponse>> all = optionBuilders(customerId, keyword, actor);
+        int from = (int) Math.min((long) safePage * safeSize, all.size());
+        int to = Math.min(from + safeSize, all.size());
+        List<ProductOptionResponse> content = all.subList(from, to).stream().map(Supplier::get).toList();
+        int totalPages = all.isEmpty() ? 0 : (all.size() + safeSize - 1) / safeSize;
+        return new PageResponse<>(content, safePage, safeSize, all.size(), totalPages);
+    }
+
+    /**
+     * Danh sách sản phẩm gợi ý (đã lọc, sắp xếp) ở dạng "chưa dựng": mỗi phần tử chỉ tra tồn kho khi được gọi get(),
+     * để bản phân trang không phải tra tồn cho cả trăm sản phẩm không hiển thị.
+     */
+    private List<Supplier<ProductOptionResponse>> optionBuilders(Long customerId, String keyword, UserDetailsImpl actor) {
         Customer customer = findCustomer(customerId, actor);
         String kw = StringUtils.hasText(keyword) ? keyword.trim() : "";
         LocalDate today = LocalDate.now(VN_ZONE);
@@ -248,7 +278,7 @@ public class OrderDraftService {
         List<PriceList> effectivePriceLists = priceListRepository.findEffectiveByCustomerGroup(
                 customer.getCustomerGroup(), today);
 
-        List<ProductOptionResponse> result = new ArrayList<>();
+        List<Supplier<ProductOptionResponse>> result = new ArrayList<>();
 
         if (!effectivePriceLists.isEmpty()) {
             // Nhóm có thể có nhiều bảng giá cùng hiệu lực: mỗi SKU lấy giá ở bảng giá mới nhất có chứa SKU đó,
@@ -276,9 +306,10 @@ public class OrderDraftService {
                     Product p = item.getProduct();
                     PriceList activePriceList = listBySku.get(item.getProductSku().toUpperCase());
                     pricedSkus.add(item.getProductSku().toUpperCase());
-                    StockInfoDto stock = (inventoryService != null && warehouse != null)
-                            ? inventoryService.getStockInfo(warehouse, p) : null;
-                    result.add(new ProductOptionResponse(
+                    result.add(() -> {
+                        StockInfoDto stock = (inventoryService != null && warehouse != null)
+                                ? inventoryService.getStockInfo(warehouse, p) : null;
+                        return new ProductOptionResponse(
                             p.getId(),
                             item.getProductSku(),
                             item.getProductName(),
@@ -293,7 +324,8 @@ public class OrderDraftService {
                             warehouse != null ? warehouse.getName() : null,
                             stock != null ? stock.physicalStock() : BigDecimal.ZERO,
                             stock != null ? stock.reservedStock() : BigDecimal.ZERO,
-                            stock != null ? stock.availableStock() : BigDecimal.ZERO));
+                            stock != null ? stock.availableStock() : BigDecimal.ZERO);
+                    });
                 }
             }
 
@@ -303,9 +335,10 @@ public class OrderDraftService {
                         kw, kw, PageRequest.of(0, 50, Sort.by("sku"))).getContent();
                 for (Product p : catalogMatches) {
                     if ("ACTIVE".equalsIgnoreCase(p.getStatus()) && !pricedSkus.contains(p.getSku().toUpperCase())) {
-                        StockInfoDto stock = (inventoryService != null && warehouse != null)
-                                ? inventoryService.getStockInfo(warehouse, p) : null;
-                        result.add(new ProductOptionResponse(
+                        result.add(() -> {
+                            StockInfoDto stock = (inventoryService != null && warehouse != null)
+                                    ? inventoryService.getStockInfo(warehouse, p) : null;
+                            return new ProductOptionResponse(
                                 p.getId(),
                                 p.getSku(),
                                 p.getName(),
@@ -320,7 +353,8 @@ public class OrderDraftService {
                                 warehouse != null ? warehouse.getName() : null,
                                 stock != null ? stock.physicalStock() : BigDecimal.ZERO,
                                 stock != null ? stock.reservedStock() : BigDecimal.ZERO,
-                                stock != null ? stock.availableStock() : BigDecimal.ZERO));
+                                stock != null ? stock.availableStock() : BigDecimal.ZERO);
+                        });
                     }
                 }
             }
@@ -335,7 +369,7 @@ public class OrderDraftService {
         return productRepository.findByNameContainingIgnoreCaseOrSkuContainingIgnoreCase(kw, kw,
                         PageRequest.of(0, 50, Sort.by("sku"))).stream()
                 .filter(p -> "ACTIVE".equalsIgnoreCase(p.getStatus()))
-                .map(p -> {
+                .map(p -> (Supplier<ProductOptionResponse>) () -> {
                     Optional<PriceListItem> price = findPrice(customer, p, today);
                     StockInfoDto stock = (inventoryService != null && warehouse != null)
                             ? inventoryService.getStockInfo(warehouse, p) : null;
