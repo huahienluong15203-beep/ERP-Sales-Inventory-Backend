@@ -17,7 +17,7 @@ import java.util.List;
 
 /**
  * S5-07 / SCRUM-163: API Quản lý Phiếu Chuyển Kho Nội Bộ.
- * Dành cho Nhân viên kho, Quản lý kho, Kế toán và Admin.
+ * Xem: Nhân viên kho, Quản lý kho, Kế toán, Admin. Lập / xuất / nhận: chỉ kho và Admin (kế toán chỉ xem).
  */
 @RestController
 @RequestMapping("/api/inventory/transfers")
@@ -54,6 +54,7 @@ public class StockTransferController {
      * Lập phiếu chuyển kho mới (AC1).
      */
     @PostMapping
+    @PreAuthorize("hasAnyRole('WAREHOUSE', 'WH_MANAGER', 'ADMIN')")
     public ResponseEntity<StockTransferResponse> createTransfer(
             @Valid @RequestBody CreateStockTransferPayload payload,
             @AuthenticationPrincipal UserDetailsImpl actor
@@ -67,6 +68,7 @@ public class StockTransferController {
      * Trừ kho nguồn, ghi nhận hàng Đang trên đường, CHƯA cộng vào kho đến.
      */
     @PutMapping("/{id}/dispatch")
+    @PreAuthorize("hasAnyRole('WAREHOUSE', 'WH_MANAGER', 'ADMIN')")
     public ResponseEntity<StockTransferResponse> dispatchTransfer(
             @PathVariable Long id,
             @AuthenticationPrincipal UserDetailsImpl actor
@@ -81,6 +83,7 @@ public class StockTransferController {
      * - AC4: Chênh lệch -> bắt buộc nhập lý do (DISCREPANCY_RESOLVED).
      */
     @PutMapping("/{id}/receive")
+    @PreAuthorize("hasAnyRole('WAREHOUSE', 'WH_MANAGER', 'ADMIN')")
     public ResponseEntity<StockTransferResponse> receiveTransfer(
             @PathVariable Long id,
             @Valid @RequestBody ReceiveTransferPayload payload,

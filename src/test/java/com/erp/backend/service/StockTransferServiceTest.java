@@ -33,6 +33,7 @@ class StockTransferServiceTest {
     @Mock private ProductRepository productRepository;
     @Mock private InventoryRepository inventoryRepository;
     @Mock private UserRepository userRepository;
+    @Mock private AuditLogService auditLogService;
 
     @InjectMocks private StockTransferService stockTransferService;
 
@@ -78,6 +79,11 @@ class StockTransferServiceTest {
                 .physicalStock(BigDecimal.valueOf(500))
                 .reservedStock(BigDecimal.valueOf(50)) // Khả dụng = 450
                 .build();
+
+        // wh_staff được phân công cả kho đi và kho đến
+        User whUser = User.builder().id(1L).username("wh_staff")
+                .warehouses(new HashSet<>(Set.of(sourceWh, destWh))).build();
+        lenient().when(userRepository.findById(1L)).thenReturn(Optional.of(whUser));
     }
 
     @Test
@@ -270,6 +276,58 @@ class StockTransferServiceTest {
 
         // Kho đích tuyệt đối CHƯA được cộng tồn (AC2)
         verify(inventoryRepository, never()).findByWarehouseIdAndProductIdForUpdate(eq(2L), anyLong());
+        // TC507-16: nhật ký tồn kho trước / sau
+        verify(auditLogService).record(eq(AuditModule.INVENTORY), eq("TRANSFER_DISPATCH"), eq("INVENTORY"), eq(100L),
+                eq("WH-MB01:BEV-PEPSI-330"), eq("500"), eq("400"), contains("TRF-202610-001"), eq(whStaffActor));
+    }
+
+    @Test
+    @DisplayName("S5-07 (TC507-18): NV kho không được phân công kho đến -> không nhận hàng được (403), tồn không đổi")
+    void receiveTransfer_staffNotAssignedToDest_forbidden() {
+        User onlySource = User.builder().id(1L).username("wh_staff")
+                .warehouses(new HashSet<>(Set.of(sourceWh))).build();
+        when(userRepository.findById(1L)).thenReturn(Optional.of(onlySource));
+        StockTransferLine line = StockTransferLine.builder().id(1L).product(sampleProduct)
+                .productSku(sampleProduct.getSku()).productName(sampleProduct.getName()).unit("Lon")
+                .transferQuantity(BigDecimal.valueOf(10)).build();
+        StockTransfer transfer = StockTransfer.builder().id(50L).code("TRF-202610-001").sourceWarehouse(sourceWh)
+                .destWarehouse(destWh).status(StockTransfer.STATUS_IN_TRANSIT)
+                .lines(new ArrayList<>(List.of(line))).build();
+        when(stockTransferRepository.findByIdForUpdate(50L)).thenReturn(Optional.of(transfer));
+
+        assertThatThrownBy(() -> stockTransferService.receiveTransfer(50L, ReceiveTransferPayload.builder()
+                .receivedLines(List.of(ReceiveTransferLineItem.builder().lineId("1").receivedQuantity(BigDecimal.TEN).build()))
+                .build(), whStaffActor))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "TRANSFER_WAREHOUSE_NOT_ASSIGNED");
+        verifyNoInteractions(inventoryRepository, auditLogService);
+    }
+
+    @Test
+    @DisplayName("S5-07: Quản lý kho nhận hàng mọi kho, không cần phân công")
+    void receiveTransfer_whManager_anyWarehouse() {
+        UserDetailsImpl manager = new UserDetailsImpl(2L, "wh_manager", "QL kho", "m@erp.com", "pass", true,
+                List.of(new SimpleGrantedAuthority("ROLE_WH_MANAGER")));
+        StockTransferLine line = StockTransferLine.builder().id(1L).product(sampleProduct)
+                .productSku(sampleProduct.getSku()).productName(sampleProduct.getName()).unit("Lon")
+                .transferQuantity(BigDecimal.valueOf(10)).build();
+        StockTransfer transfer = StockTransfer.builder().id(50L).code("TRF-202610-001").sourceWarehouse(sourceWh)
+                .destWarehouse(destWh).status(StockTransfer.STATUS_IN_TRANSIT)
+                .lines(new ArrayList<>(List.of(line))).build();
+        Inventory destInventory = Inventory.builder().id(200L).warehouse(destWh).product(sampleProduct)
+                .physicalStock(BigDecimal.ZERO).reservedStock(BigDecimal.ZERO).build();
+        when(stockTransferRepository.findByIdForUpdate(50L)).thenReturn(Optional.of(transfer));
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(2L, 10L)).thenReturn(Optional.of(destInventory));
+        when(stockTransferRepository.save(any(StockTransfer.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        stockTransferService.receiveTransfer(50L, ReceiveTransferPayload.builder()
+                .receivedLines(List.of(ReceiveTransferLineItem.builder().lineId("1").receivedQuantity(BigDecimal.TEN).build()))
+                .build(), manager);
+
+        assertThat(destInventory.getPhysicalStock()).isEqualByComparingTo("10");
+        verify(auditLogService).record(eq(AuditModule.INVENTORY), eq("TRANSFER_RECEIVE"), eq("INVENTORY"), eq(200L),
+                eq("WH-MT01:BEV-PEPSI-330"), eq("0"), eq("10"), contains("TRF-202610-001"), eq(manager));
+        verify(userRepository, never()).findById(2L);
     }
 
     @Test
