@@ -22,6 +22,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
 
@@ -99,6 +100,23 @@ class CustomerServiceTest {
         verify(customerRepository).findAll(any(org.springframework.data.jpa.domain.Specification.class), pageable.capture());
         assertThat(pageable.getValue().getPageNumber()).isEqualTo(1);
         assertThat(pageable.getValue().getPageSize()).isEqualTo(20);
+    }
+
+    @Test
+    @DisplayName("S4-02: Tìm kiếm đại lý -> nạp đúng công nợ hiện tại từ đơn hàng")
+    void search_populatesCurrentDebtFromOrders() {
+        Customer c1 = customer(7, null);
+        when(customerRepository.findAll(any(org.springframework.data.jpa.domain.Specification.class),
+                any(org.springframework.data.domain.Pageable.class)))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(c1)));
+        when(orderRepository.sumTotalAmountByCustomerIdsAndStatuses(eq(List.of(7L)), eq(SalesOrder.OUTSTANDING_DEBT_STATUSES)))
+                .thenReturn(List.<Object[]>of(new Object[]{7L, new BigDecimal("40284000")}));
+
+        com.erp.backend.dto.user.PageResponse<CustomerResponse> res =
+                service.search(null, null, null, null, null, null, 0, 20, manager);
+
+        assertThat(res.content()).hasSize(1);
+        assertThat(res.content().get(0).currentDebt()).isEqualByComparingTo(new BigDecimal("40284000"));
     }
 
     // ======================= S3-03: TẠO / SỬA =======================

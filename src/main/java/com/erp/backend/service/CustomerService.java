@@ -85,16 +85,34 @@ public class CustomerService {
 
         List<Long> customerIds = result.getContent().stream().map(Customer::getId).toList();
         Map<Long, Integer> deliveryCounts = new HashMap<>();
+        Map<Long, BigDecimal> debtMap = new HashMap<>();
         if (!customerIds.isEmpty()) {
             for (Object[] row : addressRepository.countByCustomerIdsAndStatus(customerIds, ACTIVE)) {
                 Long cid = (Long) row[0];
                 Long cnt = (Long) row[1];
                 deliveryCounts.put(cid, cnt != null ? cnt.intValue() : 0);
             }
+            List<Object[]> debtRows = orderRepository.sumTotalAmountByCustomerIdsAndStatuses(
+                    customerIds, SalesOrder.OUTSTANDING_DEBT_STATUSES);
+            if (debtRows != null) {
+                for (Object[] row : debtRows) {
+                    if (row != null && row.length >= 2 && row[0] instanceof Number) {
+                        Long cid = ((Number) row[0]).longValue();
+                        BigDecimal sum = row[1] instanceof BigDecimal
+                                ? (BigDecimal) row[1]
+                                : (row[1] != null ? new BigDecimal(row[1].toString()) : BigDecimal.ZERO);
+                        debtMap.put(cid, sum);
+                    }
+                }
+            }
         }
 
         Map<CustomerGroup, RefItem> priceListMap = resolveEffectivePriceLists();
-        return PageResponse.of(result.map(c -> toResponse(c, priceListMap.get(c.getCustomerGroup()), deliveryCounts.getOrDefault(c.getId(), 0))));
+        return PageResponse.of(result.map(c -> toResponse(
+                c,
+                priceListMap.get(c.getCustomerGroup()),
+                deliveryCounts.getOrDefault(c.getId(), 0),
+                debtMap.getOrDefault(c.getId(), BigDecimal.ZERO))));
     }
 
     @Transactional(readOnly = true)
@@ -744,15 +762,37 @@ public class CustomerService {
     }
 
     CustomerResponse toResponse(Customer c) {
-        return toResponse(c, resolvePriceListForGroup(c.getCustomerGroup()));
+        BigDecimal debt = BigDecimal.ZERO;
+        if (c.getId() != null) {
+            BigDecimal sum = orderRepository.sumTotalAmountByCustomerAndStatuses(
+                    c.getId(), SalesOrder.OUTSTANDING_DEBT_STATUSES);
+            if (sum != null) debt = sum;
+        }
+        return toResponse(c, resolvePriceListForGroup(c.getCustomerGroup()), null, debt);
     }
 
     CustomerResponse toResponse(Customer c, RefItem priceListRef) {
+        BigDecimal debt = BigDecimal.ZERO;
+        if (c.getId() != null) {
+            BigDecimal sum = orderRepository.sumTotalAmountByCustomerAndStatuses(
+                    c.getId(), SalesOrder.OUTSTANDING_DEBT_STATUSES);
+            if (sum != null) debt = sum;
+        }
         int count = c.getId() != null ? (int) addressRepository.countByCustomer_IdAndStatus(c.getId(), ACTIVE) : 0;
-        return toResponse(c, priceListRef, count);
+        return toResponse(c, priceListRef, count, debt);
     }
 
     CustomerResponse toResponse(Customer c, RefItem priceListRef, Integer deliveryPointCount) {
+        BigDecimal debt = BigDecimal.ZERO;
+        if (c.getId() != null) {
+            BigDecimal sum = orderRepository.sumTotalAmountByCustomerAndStatuses(
+                    c.getId(), SalesOrder.OUTSTANDING_DEBT_STATUSES);
+            if (sum != null) debt = sum;
+        }
+        return toResponse(c, priceListRef, deliveryPointCount, debt);
+    }
+
+    CustomerResponse toResponse(Customer c, RefItem priceListRef, Integer deliveryPointCount, BigDecimal currentDebt) {
         Region region = c.getRegion();
         Warehouse defaultWh = c.getDefaultWarehouse();
         RefItem defaultWhRef = defaultWh == null ? null : new RefItem(defaultWh.getId(), defaultWh.getCode(), defaultWh.getName());
@@ -782,7 +822,8 @@ public class CustomerService {
                 priceListRef,
                 deliveryPointCount != null ? deliveryPointCount : 0,
                 defaultWhRef,
-                toUserRef(c.getPortalUser()));
+                toUserRef(c.getPortalUser()),
+                currentDebt != null ? currentDebt : BigDecimal.ZERO);
     }
 
     private RefItem toUserRef(User u) {
