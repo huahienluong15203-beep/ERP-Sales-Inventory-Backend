@@ -4,6 +4,7 @@ import com.erp.backend.dto.order.*;
 import com.erp.backend.dto.user.PageResponse;
 import com.erp.backend.security.UserDetailsImpl;
 import com.erp.backend.service.OrderApprovalService;
+import com.erp.backend.service.OrderBulkApprovalService;
 import com.erp.backend.service.OrderDraftService;
 import com.erp.backend.service.OrderQueryService;
 import com.erp.backend.service.OrderPrintService;
@@ -36,6 +37,7 @@ public class OrderController {
 
     private final OrderDraftService orderDraftService;
     private final OrderApprovalService orderApprovalService;
+    private final OrderBulkApprovalService orderBulkApprovalService;
     private final OrderQueryService orderQueryService;
     private final OrderPrintService orderPrintService;
     private final com.erp.backend.service.OrderStatusService orderStatusService;
@@ -176,6 +178,17 @@ public class OrderController {
                                  @Valid @RequestBody(required = false) OrderApprovalActionRequest request,
                                  @AuthenticationPrincipal UserDetailsImpl actor) {
         return orderApprovalService.approve(id, request != null ? request.getComment() : null, actor);
+    }
+
+    /**
+     * Góp ý GV mục 8: tick chọn nhiều đơn rồi Duyệt / Từ chối / Trả lại một lần.
+     * Mỗi đơn vẫn được kiểm quyền và trạng thái riêng; đơn lỗi không ảnh hưởng đơn khác.
+     */
+    @PostMapping("/bulk-approval")
+    @PreAuthorize("hasAnyRole('SALES_MANAGER', 'SALES_REP')")
+    public OrderBulkApprovalResponse bulkApproval(@Valid @RequestBody OrderBulkApprovalRequest request,
+                                                  @AuthenticationPrincipal UserDetailsImpl actor) {
+        return orderBulkApprovalService.process(request, actor);
     }
 
     /** Bắt buộc nhập ý kiến. */
