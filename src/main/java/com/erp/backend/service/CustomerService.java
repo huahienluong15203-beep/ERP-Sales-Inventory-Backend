@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
+import com.erp.backend.dto.portal.PortalAccountRequest;
 import com.erp.backend.config.AuditLogInterceptor;
 import com.erp.backend.entity.AuditModule;
 
@@ -50,6 +51,7 @@ public class CustomerService {
     private final SalesOrderRepository orderRepository;
     private final CustomerCreditService creditService;
     private final WarehouseRepository warehouseRepository;
+    private final PortalAccountService portalAccountService;
 
     // ======================= S3-08: TÌM KIẾM / XEM =======================
 
@@ -146,7 +148,13 @@ public class CustomerService {
                 .map(w -> new RefItem(w.getId(), w.getCode(), w.getName()))
                 .toList();
 
-        return new CustomerFormOptionsResponse(groups, statuses, regions, salesReps, priceLists, warehouses);
+        List<RefItem> portalUsers = userRepository
+                .findDistinctByRoles_NameAndStatusOrderByFullNameAsc(RoleName.ROLE_CUSTOMER, ACTIVE)
+                .stream()
+                .map(this::toUserRef)
+                .toList();
+
+        return new CustomerFormOptionsResponse(groups, statuses, regions, salesReps, priceLists, warehouses, portalUsers);
     }
 
     // ======================= S3-03: TẠO / SỬA HỒ SƠ =======================
@@ -180,6 +188,15 @@ public class CustomerService {
         if (salesRep != null) {
             recordHistory(saved, null, salesRep, CustomerAssignmentHistory.TYPE_CREATE, "Gán khi tạo đại lý", actor);
         }
+
+        if (req.getPortalUserId() != null) {
+            PortalAccountRequest portalReq = new PortalAccountRequest();
+            portalReq.setUserId(req.getPortalUserId());
+            portalReq.setReason("Gắn tài khoản cổng khi tạo đại lý");
+            portalAccountService.link(saved.getId(), portalReq, actor);
+            saved = findCustomer(saved.getId());
+        }
+
         return toResponse(saved);
     }
 
@@ -199,6 +216,17 @@ public class CustomerService {
         if (StringUtils.hasText(saved.getAddress())) {
             createOrUpdateDefaultDeliveryAddress(saved, saved.getAddress(), saved.getContactName(), saved.getPhone());
         }
+
+        boolean shouldChangePortalUser = Boolean.TRUE.equals(req.getChangePortalUser())
+                || (req.getPortalUserId() != null && (customer.getPortalUser() == null || !req.getPortalUserId().equals(customer.getPortalUser().getId())));
+        if (shouldChangePortalUser) {
+            PortalAccountRequest portalReq = new PortalAccountRequest();
+            portalReq.setUserId(req.getPortalUserId());
+            portalReq.setReason("Cập nhật tài khoản cổng đại lý");
+            portalAccountService.link(saved.getId(), portalReq, actor);
+            saved = findCustomer(saved.getId());
+        }
+
         return toResponse(saved);
     }
 
@@ -753,7 +781,8 @@ public class CustomerService {
                 c.getUpdatedAt(),
                 priceListRef,
                 deliveryPointCount != null ? deliveryPointCount : 0,
-                defaultWhRef);
+                defaultWhRef,
+                toUserRef(c.getPortalUser()));
     }
 
     private RefItem toUserRef(User u) {

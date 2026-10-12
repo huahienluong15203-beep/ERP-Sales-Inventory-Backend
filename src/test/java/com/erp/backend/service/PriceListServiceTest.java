@@ -43,6 +43,7 @@ class PriceListServiceTest {
     @Mock private PriceHistoryService priceHistoryService;
     @Mock private PriceHistoryRepository priceHistoryRepository;
     @Mock private CustomerRepository customerRepository;
+    @Mock private com.erp.backend.repository.SalesOrderLineRepository orderLineRepository;
 
     @InjectMocks private PriceListService service;
 
@@ -389,6 +390,7 @@ class PriceListServiceTest {
 
         verify(priceHistoryRepository).deleteByPriceList(list);
         verify(priceListRepository).clearSourcePriceList(5L);
+        verify(orderLineRepository).clearPriceListReference(5L);
         verify(priceListRepository).delete(list);
         verify(auditLogService).record(eq(AuditModule.PRICING), eq("DELETE_PRICE_LIST"), eq("PRICE_LIST"),
                 eq(5L), eq("BG-TEST-DEL"), anyString(), isNull(), anyString(), eq(manager));

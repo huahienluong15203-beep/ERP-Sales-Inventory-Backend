@@ -36,7 +36,40 @@ public record CustomerResponse(
         LocalDateTime updatedAt,
         RefItem priceList,
         Integer deliveryPointCount,
-        RefItem defaultWarehouse) {
+        RefItem defaultWarehouse,
+        RefItem portalUser) {
+
+    public CustomerResponse(
+            Long id,
+            String code,
+            String name,
+            String taxCode,
+            String customerGroup,
+            String customerGroupLabel,
+            RefItem region,
+            RefItem salesRep,
+            String contactName,
+            String phone,
+            String email,
+            String address,
+            String note,
+            String status,
+            String statusReason,
+            BigDecimal creditLimit,
+            Integer maxDebtDays,
+            Boolean transactionLocked,
+            String transactionLockReason,
+            LocalDateTime transactionLockedAt,
+            LocalDateTime createdAt,
+            LocalDateTime updatedAt,
+            RefItem priceList,
+            Integer deliveryPointCount,
+            RefItem defaultWarehouse) {
+        this(id, code, name, taxCode, customerGroup, customerGroupLabel, region, salesRep,
+                contactName, phone, email, address, note, status, statusReason, creditLimit,
+                maxDebtDays, transactionLocked, transactionLockReason, transactionLockedAt,
+                createdAt, updatedAt, priceList, deliveryPointCount, defaultWarehouse, null);
+    }
 
     public CustomerResponse(
             Long id,
@@ -66,7 +99,7 @@ public record CustomerResponse(
         this(id, code, name, taxCode, customerGroup, customerGroupLabel, region, salesRep,
                 contactName, phone, email, address, note, status, statusReason, creditLimit,
                 maxDebtDays, transactionLocked, transactionLockReason, transactionLockedAt,
-                createdAt, updatedAt, priceList, deliveryPointCount, null);
+                createdAt, updatedAt, priceList, deliveryPointCount, null, null);
     }
 
     public CustomerResponse(
@@ -96,6 +129,6 @@ public record CustomerResponse(
         this(id, code, name, taxCode, customerGroup, customerGroupLabel, region, salesRep,
                 contactName, phone, email, address, note, status, statusReason, creditLimit,
                 maxDebtDays, transactionLocked, transactionLockReason, transactionLockedAt,
-                createdAt, updatedAt, priceList, 0, null);
+                createdAt, updatedAt, priceList, 0, null, null);
     }
 }

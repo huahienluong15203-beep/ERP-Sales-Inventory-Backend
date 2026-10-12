@@ -50,6 +50,16 @@ public class PriceListService {
     private final PriceHistoryService priceHistoryService;
     private final PriceHistoryRepository priceHistoryRepository;
     private final CustomerRepository customerRepository;
+    private final com.erp.backend.repository.SalesOrderLineRepository orderLineRepository;
+
+    static final List<String> CONFIRMED_ORDER_STATUSES = List.of(
+            SalesOrder.STATUS_PENDING_APPROVAL,
+            SalesOrder.STATUS_APPROVED,
+            SalesOrder.STATUS_PICKING,
+            SalesOrder.STATUS_DISPATCHED,
+            SalesOrder.STATUS_DELIVERED,
+            SalesOrder.STATUS_CLOSED
+    );
 
     // ======================= XEM / TRA CỨU =======================
 
@@ -237,13 +247,14 @@ public class PriceListService {
         return toResponse(saved, true);
     }
 
-    /** Xoá bảng giá khi chưa phát sinh đơn hàng. */
+    /** Xoá bảng giá khi chưa phát sinh đơn hàng chính thức. Nếu chỉ có đơn nháp, gỡ liên kết để xóa được (Cách 2). */
     @Transactional
     public void delete(Long id, UserDetailsImpl actor) {
         PriceList priceList = findForUpdate(id);
-        if (priceList.isHasOrders()) {
+        long confirmedOrdersCount = orderLineRepository.countByPriceListIdAndOrderStatuses(id, CONFIRMED_ORDER_STATUSES);
+        if (priceList.isHasOrders() || confirmedOrdersCount > 0) {
             throw BusinessException.conflict("PRICE_LIST_HAS_ORDERS",
-                    "Không thể xoá bảng giá đã phát sinh đơn hàng", null);
+                    "Không thể xoá bảng giá đã phát sinh đơn hàng chính thức (chờ duyệt hoặc đã duyệt)", null);
         }
 
         // Chặn xoá nếu đây là bảng giá hiệu lực duy nhất của nhóm và nhóm đang có đại lý
@@ -265,6 +276,7 @@ public class PriceListService {
         String before = summary(priceList);
         priceHistoryRepository.deleteByPriceList(priceList);
         priceListRepository.clearSourcePriceList(priceList.getId());
+        orderLineRepository.clearPriceListReference(priceList.getId());
         priceListRepository.delete(priceList);
         audit("DELETE_PRICE_LIST", priceList, before, null, "Xoá bảng giá " + priceList.getCode(), actor);
     }
@@ -351,7 +363,8 @@ public class PriceListService {
     }
 
     private void checkEditable(PriceList priceList) {
-        if (priceList.isHasOrders()) {
+        long confirmedOrdersCount = orderLineRepository.countByPriceListIdAndOrderStatuses(priceList.getId(), CONFIRMED_ORDER_STATUSES);
+        if (priceList.isHasOrders() || confirmedOrdersCount > 0) {
             throw BusinessException.conflict("PRICE_LIST_LOCKED",
                     "Bảng giá đã phát sinh đơn hàng nên không thể chỉnh sửa. Vui lòng tạo phiên bản mới.", null);
         }
@@ -537,8 +550,9 @@ public class PriceListService {
                         i.getPrice(), i.getFloorPrice(), i.getCreatedAt(), i.getUpdatedAt()))
                 .toList()
                 : null;
+        boolean hasOrders = p.isHasOrders() || orderLineRepository.countByPriceListIdAndOrderStatuses(p.getId(), CONFIRMED_ORDER_STATUSES) > 0;
         return new PriceListResponse(p.getId(), p.getCode(), p.getName(), p.getCustomerGroup().name(),
-                p.getCustomerGroup().getLabel(), p.getStartDate(), p.getEndDate(), p.getStatus(), p.isHasOrders(),
+                p.getCustomerGroup().getLabel(), p.getStartDate(), p.getEndDate(), p.getStatus(), hasOrders,
                 p.getVersion(), p.getSourcePriceList() != null ? p.getSourcePriceList().getId() : null, p.getNote(),
                 p.getItems().size(), items, p.getCreatedAt(), p.getUpdatedAt());
     }

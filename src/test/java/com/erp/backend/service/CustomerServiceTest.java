@@ -44,6 +44,7 @@ class CustomerServiceTest {
     @Mock private SalesOrderRepository orderRepository;
     @Mock private CustomerCreditService creditService;
     @Mock private com.erp.backend.repository.WarehouseRepository warehouseRepository;
+    @Mock private PortalAccountService portalAccountService;
 
     @InjectMocks private CustomerService service;
 
