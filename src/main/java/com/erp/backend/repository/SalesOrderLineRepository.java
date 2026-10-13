@@ -17,6 +17,9 @@ public interface SalesOrderLineRepository extends JpaRepository<SalesOrderLine, 
     long countByPriceListIdAndOrderStatuses(@Param("priceListId") Long priceListId,
                                             @Param("confirmedStatuses") Collection<String> confirmedStatuses);
 
+    /** S3-01: chính sách chiết khấu đã được áp vào dòng đơn hàng nào chưa. */
+    boolean existsByDiscountPolicyCodeIgnoreCase(String discountPolicyCode);
+
     @Modifying
     @Query("UPDATE SalesOrderLine l SET l.priceList = null WHERE l.priceList.id = :priceListId")
     void clearPriceListReference(@Param("priceListId") Long priceListId);

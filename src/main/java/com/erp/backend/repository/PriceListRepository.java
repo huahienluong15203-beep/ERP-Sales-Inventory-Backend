@@ -20,6 +20,19 @@ public interface PriceListRepository extends JpaRepository<PriceList, Long>, Jpa
 
     long countByHasOrdersTrue();
 
+    long countByStatusNot(String status);
+
+    long countByCustomerGroupAndStatusNot(com.erp.backend.entity.CustomerGroup customerGroup, String status);
+
+    /** S2-10: các bảng giá đang bật của cùng nhóm có khoảng hiệu lực giao với [start, end]. */
+    @Query("SELECT p FROM PriceList p WHERE p.status = 'ACTIVE' AND p.customerGroup = :customerGroup "
+            + "AND (:excludeId IS NULL OR p.id <> :excludeId) "
+            + "AND p.startDate <= :end AND (p.endDate IS NULL OR p.endDate >= :start) ORDER BY p.startDate")
+    java.util.List<PriceList> findOverlapping(@Param("customerGroup") com.erp.backend.entity.CustomerGroup customerGroup,
+                                              @Param("start") java.time.LocalDate start,
+                                              @Param("end") java.time.LocalDate end,
+                                              @Param("excludeId") Long excludeId);
+
     boolean existsByCodeIgnoreCaseAndIdNot(String code, Long id);
 
     java.util.List<PriceList> findByStatusOrderByStartDateDesc(String status);

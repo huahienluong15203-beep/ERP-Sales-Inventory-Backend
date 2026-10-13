@@ -361,11 +361,11 @@ class PriceListServiceTest {
     @Test
     @DisplayName("S2-10: Thống kê tính trên toàn bộ dữ liệu, không theo trang")
     void stats_countsAll() {
-        when(priceListRepository.count()).thenReturn(7L);
+        when(priceListRepository.countByStatusNot("DELETED")).thenReturn(7L);
         when(priceListRepository.countByStatus("ACTIVE")).thenReturn(5L);
-        when(priceListRepository.countByCustomerGroup(CustomerGroup.DEALER_LEVEL_1)).thenReturn(3L);
-        when(priceListRepository.countByCustomerGroup(CustomerGroup.DEALER_LEVEL_2)).thenReturn(2L);
-        when(priceListRepository.countByCustomerGroup(CustomerGroup.RETAIL)).thenReturn(2L);
+        when(priceListRepository.countByCustomerGroupAndStatusNot(CustomerGroup.DEALER_LEVEL_1, "DELETED")).thenReturn(3L);
+        when(priceListRepository.countByCustomerGroupAndStatusNot(CustomerGroup.DEALER_LEVEL_2, "DELETED")).thenReturn(2L);
+        when(priceListRepository.countByCustomerGroupAndStatusNot(CustomerGroup.RETAIL, "DELETED")).thenReturn(2L);
         when(priceListRepository.countByHasOrdersTrue()).thenReturn(1L);
 
         assertThat(service.stats()).isEqualTo(new PriceListStatsResponse(7, 5, 3, 2, 2, 1));
@@ -388,10 +388,12 @@ class PriceListServiceTest {
 
         service.delete(5L, manager);
 
-        verify(priceHistoryRepository).deleteByPriceList(list);
-        verify(priceListRepository).clearSourcePriceList(5L);
+        // S3-02: xoá mềm, KHÔNG xoá lịch sử giá
+        verify(priceHistoryRepository, never()).deleteByPriceList(any());
+        verify(priceListRepository, never()).delete(any());
         verify(orderLineRepository).clearPriceListReference(5L);
-        verify(priceListRepository).delete(list);
+        assertThat(list.getStatus()).isEqualTo("DELETED");
+        assertThat(list.getCode()).isEqualTo("BG-TEST-DEL-XOA-5");
         verify(auditLogService).record(eq(AuditModule.PRICING), eq("DELETE_PRICE_LIST"), eq("PRICE_LIST"),
                 eq(5L), eq("BG-TEST-DEL"), anyString(), isNull(), anyString(), eq(manager));
     }
@@ -450,5 +452,24 @@ class PriceListServiceTest {
         assertThatThrownBy(() -> service.delete(999L, manager))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("Không tìm thấy");
+    }
+
+    @Test
+    @DisplayName("S2-10: Tạo bảng giá cùng nhóm trùng thời gian hiệu lực với bảng đang bật -> 409")
+    void create_overlappingPeriod_conflict() {
+        PriceList existingList = PriceList.builder().id(9L).code("BG-A").customerGroup(CustomerGroup.DEALER_LEVEL_1)
+                .startDate(LocalDate.of(2026, 10, 1)).status("ACTIVE").build();
+        when(priceListRepository.findOverlapping(eq(CustomerGroup.DEALER_LEVEL_1), eq(LocalDate.of(2026, 10, 1)), any(), isNull()))
+                .thenReturn(List.of(existingList));
+        PriceListRequest req = new PriceListRequest();
+        req.setCode("BG-B");
+        req.setName("Bảng giá B");
+        req.setCustomerGroup("DEALER_LEVEL_1");
+        req.setStartDate(LocalDate.of(2026, 10, 1));
+
+        assertThatThrownBy(() -> service.create(req, manager))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("PRICE_LIST_PERIOD_OVERLAP");
+        verify(priceListRepository, never()).save(any());
     }
 }
