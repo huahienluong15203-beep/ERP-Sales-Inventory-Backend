@@ -279,6 +279,6 @@ class DiscountPolicyServiceTest {
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.delete(7L, manager))
                 .isInstanceOf(com.erp.backend.exception.BusinessException.class)
                 .extracting("code").isEqualTo("DISCOUNT_POLICY_IN_USE");
-        verify(policyRepository, never()).delete(any());
+        verify(policyRepository, never()).delete(any(DiscountPolicy.class));
     }
 }

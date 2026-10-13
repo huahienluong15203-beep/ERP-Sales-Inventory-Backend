@@ -390,7 +390,7 @@ class PriceListServiceTest {
 
         // S3-02: xoá mềm, KHÔNG xoá lịch sử giá
         verify(priceHistoryRepository, never()).deleteByPriceList(any());
-        verify(priceListRepository, never()).delete(any());
+        verify(priceListRepository, never()).delete(any(PriceList.class));
         verify(orderLineRepository).clearPriceListReference(5L);
         assertThat(list.getStatus()).isEqualTo("DELETED");
         assertThat(list.getCode()).isEqualTo("BG-TEST-DEL-XOA-5");
