@@ -63,25 +63,31 @@ public class InventoryService {
 
         // 1. Miền Trung
         if (ZONE_CENTRAL.equals(zone)) {
-            Optional<Warehouse> wh = warehouseRepository.findByCodeIgnoreCase("WH-MT01")
+            Optional<Warehouse> wh = activeWarehouseByCode("WH-MT01")
                     .or(() -> findFirstActiveWarehouseMatching("MT", "Trung"));
             if (wh.isPresent()) return wh.get();
         }
 
         // 2. Miền Nam
         if (ZONE_SOUTH.equals(zone)) {
-            Optional<Warehouse> wh = warehouseRepository.findByCodeIgnoreCase("WH-MN01")
-                    .or(() -> warehouseRepository.findByCodeIgnoreCase("KHO-HCM"))
+            Optional<Warehouse> wh = activeWarehouseByCode("WH-MN01")
+                    .or(() -> activeWarehouseByCode("KHO-HCM"))
                     .or(() -> findFirstActiveWarehouseMatching("MN", "Nam", "TP.HCM"));
             if (wh.isPresent()) return wh.get();
         }
 
         // 3. Miền Bắc (mặc định)
-        Optional<Warehouse> northWh = warehouseRepository.findByCodeIgnoreCase("WH-MB01")
-                .or(() -> warehouseRepository.findByCodeIgnoreCase("KHO-HN"))
+        Optional<Warehouse> northWh = activeWarehouseByCode("WH-MB01")
+                .or(() -> activeWarehouseByCode("KHO-HN"))
                 .or(() -> findFirstActiveWarehouseMatching("MB", "Bắc", "Hà Nội"));
 
         return northWh.orElseGet(this::getDefaultWarehouse);
+    }
+
+    /** S5-03: chỉ lấy kho đang hoạt động; kho đã ngừng thì bỏ qua để chọn kho khác, không giữ chỗ vào kho ngừng. */
+    private Optional<Warehouse> activeWarehouseByCode(String code) {
+        return warehouseRepository.findByCodeIgnoreCase(code)
+                .filter(w -> "ACTIVE".equalsIgnoreCase(w.getStatus()));
     }
 
     static final String ZONE_NORTH = "MB";

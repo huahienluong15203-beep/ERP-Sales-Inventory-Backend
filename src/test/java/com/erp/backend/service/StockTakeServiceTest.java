@@ -226,6 +226,22 @@ class StockTakeServiceTest {
     }
 
     @Test
+    @DisplayName("S5-08 (Mai): Thực tế 50, giữ chỗ 40, đếm 10 -> chặn chốt (không để tồn khả dụng âm)")
+    void close_belowReserved_conflict() {
+        StockTake st = draft("SP-COCA", "50", "10", "SP-PEPSI", "20", "20");
+        when(stockTakeRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(st));
+        Inventory cocaStock = inv(coca, "50");
+        cocaStock.setReservedStock(new BigDecimal("40"));
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(1L, 10L)).thenReturn(Optional.of(cocaStock));
+
+        assertThatThrownBy(() -> service.close(1L, "Cuối tháng", manager))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "STOCKTAKE_BELOW_RESERVED");
+        assertThat(cocaStock.getPhysicalStock()).isEqualByComparingTo("50");
+        verify(inventoryRepository, never()).save(any(Inventory.class));
+    }
+
+    @Test
     @DisplayName("S5-08: Phiếu đã chốt không sửa được")
     void closedStockTake_locked() {
         StockTake st = draft("SP-COCA", "100", "97");

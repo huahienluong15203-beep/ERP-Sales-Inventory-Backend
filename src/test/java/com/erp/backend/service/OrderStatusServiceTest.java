@@ -1,5 +1,6 @@
 package com.erp.backend.service;
 
+import com.erp.backend.dto.order.OrderLineDeliveryRequest;
 import com.erp.backend.dto.order.OrderResponse;
 import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
@@ -21,6 +22,7 @@ import java.time.Clock;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 import static com.erp.backend.service.CustomerTestData.actor;
@@ -40,6 +42,7 @@ class OrderStatusServiceTest {
     @Mock private InventoryService inventoryService;
     @Mock private AuditLogService auditLogService;
     @Mock private OrderDraftService orderDraftService;
+    @Mock private com.erp.backend.repository.UserRepository userRepository;
 
     @InjectMocks private OrderStatusService service;
 
@@ -366,5 +369,53 @@ class OrderStatusServiceTest {
                 .hasFieldOrPropertyWithValue("code", "DELIVERED_EXCEEDS_ORDERED");
         assertThat(order.getStatus()).isEqualTo(SalesOrder.STATUS_DISPATCHED);
         assertThat(line.getDeliveredQuantity()).isNull();
+    }
+
+    @Test
+    @DisplayName("S4-06 (Mai): NV kho chỉ gắn kho MN xử lý đơn giữ chỗ ở kho MB -> 403, không đổi trạng thái")
+    void transition_warehouseNotAssigned_forbidden() {
+        com.erp.backend.entity.Warehouse mb = com.erp.backend.entity.Warehouse.builder().id(1L).code("WH-MB01").name("Kho MB").build();
+        com.erp.backend.entity.Warehouse mn = com.erp.backend.entity.Warehouse.builder().id(2L).code("WH-MN01").name("Kho MN").build();
+        order.setStatus(SalesOrder.STATUS_APPROVED);
+        order.setReservedWarehouse(mb);
+        when(orderRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(order));
+        com.erp.backend.entity.User staff = com.erp.backend.entity.User.builder().id(20L).username("wh_staff").build();
+        staff.getWarehouses().add(mn);
+        when(userRepository.findById(20L)).thenReturn(Optional.of(staff));
+
+        assertThatThrownBy(() -> service.transitionStatus(100L, "PICKING", null, actor(20, "ROLE_WAREHOUSE")))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "ORDER_WAREHOUSE_NOT_ASSIGNED");
+        assertThat(order.getStatus()).isEqualTo(SalesOrder.STATUS_APPROVED);
+    }
+
+    @Test
+    @DisplayName("S5-01 (Mai): Sửa số thực giao của đơn đã Đóng / đã Huỷ -> 409, không đổi")
+    void updateDelivered_closedOrder_conflict() {
+        order.setStatus(SalesOrder.STATUS_CLOSED);
+        when(orderRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(order));
+        OrderLineDeliveryRequest d = new OrderLineDeliveryRequest();
+        d.setLineId(1L);
+        d.setDeliveredQuantity(BigDecimal.ZERO);
+
+        assertThatThrownBy(() -> service.updateDeliveredQuantities(100L, List.of(d), manager))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "DELIVERY_NOT_EDITABLE");
+        verify(orderRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("Đại lý chỉ tự huỷ được đơn Chờ duyệt; đơn đã duyệt -> 409")
+    void cancel_customerApprovedOrder_conflict() {
+        order.setStatus(SalesOrder.STATUS_APPROVED);
+        when(orderRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(order));
+        UserDetailsImpl agent = actor(30, "ROLE_CUSTOMER");
+        order.getCustomer().setUser(com.erp.backend.entity.User.builder().id(30L).build());
+        org.mockito.Mockito.lenient().when(customerRepository.findByUser_Id(30L)).thenReturn(Optional.of(order.getCustomer()));
+
+        assertThatThrownBy(() -> service.cancel(100L, "Không cần nữa", agent))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "CUSTOMER_CANCEL_NOT_ALLOWED");
+        verify(inventoryService, never()).releaseReservedStock(any());
     }
 }

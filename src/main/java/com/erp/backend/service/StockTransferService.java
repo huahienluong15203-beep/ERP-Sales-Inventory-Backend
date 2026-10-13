@@ -279,6 +279,23 @@ public class StockTransferService {
             inventoryRepository.save(sourceInv);
             auditStock("TRANSFER_DISPATCH", sourceInv, sourceWh, line.getProductSku(), before,
                     "Xuất chuyển kho phiếu " + transfer.getCode() + " sang " + transfer.getDestWarehouseCode(), actor);
+            // S5-07 (Mai): chuyển theo lô thì trừ cả số lượng của lô đó ở kho đi
+            // (trước đây chỉ cộng lô ở kho đến khi nhận, lô ở kho đi giữ nguyên -> tồn theo lô bị đếm 2 lần)
+            if (StringUtils.hasText(line.getBatchNumber())) {
+                String batchNum = line.getBatchNumber().trim();
+                ProductLot sourceLot = productLotRepository
+                        .findByProduct_IdAndWarehouse_IdAndBatchNumber(product.getId(), sourceWh.getId(), batchNum)
+                        .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST, "LOT_NOT_FOUND",
+                                "Kho xuất không có lô " + batchNum + " của mặt hàng [" + product.getName() + "]"));
+                BigDecimal lotQty = sourceLot.getQuantity() != null ? sourceLot.getQuantity() : BigDecimal.ZERO;
+                if (lotQty.compareTo(transferQty) < 0) {
+                    throw new BusinessException(HttpStatus.BAD_REQUEST, "LOT_INSUFFICIENT",
+                            "Lô " + batchNum + " của [" + product.getName() + "] chỉ còn " + plain(lotQty)
+                                    + ", không đủ để chuyển " + plain(transferQty));
+                }
+                sourceLot.setQuantity(lotQty.subtract(transferQty));
+                productLotRepository.save(sourceLot);
+            }
         }
 
         transfer.setStatus(StockTransfer.STATUS_IN_TRANSIT);
