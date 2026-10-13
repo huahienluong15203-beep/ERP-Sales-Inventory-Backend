@@ -85,6 +85,11 @@ public class UserProfileController {
                     : getDefaultWarehouseForRole(effectiveRole);
             userInfo.put("warehouse", warehouseStr);
 
+            List<String> whCodes = (user.getWarehouses() != null && !user.getWarehouses().isEmpty())
+                    ? user.getWarehouses().stream().map(Warehouse::getCode).toList()
+                    : Collections.emptyList();
+            userInfo.put("warehouseCodes", whCodes);
+
             String locationStr = (user.getRegions() != null && !user.getRegions().isEmpty())
                     ? user.getRegions().stream().map(Region::getName).collect(Collectors.joining(", "))
                     : getDefaultLocationForRole(effectiveRole);
@@ -102,6 +107,7 @@ public class UserProfileController {
             userInfo.put("role", effectiveRole);
             userInfo.put("roles", List.of(effectiveRole));
             userInfo.put("warehouse", getDefaultWarehouseForRole(effectiveRole));
+            userInfo.put("warehouseCodes", Collections.emptyList());
             userInfo.put("workLocation", getDefaultLocationForRole(effectiveRole));
         }
 

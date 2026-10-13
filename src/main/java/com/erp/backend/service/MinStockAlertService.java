@@ -256,6 +256,17 @@ public class MinStockAlertService {
                     "Định mức tồn tối thiểu không thể nhỏ hơn 0", "minThreshold");
         }
 
+        if (actor != null && actor.getAuthorities() != null) {
+            Set<String> roles = actor.getAuthorities().stream()
+                    .map(a -> a.getAuthority())
+                    .collect(Collectors.toSet());
+            boolean canEdit = roles.contains("ROLE_ADMIN") || roles.contains("ROLE_WH_MANAGER");
+            if (!canEdit) {
+                throw new BusinessException(HttpStatus.FORBIDDEN, "ACCESS_DENIED",
+                        "Chỉ Quản lý kho hoặc Quản trị viên mới có quyền thiết lập định mức tồn tối thiểu");
+            }
+        }
+
         Product product = productRepository.findBySkuIgnoreCase(payload.getProductSku().trim())
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy sản phẩm có SKU: " + payload.getProductSku()));
 
@@ -426,13 +437,29 @@ public class MinStockAlertService {
                 .map(a -> a.getAuthority())
                 .collect(Collectors.toSet());
 
-        boolean broad = roles.contains("ROLE_ADMIN") || roles.contains("ROLE_WH_MANAGER")
+        boolean broad = roles.contains("ROLE_ADMIN")
                 || roles.contains("ROLE_ACCOUNTANT") || roles.contains("ROLE_SALES_MANAGER");
-        if (broad || !roles.contains("ROLE_WAREHOUSE")) {
+        if (broad) {
             return null;
         }
-        return userRepository.findById(actor.getId())
-                .map(u -> u.getWarehouses().stream().map(Warehouse::getId).collect(Collectors.toSet()))
-                .orElse(Collections.emptySet());
+
+        // Quản lý kho và Nhân viên kho: lọc theo danh sách kho được phân công
+        if (roles.contains("ROLE_WAREHOUSE") || roles.contains("ROLE_WH_MANAGER")) {
+            Set<Long> userWhIds = userRepository.findById(actor.getId())
+                    .map(u -> u.getWarehouses().stream().map(Warehouse::getId).collect(Collectors.toSet()))
+                    .orElse(Collections.emptySet());
+
+            if (!userWhIds.isEmpty()) {
+                return userWhIds;
+            }
+
+            // Fallback: nếu chưa được gán kho cụ thể trong DB (dữ liệu mẫu), mặc định gắn với Kho Tổng Miền Bắc (WH-MB01)
+            Set<Long> fallback = new HashSet<>();
+            warehouseRepository.findByCodeIgnoreCase("WH-MB01")
+                    .ifPresent(wh -> fallback.add(wh.getId()));
+            return fallback.isEmpty() ? null : fallback;
+        }
+
+        return null;
     }
 }

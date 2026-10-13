@@ -8,6 +8,7 @@ import com.erp.backend.repository.InventoryRepository;
 import com.erp.backend.repository.ProductRepository;
 import com.erp.backend.repository.RegionRepository;
 import com.erp.backend.repository.WarehouseRepository;
+import com.erp.backend.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
@@ -15,10 +16,12 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
- * Dữ liệu mẫu kho, địa bàn và tồn kho để test S1-09, S4-03 (chỉ tạo nếu chưa có).
+ * Dữ liệu mẫu kho, địa bàn và tồn kho để test (chỉ tạo nếu chưa có).
  */
 @Slf4j
 @Component
@@ -30,6 +33,7 @@ public class ReferenceDataInitializer implements CommandLineRunner {
     private final ProductRepository productRepository;
     private final InventoryRepository inventoryRepository;
     private final com.erp.backend.repository.MinStockThresholdRepository minStockThresholdRepository;
+    private final UserRepository userRepository;
     private final JdbcTemplate jdbcTemplate;
 
     @Override
@@ -53,11 +57,14 @@ public class ReferenceDataInitializer implements CommandLineRunner {
         seedRegion("MT", "Miền Trung");
         seedRegion("MN", "Miền Nam");
 
-        // S4-03: Khởi tạo tồn kho mẫu cho các sản phẩm trong hệ thống
+        // Khởi tạo tồn kho mẫu cho các sản phẩm trong hệ thống
         seedInventories();
 
-        // S5-09: Khởi tạo định mức tồn tối thiểu mẫu để test cảnh báo đứt hàng
+        // Khởi tạo định mức tồn tối thiểu mẫu để test cảnh báo đứt hàng
         seedMinStockThresholds();
+
+        // Gắn kho mẫu cho các tài khoản nhân sự kho nếu chưa được gán
+        seedUserWarehouseAssignments();
     }
 
     private void seedWarehouse(String code, String name, String address) {
@@ -141,6 +148,39 @@ public class ReferenceDataInitializer implements CommandLineRunner {
                             .build());
                 }
             }
+        }
+    }
+
+    private void seedUserWarehouseAssignments() {
+        try {
+            List<Long> whIds = jdbcTemplate.query(
+                    "SELECT id FROM warehouses WHERE UPPER(code) = 'WH-MB01' LIMIT 1",
+                    (rs, rowNum) -> rs.getLong("id"));
+            if (!whIds.isEmpty()) {
+                Long whId = whIds.get(0);
+                for (String username : List.of("wh_staff", "wh_manager")) {
+                    List<Long> uIds = jdbcTemplate.query(
+                            "SELECT id FROM users WHERE username = ?",
+                            (rs, rowNum) -> rs.getLong("id"),
+                            username);
+                    if (!uIds.isEmpty()) {
+                        Long uId = uIds.get(0);
+                        Integer count = jdbcTemplate.queryForObject(
+                                "SELECT COUNT(*) FROM user_warehouses WHERE user_id = ?",
+                                Integer.class,
+                                uId);
+                        if (count != null && count == 0) {
+                            jdbcTemplate.update(
+                                    "INSERT INTO user_warehouses (user_id, warehouse_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                                    uId,
+                                    whId);
+                            log.info("Đã gắn kho mặc định WH-MB01 cho tài khoản {}", username);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Không thể tự động gắn kho mặc định qua SQL: {}", e.getMessage());
         }
     }
 }
