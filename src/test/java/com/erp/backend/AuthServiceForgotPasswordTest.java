@@ -213,6 +213,9 @@ class AuthServiceForgotPasswordTest {
         assertNull(user.getLockUntil());
         assertEquals("ACTIVE", user.getStatus());
         assertTrue(token.isUsed());
+        // S1-03: đặt lại mật khẩu thu hồi phiên đang đăng nhập
+        assertNull(user.getActiveSessionId());
+        assertNotNull(user.getPasswordChangedAt());
 
         verify(userRepository, times(1)).save(user);
         verify(tokenRepository, times(1)).save(token);
@@ -236,5 +239,27 @@ class AuthServiceForgotPasswordTest {
 
         assertEquals("LOCKED", user.getStatus());
         assertEquals("hashed_new_password", user.getPassword());
+    }
+
+    @Test
+    @DisplayName("S1-02: Gia hạn phiên -> cấp token mới cùng phiên hiện tại")
+    void testRefreshSession_IssuesNewTokenSameSession() {
+        User user = User.builder().id(3L).username("sales_rep").activeSessionId("sid-1").build();
+        when(userRepository.findById(3L)).thenReturn(Optional.of(user));
+        when(jwtUtils.generateTokenFromUsernameAndSession("sales_rep", "sid-1")).thenReturn("new-token");
+
+        var res = authService.refreshSession(3L);
+
+        assertEquals("new-token", res.get("accessToken"));
+    }
+
+    @Test
+    @DisplayName("S1-02: Phiên đã đăng xuất / bị thu hồi -> không gia hạn được")
+    void testRefreshSession_NoActiveSession_Rejected() {
+        User user = User.builder().id(3L).username("sales_rep").activeSessionId(null).build();
+        when(userRepository.findById(3L)).thenReturn(Optional.of(user));
+
+        assertThrows(RuntimeException.class, () -> authService.refreshSession(3L));
+        verify(jwtUtils, never()).generateTokenFromUsernameAndSession(any(), any());
     }
 }

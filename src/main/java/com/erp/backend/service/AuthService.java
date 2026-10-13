@@ -18,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -266,6 +267,9 @@ public class AuthService {
         boolean tempLocked = "LOCKED".equalsIgnoreCase(user.getStatus()) && user.getLockUntil() != null;
         user.setPassword(passwordEncoder.encode(newPassword));
         user.setFailedLoginAttempts(0);
+        // S1-03: đặt lại mật khẩu qua email -> thu hồi mọi phiên đang đăng nhập (token cũ hết hiệu lực)
+        user.setActiveSessionId(null);
+        user.setPasswordChangedAt(LocalDateTime.now());
         if (tempLocked) {
             user.setStatus("ACTIVE");
             user.setLockUntil(null);
@@ -277,6 +281,21 @@ public class AuthService {
         tokenRepository.save(resetToken);
 
         return "Đặt lại mật khẩu thành công! Bây giờ bạn đã có thể đăng nhập bằng mật khẩu mới.";
+    }
+
+    /**
+     * S1-02: Gia hạn phiên khi người dùng đang hoạt động. Cấp token mới cùng phiên (sid) hiện tại,
+     * thời hạn tính lại từ bây giờ. Phiên đã bị thu hồi / tài khoản bị khoá thì filter đã chặn trước khi tới đây.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> refreshSession(Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new RuntimeException("Không tìm thấy tài khoản người dùng!"));
+        if (user.getActiveSessionId() == null) {
+            throw new RuntimeException("Phiên làm việc đã kết thúc. Vui lòng đăng nhập lại!");
+        }
+        String token = jwtUtils.generateTokenFromUsernameAndSession(user.getUsername(), user.getActiveSessionId());
+        return Map.of("accessToken", token, "tokenType", "Bearer", "expiresInMs", jwtUtils.getExpirationMs());
     }
 
     // 10. TÍNH NĂNG ĐỔI MẬT KHẨU KHI ĐANG ĐĂNG NHẬP

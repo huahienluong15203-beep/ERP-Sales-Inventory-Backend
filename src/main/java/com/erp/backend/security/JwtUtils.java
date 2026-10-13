@@ -33,6 +33,10 @@ public class JwtUtils {
                 .compact();
     }
 
+    public long getExpirationMs() {
+        return jwtExpirationMs;
+    }
+
     public String generateTokenFromUsername(String username) {
         return generateTokenFromUsernameAndSession(username, java.util.UUID.randomUUID().toString());
     }
