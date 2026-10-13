@@ -50,6 +50,15 @@ public class MinStockAlertService {
                                                             Boolean belowThresholdOnly,
                                                             String keyword,
                                                             UserDetailsImpl actor) {
+        return fetchMinStockConfigs(warehouseCode, belowThresholdOnly, null, keyword, actor);
+    }
+
+    @Transactional(readOnly = true)
+    public List<MinStockAlertResponse> fetchMinStockConfigs(String warehouseCode,
+                                                            Boolean belowThresholdOnly,
+                                                            String status,
+                                                            String keyword,
+                                                            UserDetailsImpl actor) {
         Set<Long> allowedWhIds = allowedWarehouseIds(actor);
 
         List<Warehouse> targetWarehouses;
@@ -132,10 +141,6 @@ public class MinStockAlertService {
                 boolean isBelow = minThreshold.compareTo(BigDecimal.ZERO) > 0
                         && physicalStock.compareTo(minThreshold) < 0;
 
-                if (filterBelowOnly && !isBelow) {
-                    continue;
-                }
-
                 BigDecimal deficit = isBelow
                         ? minThreshold.subtract(physicalStock).max(BigDecimal.ZERO)
                         : BigDecimal.ZERO;
@@ -149,6 +154,19 @@ public class MinStockAlertService {
                     severity = "CRITICAL"; // Tồn = 0 hoặc dưới 50% định mức: Báo đỏ nguy cấp
                 } else {
                     severity = "WARNING";  // Dưới định mức nhưng >= 50%
+                }
+
+                // Lọc theo trạng thái tồn (ALL, BELOW, CRITICAL, SAFE)
+                if (status != null && !status.trim().isEmpty() && !"ALL".equalsIgnoreCase(status.trim())) {
+                    if ("BELOW".equalsIgnoreCase(status.trim())) {
+                        if (!isBelow) continue;
+                    } else if ("CRITICAL".equalsIgnoreCase(status.trim())) {
+                        if (!"CRITICAL".equalsIgnoreCase(severity)) continue;
+                    } else if ("SAFE".equalsIgnoreCase(status.trim())) {
+                        if (isBelow) continue;
+                    }
+                } else if (filterBelowOnly && !isBelow) {
+                    continue;
                 }
 
                 // Đề xuất lượng nhập thêm: thiếu hụt + 50% ngưỡng an toàn
@@ -303,7 +321,19 @@ public class MinStockAlertService {
             int page,
             int size,
             UserDetailsImpl actor) {
-        List<MinStockAlertResponse> all = fetchMinStockConfigs(warehouseCode, belowThresholdOnly, keyword, actor);
+        return fetchMinStockConfigsPage(warehouseCode, belowThresholdOnly, null, keyword, page, size, actor);
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<MinStockAlertResponse> fetchMinStockConfigsPage(
+            String warehouseCode,
+            Boolean belowThresholdOnly,
+            String status,
+            String keyword,
+            int page,
+            int size,
+            UserDetailsImpl actor) {
+        List<MinStockAlertResponse> all = fetchMinStockConfigs(warehouseCode, belowThresholdOnly, status, keyword, actor);
         int total = all.size();
         int s = Math.max(1, size);
         int totalPages = (int) Math.ceil((double) total / s);
