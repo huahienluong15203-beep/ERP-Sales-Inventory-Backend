@@ -136,18 +136,18 @@ public class ProductExcelImportService {
             Sheet sheet2 = workbook.createSheet("HuongDan_QuyDinh");
             Row guideHeader = sheet2.createRow(0);
             Cell gCell = guideHeader.createCell(0);
-            gCell.setCellValue("HƯỚNG DẪN QUY CHUẨN NHẬP DANH MỤC SẢN PHẨM TỪ TỆP EXCEL (S2-08)");
+            gCell.setCellValue("HƯỚNG DẪN QUY CHUẨN NHẬP DANH MỤC SẢN PHẨM TỪ TỆP EXCEL");
             gCell.setCellStyle(headerStyle);
 
             List<String> guidelines = List.of(
                     "1. Các cột có dấu (*) là thông tin bắt buộc phải có dữ liệu.",
                     "2. Mã SKU (*): Mã nhận diện duy nhất của sản phẩm trong hệ thống (2 - 50 ký tự).",
-                    "3. CÂY PHÂN CẤP NHÓM HÀNG (S2-06 & S2-08):",
+                    "3. CÂY PHÂN CẤP NHÓM HÀNG:",
                     "   - Cột 'Ngành hàng (Cấp 1)': Cấp gốc cao nhất của danh mục hàng (vd: Đồ uống, Bánh kẹo, Gia vị...).",
                     "   - Cột 'Nhóm hàng (Cấp 2)': Nhóm hàng trực thuộc ngành hàng (vd: Nước giải khát, Bia & Đồ uống có cồn...).",
                     "   - Cột 'Phân nhóm (Cấp 3)': Phân nhóm chi tiết (vd: Có ga, Nước suối...).",
                     "   - Dữ liệu sẽ tự động đồng bộ và hiển thị trên Cây phân cấp (trang Quản lý nhóm hàng), không cần chọn thủ công từng sản phẩm.",
-                    "4. QUY TẮC CẬP NHẬT & GHI ĐÈ CẤP CÂY PHÂN CẤP (AC2 & AC4):",
+                    "4. QUY TẮC CẬP NHẬT & GHI ĐÈ CẤP CÂY PHÂN CẤP:",
                     "   - Nếu Mã SKU chưa tồn tại trong hệ thống -> Hệ thống sẽ TẠO MỚI và gán vào nhánh cây phân cấp tương ứng.",
                     "   - Nếu Mã SKU đã tồn tại (hoặc lặp lại trong tệp) nhưng khác cấp cây -> Tự động GHI ĐÈ, đổi level cây phân cấp của sản phẩm thay vì báo lỗi dòng.",
                     "5. Tên sản phẩm (*): Tên hiển thị đầy đủ của mặt hàng (tối đa 200 ký tự).",

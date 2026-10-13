@@ -190,11 +190,11 @@ public class GoodsReceiptService {
             if (hasBatch) {
                 if (!StringUtils.hasText(batchNumber)) {
                     throw new BusinessException(HttpStatus.BAD_REQUEST, "BATCH_NUMBER_REQUIRED",
-                            "Mặt hàng [" + product.getName() + "] có quản lý lô, bắt buộc nhập Số lô sản xuất (AC3)");
+                            "Mặt hàng [" + product.getName() + "] có quản lý lô, bắt buộc nhập Số lô sản xuất");
                 }
                 if (expiredDate == null) {
                     throw new BusinessException(HttpStatus.BAD_REQUEST, "EXPIRED_DATE_REQUIRED",
-                            "Mặt hàng [" + product.getName() + "] có quản lý lô, bắt buộc chọn Hạn sử dụng (AC3)");
+                            "Mặt hàng [" + product.getName() + "] có quản lý lô, bắt buộc chọn Hạn sử dụng");
                 }
             }
 
