@@ -140,18 +140,28 @@ public class StockLedgerService {
         }
         Set<String> roles = new HashSet<>();
         actor.getAuthorities().forEach(a -> roles.add(a.getAuthority()));
-        boolean broad = roles.contains("ROLE_ADMIN") || roles.contains("ROLE_WH_MANAGER")
+        boolean broad = roles.contains("ROLE_ADMIN")
                 || roles.contains("ROLE_ACCOUNTANT") || roles.contains("ROLE_SALES_MANAGER");
-        if (broad || !roles.contains("ROLE_WAREHOUSE")) {
+        if (broad) {
             return null;
         }
-        return userRepository.findById(actor.getId())
-                .map(u -> {
-                    Set<Long> ids = new HashSet<>();
-                    u.getWarehouses().forEach(w -> ids.add(w.getId()));
-                    return ids;
-                })
-                .orElse(Set.of());
+        if (roles.contains("ROLE_WAREHOUSE") || roles.contains("ROLE_WH_MANAGER")) {
+            Set<Long> ids = userRepository.findById(actor.getId())
+                    .map(u -> {
+                        Set<Long> s = new HashSet<>();
+                        u.getWarehouses().forEach(w -> s.add(w.getId()));
+                        return s;
+                    })
+                    .orElse(Set.of());
+            if (!ids.isEmpty()) {
+                return ids;
+            }
+            Set<Long> fallback = new HashSet<>();
+            warehouseRepository.findByCodeIgnoreCase("WH-MB01")
+                    .ifPresent(wh -> fallback.add(wh.getId()));
+            return fallback.isEmpty() ? null : fallback;
+        }
+        return null;
     }
 
     private static Sort sort(String sort) {
