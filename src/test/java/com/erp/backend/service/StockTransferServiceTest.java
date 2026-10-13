@@ -282,6 +282,29 @@ class StockTransferServiceTest {
     }
 
     @Test
+    @DisplayName("S5-07 (Mai): Chuyển 40 của lô L1 -> lô L1 ở kho đi còn 60")
+    void dispatchTransfer_withBatch_deductsSourceLot() {
+        StockTransferLine line = StockTransferLine.builder().id(1L).product(sampleProduct)
+                .productSku(sampleProduct.getSku()).productName(sampleProduct.getName()).unit("Lon")
+                .transferQuantity(BigDecimal.valueOf(40)).batchNumber("L1").build();
+        StockTransfer transfer = StockTransfer.builder().id(51L).code("TRF-202610-002").sourceWarehouse(sourceWh)
+                .destWarehouse(destWh).status(StockTransfer.STATUS_DRAFT).lines(new ArrayList<>(List.of(line))).build();
+        line.setStockTransfer(transfer);
+        ProductLot lot = ProductLot.builder().id(9L).product(sampleProduct).warehouse(sourceWh).batchNumber("L1")
+                .quantity(BigDecimal.valueOf(100)).build();
+
+        when(stockTransferRepository.findByIdForUpdate(51L)).thenReturn(Optional.of(transfer));
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(1L, 10L)).thenReturn(Optional.of(sourceInventory));
+        when(productLotRepository.findByProduct_IdAndWarehouse_IdAndBatchNumber(10L, 1L, "L1")).thenReturn(Optional.of(lot));
+        when(stockTransferRepository.save(any(StockTransfer.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        stockTransferService.dispatchTransfer(51L, whStaffActor);
+
+        assertThat(lot.getQuantity()).isEqualByComparingTo("60");
+        verify(productLotRepository).save(lot);
+    }
+
+    @Test
     @DisplayName("S5-07 (TC507-18): NV kho không được phân công kho đến -> không nhận hàng được (403), tồn không đổi")
     void receiveTransfer_staffNotAssignedToDest_forbidden() {
         User onlySource = User.builder().id(1L).username("wh_staff")

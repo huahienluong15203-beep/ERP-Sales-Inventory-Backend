@@ -53,6 +53,7 @@ public class OrderStatusService {
     private final InventoryService inventoryService;
     private final AuditLogService auditLogService;
     private final OrderDraftService orderDraftService;
+    private final com.erp.backend.repository.UserRepository userRepository;
 
     Clock clock = Clock.system(VN_ZONE);
 
@@ -97,6 +98,14 @@ public class OrderStatusService {
                     "Đơn hàng đã bị từ chối duyệt, không thể hủy", "status");
         }
 
+        // Đại lý (cổng B2B) chỉ tự huỷ được đơn của mình khi còn Chờ duyệt / Nháp; đã duyệt thì phải liên hệ NV kinh doanh
+        if (CustomerAccess.isCustomer(actor)
+                && !SalesOrder.STATUS_PENDING_APPROVAL.equalsIgnoreCase(currentStatus)
+                && !SalesOrder.STATUS_DRAFT.equalsIgnoreCase(currentStatus)) {
+            throw BusinessException.conflict("CUSTOMER_CANCEL_NOT_ALLOWED",
+                    "Đơn đã được duyệt nên đại lý không tự huỷ được. Vui lòng liên hệ nhân viên kinh doanh phụ trách.", "status");
+        }
+
         // S4-06 AC2: Tự động nhả tồn đang giữ chỗ nếu đơn ở trạng thái đã giữ chỗ tồn kho
         if (SalesOrder.STATUS_PENDING_APPROVAL.equalsIgnoreCase(currentStatus)
                 || SalesOrder.STATUS_APPROVED.equalsIgnoreCase(currentStatus)
@@ -119,7 +128,9 @@ public class OrderStatusService {
         log.info("S4-06: Đã hủy đơn hàng {} từ trạng thái {}, lý do: '{}', thực hiện bởi: {}",
                 saved.getCode(), currentStatus, cleanReason, actor != null ? actor.getUsername() : "anonymous");
 
-        return orderDraftService.toResponse(saved);
+        OrderResponse res = orderDraftService.toResponse(saved);
+        // S5-01: đại lý tự huỷ trên cổng thì không trả giá sàn / tồn nội bộ
+        return res != null && CustomerAccess.isCustomer(actor) ? res.forCustomer() : res;
     }
 
     public OrderResponse transitionStatus(Long id, String targetStatus, String note, UserDetailsImpl actor) {
@@ -155,6 +166,9 @@ public class OrderStatusService {
         CustomerAccess.checkCanAccess(actor, order.getCustomer(), customerRepository);
 
         String currentStatus = order.getStatus() != null ? order.getStatus().toUpperCase() : "";
+
+        // S4-06: NV kho chỉ soạn / xuất / giao đơn của kho mình được phân công
+        assertAssignedWarehouse(actor, order);
 
         // Kiểm tra chuyển bước hợp lệ
         validateStatusTransition(currentStatus, cleanTarget);
@@ -225,10 +239,23 @@ public class OrderStatusService {
         SalesOrder order = orderRepository.findByIdForUpdate(id)
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy đơn hàng"));
         CustomerAccess.checkCanAccess(actor, order.getCustomer(), customerRepository);
+        assertAssignedWarehouse(actor, order);
+
+        // S5-01: chỉ sửa số thực giao khi đơn đã xuất kho / đã giao. Đơn đã Đóng hoặc đã Huỷ thì khoá (chứng từ đã chốt).
+        String status = order.getStatus() != null ? order.getStatus().toUpperCase() : "";
+        if (!SalesOrder.STATUS_DISPATCHED.equals(status) && !SalesOrder.STATUS_DELIVERED.equals(status)) {
+            throw BusinessException.conflict("DELIVERY_NOT_EDITABLE",
+                    "Chỉ sửa số lượng thực giao khi đơn đã xuất kho hoặc đã giao (đơn hiện ở trạng thái " + status + ")",
+                    "status");
+        }
+        String before = deliverySummary(order);
 
         applyLineDeliveries(order, lineDeliveries);
 
         SalesOrder saved = orderRepository.saveAndFlush(order);
+        // Quy tắc 9: ghi nhật ký số thực giao trước / sau
+        audit(saved, "UPDATE_DELIVERED_QUANTITY", before, deliverySummary(saved),
+                "Cập nhật số lượng thực giao đơn " + saved.getCode(), actor);
         log.info("S5-01: Đã cập nhật số lượng thực giao cho đơn hàng {}, thực hiện bởi {}",
                 saved.getCode(), actor != null ? actor.getUsername() : "anonymous");
 
@@ -265,6 +292,43 @@ public class OrderStatusService {
             } else if (req.getDeliveredQuantity().compareTo(targetLine.getQuantity()) >= 0) {
                 targetLine.setShortageReason(null);
             }
+        }
+    }
+
+    private static String deliverySummary(SalesOrder order) {
+        StringBuilder sb = new StringBuilder();
+        for (SalesOrderLine l : order.getLines()) {
+            if (sb.length() > 0) {
+                sb.append("; ");
+            }
+            sb.append(l.getProductSku()).append('=')
+                    .append(l.getDeliveredQuantity() != null ? l.getDeliveredQuantity().stripTrailingZeros().toPlainString() : "-");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * S4-06: NV kho (không phải QL kho / Admin / QL kinh doanh) chỉ thao tác đơn của kho mình được gắn.
+     * Đơn chưa xác định kho thì bỏ qua.
+     */
+    private void assertAssignedWarehouse(UserDetailsImpl actor, SalesOrder order) {
+        if (actor == null || actor.getAuthorities() == null || order.getReservedWarehouse() == null) {
+            return;
+        }
+        Set<String> roles = new java.util.HashSet<>();
+        actor.getAuthorities().forEach(a -> roles.add(a.getAuthority()));
+        if (!roles.contains("ROLE_WAREHOUSE") || roles.contains("ROLE_WH_MANAGER") || roles.contains("ROLE_ADMIN")
+                || roles.contains("ROLE_SALES_MANAGER")) {
+            return;
+        }
+        Long whId = order.getReservedWarehouse().getId();
+        boolean assigned = userRepository.findById(actor.getId())
+                .map(u -> u.getWarehouses().stream().anyMatch(w -> java.util.Objects.equals(w.getId(), whId)))
+                .orElse(false);
+        if (!assigned) {
+            throw new BusinessException(HttpStatus.FORBIDDEN, "ORDER_WAREHOUSE_NOT_ASSIGNED",
+                    "Bạn không được phân công kho " + order.getReservedWarehouse().getName()
+                            + " nên không xử lý được đơn " + order.getCode(), "status");
         }
     }
 

@@ -117,6 +117,16 @@ public record OrderResponse(
                 false, 0);
     }
 
+    /** S5-01: bản cho đại lý xem - các dòng hàng bỏ giá sàn và tồn nội bộ. */
+    public OrderResponse forCustomer() {
+        List<OrderLineResponse> safeLines = lines == null ? null : lines.stream().map(OrderLineResponse::forCustomer).toList();
+        return new OrderResponse(id, code, status, customerId, customerCode, customerName, customerGroup, customerGroupLabel,
+                deliveryAddress, desiredDeliveryDate, note, safeLines, subtotal, discountTotal, totalAmount,
+                createdByUsername, createdAt, updatedAt, warnings, credit, approvalReasons, lastApprovalComment,
+                submittedAt, approvedAt, approvedByUsername, cancelReason, cancelledAt, cancelledByUsername,
+                hasShortage, shortageLineCount);
+    }
+
     public record DeliveryAddressInfo(Long id, String label, String address, String receiverName, String receiverPhone) {
     }
 }

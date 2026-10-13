@@ -183,6 +183,13 @@ public class StockTakeService {
                         "SKU " + l.getSku() + ": điều chỉnh làm tồn thực tế âm (" + after.stripTrailingZeros().toPlainString()
                                 + "), kiểm tra lại số đếm", "lines");
             }
+            // S5-08: tồn thực tế sau kiểm kê không được nhỏ hơn số đang giữ chỗ cho đơn (nếu không, tồn khả dụng bị âm)
+            BigDecimal reserved = inv.getReservedStock() != null ? inv.getReservedStock() : BigDecimal.ZERO;
+            if (after.compareTo(reserved) < 0) {
+                throw BusinessException.conflict("STOCKTAKE_BELOW_RESERVED",
+                        "SKU " + l.getSku() + ": tồn thực tế sau kiểm kê (" + plain(after) + ") nhỏ hơn số đang giữ chỗ cho đơn ("
+                                + plain(reserved) + "). Xử lý / huỷ bớt đơn đang giữ chỗ trước khi chốt kiểm kê.", "lines");
+            }
             inventories.add(inv);
             afters.add(after);
         }

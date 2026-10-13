@@ -111,7 +111,13 @@ public class OrderDraftService {
 
     @Transactional(readOnly = true)
     public OrderResponse getById(Long id, UserDetailsImpl actor) {
-        return toResponse(findOrder(id, actor));
+        return toResponseFor(findOrder(id, actor), actor);
+    }
+
+    /** S5-01: đại lý xem đơn của mình thì không thấy giá sàn và tồn thực tế / giữ chỗ (quy tắc 6). */
+    public OrderResponse toResponseFor(SalesOrder order, UserDetailsImpl actor) {
+        OrderResponse res = toResponse(order);
+        return CustomerAccess.isCustomer(actor) ? res.forCustomer() : res;
     }
 
     /**

@@ -92,4 +92,17 @@ public record OrderLineResponse(
                 false, false, null, null, null, null, null, false, null,
                 null, BigDecimal.ZERO, false, null);
     }
+
+    /**
+     * S5-01 / quy tắc 6: bản dành cho đại lý - bỏ giá sàn, cờ dưới giá sàn và tồn thực tế / giữ chỗ (thông tin nội bộ).
+     * Vẫn giữ tồn khả dụng để đại lý biết còn hàng hay không.
+     */
+    public OrderLineResponse forCustomer() {
+        return new OrderLineResponse(id, lineNo, productId, productSku, productName, unitName, conversionFactor,
+                quantity, baseUnit, baseQuantity, priceListCode, unitPrice, pricePerUnit,
+                null, grossAmount, discountPolicyCode, discountAmount, netAmount,
+                isCustomPrice, null, warehouseCode, warehouseName,
+                null, null, availableStock, isOverStock, maxAllowedQuantity,
+                deliveredQuantity, shortageQuantity, isShortage, shortageReason);
+    }
 }

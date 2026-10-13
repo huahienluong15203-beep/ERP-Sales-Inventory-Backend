@@ -353,4 +353,20 @@ class InventoryServiceTest {
         assertThat(inv.getAvailableStock()).isEqualByComparingTo("45");
         verify(inventoryRepository).save(inv);
     }
+
+    @Test
+    @DisplayName("S5-03 (Mai): Kho miền Bắc đã ngừng -> không giữ chỗ vào kho ngừng, chọn kho đang hoạt động")
+    void resolveWarehouse_inactiveWarehouse_skipped() {
+        whNorth.setStatus("INACTIVE");
+        org.mockito.Mockito.lenient().when(warehouseRepository.findByCodeIgnoreCase("WH-MB01")).thenReturn(java.util.Optional.of(whNorth));
+        org.mockito.Mockito.lenient().when(warehouseRepository.findByCodeIgnoreCase("KHO-HN")).thenReturn(java.util.Optional.empty());
+        org.mockito.Mockito.lenient().when(warehouseRepository.findByStatusOrderByNameAsc("ACTIVE"))
+                .thenReturn(java.util.List.of(whCentral, whSouth));
+
+        Warehouse result = service.resolveWarehouseForCustomer(
+                Customer.builder().address("45 Phố Huế, Hai Bà Trưng, Hà Nội").build());
+
+        assertThat(result.getStatus()).isEqualTo("ACTIVE");
+        assertThat(result.getCode()).isNotEqualTo("WH-MB01");
+    }
 }
