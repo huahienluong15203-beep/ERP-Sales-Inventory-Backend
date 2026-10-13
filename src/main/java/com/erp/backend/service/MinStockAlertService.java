@@ -327,7 +327,10 @@ public class MinStockAlertService {
      */
     @Transactional(readOnly = true)
     public MinStockSummaryResponse getSummary(String warehouseCode, UserDetailsImpl actor) {
-        List<MinStockAlertResponse> alerts = fetchMinStockConfigs(warehouseCode, true, null, actor);
+        List<MinStockAlertResponse> all = fetchMinStockConfigs(warehouseCode, false, null, actor);
+        List<MinStockAlertResponse> alerts = all.stream()
+                .filter(MinStockAlertResponse::isBelowThreshold)
+                .toList();
         List<MinStockAlertResponse> critical = alerts.stream()
                 .filter(a -> "CRITICAL".equalsIgnoreCase(a.getSeverity()))
                 .toList();
@@ -336,6 +339,8 @@ public class MinStockAlertService {
                 .toList();
 
         return MinStockSummaryResponse.builder()
+                .totalSkuCount(all.size())
+                .safeCount(all.size() - alerts.size())
                 .totalAlerts(alerts.size())
                 .criticalCount(critical.size())
                 .warningCount(warning.size())

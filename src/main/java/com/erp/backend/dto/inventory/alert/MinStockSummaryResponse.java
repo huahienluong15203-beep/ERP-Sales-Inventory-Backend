@@ -19,4 +19,6 @@ public class MinStockSummaryResponse {
     private long criticalCount;
     private long warningCount;
     private List<MinStockAlertResponse> criticalItems;
+    private long totalSkuCount;
+    private long safeCount;
 }
