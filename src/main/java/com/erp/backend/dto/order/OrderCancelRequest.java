@@ -17,7 +17,7 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class OrderCancelRequest {
 
-    @NotBlank(message = "Bắt buộc nhập lý do hủy đơn hàng theo quy chuẩn S4-06 AC2!")
+    @NotBlank(message = "Bắt buộc nhập lý do hủy đơn hàng!")
     @Size(max = 500, message = "Lý do hủy tối đa 500 ký tự")
     private String reason;
 }

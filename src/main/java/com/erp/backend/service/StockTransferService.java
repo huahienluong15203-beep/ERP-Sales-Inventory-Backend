@@ -353,7 +353,7 @@ public class StockTransferService {
                 if (!hasLineReason && !hasGenReason) {
                     throw new BusinessException(HttpStatus.BAD_REQUEST, "DISCREPANCY_REASON_REQUIRED",
                             "Phát hiện chênh lệch tại mặt hàng [" + line.getProductName() +
-                                    "]. Bắt buộc nhập lý do chênh lệch theo AC4.");
+                                    "]. Bắt buộc nhập lý do chênh lệch.");
                 }
             }
 

@@ -153,7 +153,7 @@ class OrderStatusServiceTest {
 
         assertThatThrownBy(() -> service.cancel(100L, "Muốn huỷ đơn", rep))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("Đơn hàng đã xuất kho hoặc đã hoàn tất. Theo quy chuẩn S4-06 AC3, không thể hủy đơn mà phải làm thủ tục trả hàng");
+                .hasMessageContaining("Đơn hàng đã xuất kho hoặc đã hoàn tất. Không thể hủy đơn mà phải làm thủ tục trả hàng");
 
         verify(inventoryService, never()).releaseReservedStock(any());
         verify(orderRepository, never()).saveAndFlush(any());
@@ -182,15 +182,15 @@ class OrderStatusServiceTest {
 
         assertThatThrownBy(() -> service.cancel(100L, "", rep))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("Bắt buộc nhập lý do hủy đơn hàng theo quy chuẩn S4-06 AC2");
+                .hasMessageContaining("Bắt buộc nhập lý do hủy đơn hàng!");
 
         assertThatThrownBy(() -> service.cancel(100L, "   ", rep))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("Bắt buộc nhập lý do hủy đơn hàng theo quy chuẩn S4-06 AC2");
+                .hasMessageContaining("Bắt buộc nhập lý do hủy đơn hàng!");
 
         assertThatThrownBy(() -> service.cancel(100L, null, rep))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("Bắt buộc nhập lý do hủy đơn hàng theo quy chuẩn S4-06 AC2");
+                .hasMessageContaining("Bắt buộc nhập lý do hủy đơn hàng!");
     }
 
     @Test

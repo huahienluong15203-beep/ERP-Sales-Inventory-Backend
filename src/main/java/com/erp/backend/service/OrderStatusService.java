@@ -70,7 +70,7 @@ public class OrderStatusService {
         String cleanReason = reason != null ? reason.trim() : "";
         if (!StringUtils.hasText(cleanReason)) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "REASON_REQUIRED",
-                    "Bắt buộc nhập lý do hủy đơn hàng theo quy chuẩn S4-06 AC2!", "reason");
+                    "Bắt buộc nhập lý do hủy đơn hàng!", "reason");
         }
         if (cleanReason.length() > MAX_COMMENT) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "REASON_TOO_LONG",
@@ -83,7 +83,7 @@ public class OrderStatusService {
                 || SalesOrder.STATUS_DELIVERED.equalsIgnoreCase(currentStatus)
                 || SalesOrder.STATUS_CLOSED.equalsIgnoreCase(currentStatus)) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "ORDER_ALREADY_DISPATCHED",
-                    "Đơn hàng đã xuất kho hoặc đã hoàn tất. Theo quy chuẩn S4-06 AC3, không thể hủy đơn mà phải làm thủ tục trả hàng (EP-08).",
+                    "Đơn hàng đã xuất kho hoặc đã hoàn tất. Không thể hủy đơn mà phải làm thủ tục trả hàng.",
                     "status");
         }
 
