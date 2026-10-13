@@ -169,14 +169,15 @@ public class AuditLogService {
                 AuditLogSpecifications.filter(keyword, module, targetType, actorId, effectiveStart, effectiveEnd, action),
                 PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by("id").descending())));
 
-        return PageResponse.of(result.map(this::toResponse));
+        boolean canViewCost = viewerCanSeeCostPrice();
+        return PageResponse.of(result.map(a -> maskCostIfNeeded(toResponse(a), canViewCost)));
     }
 
     @Transactional(readOnly = true)
     public AuditLogResponse getById(Long id) {
         AuditLog log = auditLogRepository.findById(id)
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy bản ghi nhật ký hệ thống"));
-        return toResponse(log);
+        return maskCostIfNeeded(toResponse(log), viewerCanSeeCostPrice());
     }
 
     public AuditLogResponse toResponse(AuditLog a) {
@@ -213,6 +214,35 @@ public class AuditLogService {
                 a.getHttpMethod(),
                 a.getRequestUri(),
                 a.getCreatedAt());
+    }
+
+    static final String HIDDEN_VALUE = "••••••";
+
+    /**
+     * S1-05 / quy tắc 6: giá vốn chỉ QL kinh doanh (và Admin, giống màn sản phẩm) được xem.
+     * QL kho, Kế toán xem nhật ký thì giá trị trước / sau của thao tác giá vốn bị che.
+     */
+    static AuditLogResponse maskCostIfNeeded(AuditLogResponse r, boolean canViewCost) {
+        if (canViewCost || r.action() == null || !r.action().toUpperCase().contains("COST")) {
+            return r;
+        }
+        return new AuditLogResponse(r.id(), r.module(), r.moduleLabel(), r.action(), r.targetType(), r.targetId(),
+                r.targetCode(), r.actorId(), r.actorUsername(), r.actorFullName(), r.actorAvatarUrl(),
+                r.oldValue() == null ? null : HIDDEN_VALUE,
+                r.newValue() == null ? null : HIDDEN_VALUE,
+                "Thay đổi giá vốn (giá trị chỉ Quản lý kinh doanh được xem)",
+                r.ipAddress(), r.userAgent(), r.httpMethod(), r.requestUri(), r.createdAt());
+    }
+
+    private static boolean viewerCanSeeCostPrice() {
+        try {
+            org.springframework.security.core.Authentication auth =
+                    org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+            return auth != null && auth.getAuthorities() != null && auth.getAuthorities().stream()
+                    .anyMatch(a -> "ROLE_SALES_MANAGER".equals(a.getAuthority()) || "ROLE_ADMIN".equals(a.getAuthority()));
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private static HttpServletRequest getCurrentHttpRequest() {

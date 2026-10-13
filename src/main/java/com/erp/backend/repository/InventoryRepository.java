@@ -42,4 +42,6 @@ public interface InventoryRepository extends JpaRepository<Inventory, Long>, Jpa
                                                                  @Param("productSku") String productSku);
 
     boolean existsByWarehouse_Id(Long warehouseId);
+
+    boolean existsByProduct_IdAndPhysicalStockGreaterThan(Long productId, java.math.BigDecimal stock);
 }

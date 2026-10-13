@@ -1,6 +1,8 @@
 package com.erp.backend.repository;
 
 import com.erp.backend.entity.CustomerAssignmentHistory;
+import jakarta.persistence.criteria.Join;
+import jakarta.persistence.criteria.JoinType;
 import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.util.StringUtils;
@@ -28,6 +30,14 @@ public final class CustomerAssignmentHistorySpecifications {
             LocalDateTime endDate) {
         return (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
+            // S3-06: LEFT JOIN người chuyển / người nhận. Dòng "tạo đại lý" không có người chuyển (fromSalesRep = null),
+            // dùng root.get("fromSalesRep").get(...) sẽ thành INNER JOIN và làm mất dòng đó khi tìm theo từ khoá.
+            Join<Object, Object> fromRep = null;
+            Join<Object, Object> toRep = null;
+            if (StringUtils.hasText(keyword) || restrictedSalesRepId != null) {
+                fromRep = root.join("fromSalesRep", JoinType.LEFT);
+                toRep = root.join("toSalesRep", JoinType.LEFT);
+            }
 
             if (StringUtils.hasText(keyword)) {
                 String like = "%" + keyword.trim().toLowerCase() + "%";
@@ -35,8 +45,8 @@ public final class CustomerAssignmentHistorySpecifications {
                         cb.like(cb.lower(root.get("customer").get("code")), like),
                         cb.like(cb.lower(root.get("customer").get("name")), like),
                         cb.like(cb.lower(root.get("reason")), like),
-                        cb.like(cb.lower(root.get("fromSalesRep").get("fullName")), like),
-                        cb.like(cb.lower(root.get("toSalesRep").get("fullName")), like)));
+                        cb.like(cb.lower(cb.coalesce(fromRep.<String>get("fullName"), "")), like),
+                        cb.like(cb.lower(cb.coalesce(toRep.<String>get("fullName"), "")), like)));
             }
 
             if (customerId != null) {
@@ -57,8 +67,8 @@ public final class CustomerAssignmentHistorySpecifications {
 
             if (restrictedSalesRepId != null) {
                 predicates.add(cb.or(
-                        cb.equal(root.get("fromSalesRep").get("id"), restrictedSalesRepId),
-                        cb.equal(root.get("toSalesRep").get("id"), restrictedSalesRepId)));
+                        cb.equal(fromRep.get("id"), restrictedSalesRepId),
+                        cb.equal(toRep.get("id"), restrictedSalesRepId)));
             }
 
             if (startDate != null) {

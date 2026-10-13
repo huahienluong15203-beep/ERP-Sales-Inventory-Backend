@@ -23,6 +23,9 @@ public final class PriceListSpecifications {
             }
             if (StringUtils.hasText(status)) {
                 predicates.add(cb.equal(root.get("status"), status.trim().toUpperCase()));
+            } else {
+                // S3-02: bảng giá đã xoá (xoá mềm để giữ lịch sử giá) không hiện trong danh sách
+                predicates.add(cb.notEqual(root.get("status"), "DELETED"));
             }
             if (StringUtils.hasText(keyword)) {
                 String like = "%" + escapeLike(keyword.trim().toLowerCase()) + "%";

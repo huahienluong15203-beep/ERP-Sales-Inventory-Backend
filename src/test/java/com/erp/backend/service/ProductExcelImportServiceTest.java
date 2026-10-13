@@ -45,6 +45,12 @@ class ProductExcelImportServiceTest {
     @Mock
     private ProductCategoryRepository productCategoryRepository;
 
+    @Mock
+    private com.erp.backend.repository.InventoryRepository inventoryRepository;
+
+    @Mock
+    private AuditLogService auditLogService;
+
     @InjectMocks
     private ProductExcelImportService productExcelImportService;
 
@@ -226,6 +232,29 @@ class ProductExcelImportServiceTest {
         assertThat(existingProduct.getCostPrice()).isEqualByComparingTo("210000");
 
         verify(productRepository, atLeastOnce()).saveAll(anyList());
+        // S2-05: đổi giá vốn qua Excel có ghi nhật ký trước / sau
+        verify(auditLogService).record(eq(com.erp.backend.entity.AuditModule.PRICING), eq("UPDATE_COST_PRICE_IMPORT"),
+                eq("PRODUCT"), eq(1L), anyString(), eq("180000"), eq("210000"), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("S2-05: Sản phẩm đã có tồn -> không cho đổi ĐVT cơ sở qua Excel, dòng đó báo lỗi")
+    void executeImport_baseUnitChangeWithStock_blocked() throws IOException {
+        Product existingProduct = Product.builder().id(1L).sku("SP-COCA").name("Coca").baseUnit("Lon")
+                .costPrice(BigDecimal.valueOf(180000)).build();
+        byte[] excelBytes = createTestExcelBytes(List.of(
+                List.of(1, "SP-COCA", "Coca", "Thùng", "Nước ngọt", "Thùng 24", 180000, "893", "ACTIVE", "Đổi ĐVT")));
+        MockMultipartFile file = new MockMultipartFile("file", "import.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", excelBytes);
+        lenient().when(productRepository.findExistingSkus(anyCollection())).thenReturn(Set.of("SP-COCA"));
+        when(productRepository.findBySkuIn(anyCollection())).thenReturn(List.of(existingProduct));
+        when(inventoryRepository.existsByProduct_IdAndPhysicalStockGreaterThan(eq(1L), any())).thenReturn(true);
+
+        ProductImportSummaryResponse summary = productExcelImportService.executeImport(file);
+
+        assertThat(summary.getErrorCount()).isEqualTo(1);
+        assertThat(summary.getUpdatedCount()).isZero();
+        assertThat(existingProduct.getBaseUnit()).isEqualTo("Lon");
     }
 
     @Test

@@ -10,6 +10,7 @@ import com.erp.backend.dto.user.PageResponse;
 import org.springframework.data.domain.PageRequest;
 import com.erp.backend.repository.ProductCategoryRepository;
 import com.erp.backend.repository.ProductRepository;
+import com.erp.backend.repository.SalesOrderLineRepository;
 import com.erp.backend.security.UserDetailsImpl;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Sort;
@@ -53,6 +54,7 @@ public class DiscountPolicyService {
     private final ProductRepository productRepository;
     private final ProductCategoryRepository categoryRepository;
     private final AuditLogService auditLogService;
+    private final SalesOrderLineRepository orderLineRepository;
 
     // ======================= XEM =======================
 
@@ -142,6 +144,12 @@ public class DiscountPolicyService {
     @Transactional
     public void delete(Long id, UserDetailsImpl actor) {
         DiscountPolicy policy = findPolicy(id);
+        // S3-01 + quy tắc 8: chính sách đã áp vào đơn hàng thì không xoá cứng (đơn cũ cần tra lại chiết khấu).
+        if (policy.getCode() != null && orderLineRepository.existsByDiscountPolicyCodeIgnoreCase(policy.getCode())) {
+            throw BusinessException.conflict("DISCOUNT_POLICY_IN_USE",
+                    "Chính sách " + policy.getCode() + " đã được áp dụng trong đơn hàng nên không thể xoá. "
+                            + "Hãy chuyển sang Ngừng áp dụng.", null);
+        }
         String before = summary(policy);
         audit("DELETE_DISCOUNT_POLICY", policy, before, null, actor);
         policyRepository.delete(policy);

@@ -3,6 +3,7 @@ package com.erp.backend.service;
 import com.erp.backend.dto.product.ProductImportPreviewResponse;
 import com.erp.backend.dto.product.ProductImportRowDto;
 import com.erp.backend.dto.product.ProductImportSummaryResponse;
+import com.erp.backend.entity.AuditModule;
 import com.erp.backend.entity.Product;
 import com.erp.backend.entity.ProductCategory;
 import com.erp.backend.exception.BusinessException;
@@ -44,6 +45,8 @@ public class ProductExcelImportService {
 
     private final ProductRepository productRepository;
     private final ProductCategoryRepository productCategoryRepository;
+    private final com.erp.backend.repository.InventoryRepository inventoryRepository;
+    private final AuditLogService auditLogService;
 
     private static final Pattern SKU_PATTERN = Pattern.compile("^[a-zA-Z0-9._\\-\\s/]{2,50}$");
     private static final int BATCH_SIZE = 500;
@@ -220,9 +223,9 @@ public class ProductExcelImportService {
                 .filter(ProductImportRowDto::isValid)
                 .toList();
 
-        List<ProductImportRowDto> errorRows = parsedRows.stream()
+        List<ProductImportRowDto> errorRows = new ArrayList<>(parsedRows.stream()
                 .filter(r -> !r.isValid())
-                .toList();
+                .toList());
 
         if (validRows.isEmpty()) {
             return ProductImportSummaryResponse.builder()
@@ -266,9 +269,23 @@ public class ProductExcelImportService {
             ProductCategory targetCategory = resolveOrCreateCategory(row.getDepartment(), row.getCategory(), row.getSubCategory(), categoryCache);
 
             if (product != null) {
+                // S2-05: sản phẩm đã có tồn kho thì KHÔNG cho đổi đơn vị cơ sở qua Excel
+                // (sổ tồn lưu theo đơn vị cơ sở, đổi Lon -> Thùng làm tồn bị hiểu sai). Bỏ qua cả dòng và báo lỗi.
+                String newBaseUnit = row.getBaseUnit().trim();
+                if (product.getId() != null && product.getBaseUnit() != null
+                        && !product.getBaseUnit().equalsIgnoreCase(newBaseUnit)
+                        && inventoryRepository.existsByProduct_IdAndPhysicalStockGreaterThan(product.getId(), BigDecimal.ZERO)) {
+                    row.setValid(false);
+                    row.getErrors().add("Sản phẩm đã có tồn kho, không được đổi đơn vị cơ sở từ '" + product.getBaseUnit()
+                            + "' sang '" + newBaseUnit + "'");
+                    errorRows.add(row);
+                    continue;
+                }
+                BigDecimal oldCost = product.getCostPrice();
+
                 // S2-08 AC2 & Phần 4: SKU đã tồn tại hoặc dòng sau trong file trùng SKU -> CẬP NHẬT / GHI ĐÈ (đổi level cây phân cấp)
                 product.setName(row.getName().trim());
-                product.setBaseUnit(row.getBaseUnit().trim());
+                product.setBaseUnit(newBaseUnit);
                 if (targetCategory != null) {
                     product.setProductCategory(targetCategory);
                     product.setCategory(targetCategory.getName());
@@ -281,6 +298,15 @@ public class ProductExcelImportService {
                 // S208-03: Chỉ cập nhật khi ô Giá vốn có dữ liệu trên Excel, để trống thì giữ nguyên giá cũ
                 if (row.getCostPrice() != null) {
                     product.setCostPrice(row.getCostPrice());
+                    // S2-05 + quy tắc 9: đổi giá vốn qua Excel cũng phải ghi nhật ký trước / sau
+                    if (product.getId() != null && (oldCost == null || oldCost.compareTo(row.getCostPrice()) != 0)) {
+                        String before = oldCost != null ? oldCost.stripTrailingZeros().toPlainString() : "0";
+                        String after = row.getCostPrice().stripTrailingZeros().toPlainString();
+                        auditLogService.record(AuditModule.PRICING, "UPDATE_COST_PRICE_IMPORT", "PRODUCT", product.getId(),
+                                product.getSku() + ":" + product.getName(), before, after,
+                                "Nhập Excel cập nhật giá vốn SKU " + product.getSku() + ": " + before + " đ -> " + after + " đ",
+                                currentActor());
+                    }
                 }
                 if (StringUtils.hasText(row.getBarcode())) {
                     product.setBarcode(row.getBarcode().trim());
@@ -744,5 +770,17 @@ public class ProductExcelImportService {
 
     private String clean(String text) {
         return text != null ? text.trim() : "";
+    }
+
+    private static com.erp.backend.security.UserDetailsImpl currentActor() {
+        try {
+            org.springframework.security.core.Authentication auth =
+                    org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+            if (auth != null && auth.getPrincipal() instanceof com.erp.backend.security.UserDetailsImpl u) {
+                return u;
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
     }
 }
