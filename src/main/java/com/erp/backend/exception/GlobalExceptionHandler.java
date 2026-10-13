@@ -48,6 +48,18 @@ public class GlobalExceptionHandler {
                 .body(ApiError.of("INVALID_PARAMETER", message, details));
     }
 
+    /**
+     * S1-10: lỗi ném bằng ResponseStatusException (vd khoá tài khoản thiếu lý do) trước đây trả body mặc định
+     * của Spring (status, error, path). Đưa về đúng định dạng chung {code, message, details, timestamp}.
+     */
+    @ExceptionHandler(org.springframework.web.server.ResponseStatusException.class)
+    public ResponseEntity<ApiError> handleResponseStatus(org.springframework.web.server.ResponseStatusException ex) {
+        HttpStatus status = HttpStatus.resolve(ex.getStatusCode().value());
+        String code = status != null ? status.name() : "ERROR";
+        String message = ex.getReason() != null ? ex.getReason() : (status != null ? status.getReasonPhrase() : "Có lỗi xảy ra");
+        return ResponseEntity.status(ex.getStatusCode()).body(ApiError.of(code, message, Map.of()));
+    }
+
     @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
     public ResponseEntity<ApiError> handleNotReadable(org.springframework.http.converter.HttpMessageNotReadableException ex) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
