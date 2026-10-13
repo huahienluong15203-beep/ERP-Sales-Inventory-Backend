@@ -26,6 +26,7 @@ public class MinStockAlertResponse {
     private String warehouseName;
     private BigDecimal minThreshold;
     private BigDecimal currentStock;
+    private BigDecimal reservedStock;
     private BigDecimal availableStock;
     private boolean isBelowThreshold;
     private BigDecimal deficitQuantity;

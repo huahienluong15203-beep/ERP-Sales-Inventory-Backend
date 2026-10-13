@@ -59,6 +59,16 @@ public class MinStockAlertService {
                                                             String status,
                                                             String keyword,
                                                             UserDetailsImpl actor) {
+        return fetchMinStockConfigs(warehouseCode, null, belowThresholdOnly, status, keyword, actor);
+    }
+
+    @Transactional(readOnly = true)
+    public List<MinStockAlertResponse> fetchMinStockConfigs(String warehouseCode,
+                                                            String category,
+                                                            Boolean belowThresholdOnly,
+                                                            String status,
+                                                            String keyword,
+                                                            UserDetailsImpl actor) {
         Set<Long> allowedWhIds = allowedWarehouseIds(actor);
 
         List<Warehouse> targetWarehouses;
@@ -85,11 +95,15 @@ public class MinStockAlertService {
         }
 
         String kw = StringUtils.hasText(keyword) ? keyword.trim().toLowerCase() : null;
+        String cat = StringUtils.hasText(category) && !"ALL".equalsIgnoreCase(category.trim())
+                ? category.trim().toLowerCase()
+                : null;
         boolean filterBelowOnly = Boolean.TRUE.equals(belowThresholdOnly);
 
-        // Lấy toàn bộ sản phẩm đang hoạt động (lọc theo từ khóa ngay nếu có để tối ưu tốc độ)
+        // Lấy toàn bộ sản phẩm đang hoạt động (lọc theo nhóm hàng & từ khóa ngay nếu có để tối ưu tốc độ)
         List<Product> products = productRepository.findAll().stream()
                 .filter(p -> !"INACTIVE".equalsIgnoreCase(p.getStatus()))
+                .filter(p -> cat == null || (p.getCategory() != null && p.getCategory().toLowerCase().contains(cat)))
                 .filter(p -> kw == null || (
                         (p.getSku() != null && p.getSku().toLowerCase().contains(kw)) ||
                         (p.getName() != null && p.getName().toLowerCase().contains(kw)) ||
@@ -204,6 +218,7 @@ public class MinStockAlertService {
                         .warehouseName(wh.getName())
                         .minThreshold(stripZeros(minThreshold))
                         .currentStock(stripZeros(physicalStock))
+                        .reservedStock(stripZeros(reservedStock))
                         .availableStock(stripZeros(availableStock))
                         .isBelowThreshold(isBelow)
                         .deficitQuantity(stripZeros(deficit))
@@ -333,7 +348,20 @@ public class MinStockAlertService {
             int page,
             int size,
             UserDetailsImpl actor) {
-        List<MinStockAlertResponse> all = fetchMinStockConfigs(warehouseCode, belowThresholdOnly, status, keyword, actor);
+        return fetchMinStockConfigsPage(warehouseCode, null, belowThresholdOnly, status, keyword, page, size, actor);
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<MinStockAlertResponse> fetchMinStockConfigsPage(
+            String warehouseCode,
+            String category,
+            Boolean belowThresholdOnly,
+            String status,
+            String keyword,
+            int page,
+            int size,
+            UserDetailsImpl actor) {
+        List<MinStockAlertResponse> all = fetchMinStockConfigs(warehouseCode, category, belowThresholdOnly, status, keyword, actor);
         int total = all.size();
         int s = Math.max(1, size);
         int totalPages = (int) Math.ceil((double) total / s);
