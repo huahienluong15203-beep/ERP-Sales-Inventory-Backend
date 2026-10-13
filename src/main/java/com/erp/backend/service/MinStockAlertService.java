@@ -256,6 +256,17 @@ public class MinStockAlertService {
                     "Định mức tồn tối thiểu không thể nhỏ hơn 0", "minThreshold");
         }
 
+        if (actor != null && actor.getAuthorities() != null) {
+            Set<String> roles = actor.getAuthorities().stream()
+                    .map(a -> a.getAuthority())
+                    .collect(Collectors.toSet());
+            boolean canEdit = roles.contains("ROLE_ADMIN") || roles.contains("ROLE_WH_MANAGER");
+            if (!canEdit) {
+                throw new BusinessException(HttpStatus.FORBIDDEN, "ACCESS_DENIED",
+                        "Chỉ Quản lý kho hoặc Quản trị viên mới có quyền thiết lập định mức tồn tối thiểu");
+            }
+        }
+
         Product product = productRepository.findBySkuIgnoreCase(payload.getProductSku().trim())
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy sản phẩm có SKU: " + payload.getProductSku()));
 
