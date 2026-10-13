@@ -381,7 +381,7 @@ public class MinStockAlertService {
     }
 
     /**
-     * Thống kê tổng hợp cảnh báo cho Dashboard kho (AC2).
+     * Thống kê tổng hợp cảnh báo cho Dashboard kho.
      */
     @Transactional(readOnly = true)
     public MinStockSummaryResponse getSummary(String warehouseCode, UserDetailsImpl actor) {
@@ -402,7 +402,7 @@ public class MinStockAlertService {
                 .totalAlerts(alerts.size())
                 .criticalCount(critical.size())
                 .warningCount(warning.size())
-                .criticalItems(critical.stream().limit(10).toList())
+                .criticalItems(alerts.stream().limit(10).toList())
                 .build();
     }
 
