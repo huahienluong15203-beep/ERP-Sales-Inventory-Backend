@@ -42,7 +42,7 @@ public class StockTransferService {
      */
     @Transactional(readOnly = true)
     public List<StockTransferResponse> searchTransfers(String status, String sourceWarehouse,
-                                                       String destWarehouse, String keyword) {
+            String destWarehouse, String keyword) {
         Specification<StockTransfer> spec = (root, query, cb) -> cb.conjunction();
 
         if (StringUtils.hasText(status) && !"ALL".equalsIgnoreCase(status.trim())) {
@@ -50,11 +50,13 @@ public class StockTransferService {
         }
 
         if (StringUtils.hasText(sourceWarehouse) && !"ALL".equalsIgnoreCase(sourceWarehouse.trim())) {
-            spec = spec.and((root, query, cb) -> cb.equal(cb.upper(root.get("sourceWarehouseCode")), sourceWarehouse.trim().toUpperCase()));
+            spec = spec.and((root, query, cb) -> cb.equal(cb.upper(root.get("sourceWarehouseCode")),
+                    sourceWarehouse.trim().toUpperCase()));
         }
 
         if (StringUtils.hasText(destWarehouse) && !"ALL".equalsIgnoreCase(destWarehouse.trim())) {
-            spec = spec.and((root, query, cb) -> cb.equal(cb.upper(root.get("destWarehouseCode")), destWarehouse.trim().toUpperCase()));
+            spec = spec.and((root, query, cb) -> cb.equal(cb.upper(root.get("destWarehouseCode")),
+                    destWarehouse.trim().toUpperCase()));
         }
 
         if (StringUtils.hasText(keyword)) {
@@ -62,8 +64,7 @@ public class StockTransferService {
             spec = spec.and((root, query, cb) -> cb.or(
                     cb.like(cb.lower(root.get("code")), kw),
                     cb.like(cb.lower(root.get("vehiclePlate")), kw),
-                    cb.like(cb.lower(root.get("transporterName")), kw)
-            ));
+                    cb.like(cb.lower(root.get("transporterName")), kw)));
         }
 
         Sort sort = Sort.by(Sort.Direction.DESC, "transferDate", "id");
@@ -83,7 +84,8 @@ public class StockTransferService {
     }
 
     /**
-     * S5-07 AC1: Lập phiếu chuyển kho nội bộ (Chọn kho đi, kho đến, danh sách hàng và số lượng).
+     * S5-07 AC1: Lập phiếu chuyển kho nội bộ (Chọn kho đi, kho đến, danh sách hàng
+     * và số lượng).
      */
     @Transactional
     public StockTransferResponse createTransfer(CreateStockTransferPayload payload, UserDetailsImpl actor) {
@@ -135,7 +137,8 @@ public class StockTransferService {
         String code = generateTransferCode(transferDate);
 
         String targetStatus = StockTransfer.STATUS_IN_TRANSIT.equalsIgnoreCase(payload.getStatus())
-                ? StockTransfer.STATUS_IN_TRANSIT : StockTransfer.STATUS_DRAFT;
+                ? StockTransfer.STATUS_IN_TRANSIT
+                : StockTransfer.STATUS_DRAFT;
 
         User user = null;
         String username = actor != null ? actor.getUsername() : "system";
@@ -155,11 +158,13 @@ public class StockTransferService {
                 .expectedReceiveDate(expectedReceiveDate)
                 .status(targetStatus)
                 .vehiclePlate(StringUtils.hasText(payload.getVehiclePlate()) ? payload.getVehiclePlate().trim() : null)
-                .transporterName(StringUtils.hasText(payload.getTransporterName()) ? payload.getTransporterName().trim() : null)
+                .transporterName(
+                        StringUtils.hasText(payload.getTransporterName()) ? payload.getTransporterName().trim() : null)
                 .note(StringUtils.hasText(payload.getNote()) ? payload.getNote().trim() : null)
                 .createdBy(user)
                 .createdByUsername(username)
-                .dispatchedAt(StockTransfer.STATUS_IN_TRANSIT.equalsIgnoreCase(targetStatus) ? LocalDateTime.now() : null)
+                .dispatchedAt(
+                        StockTransfer.STATUS_IN_TRANSIT.equalsIgnoreCase(targetStatus) ? LocalDateTime.now() : null)
                 .build();
 
         // 2. Kiểm tra danh sách hàng và tồn kho
@@ -168,7 +173,8 @@ public class StockTransferService {
                     .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST, "PRODUCT_NOT_FOUND",
                             "Không tìm thấy sản phẩm ID " + lineReq.getProductId()));
 
-            // Quy đổi về ĐVT cơ sở: sổ tồn luôn lưu theo ĐVT cơ sở (vd 2 Thùng x 24 = 48 Lon)
+            // Quy đổi về ĐVT cơ sở: sổ tồn luôn lưu theo ĐVT cơ sở (vd 2 Thùng x 24 = 48
+            // Lon)
             BigDecimal factor = conversionFactor(product, lineReq.getUnit());
             BigDecimal transferQty = lineReq.getTransferQuantity().multiply(factor).stripTrailingZeros();
             if (transferQty.scale() < 0) {
@@ -176,7 +182,8 @@ public class StockTransferService {
             }
 
             // Kiểm tra tồn khả dụng tại kho đi
-            Inventory sourceInv = inventoryRepository.findByWarehouseIdAndProductIdForUpdate(sourceWh.getId(), product.getId())
+            Inventory sourceInv = inventoryRepository
+                    .findByWarehouseIdAndProductIdForUpdate(sourceWh.getId(), product.getId())
                     .orElse(null);
 
             BigDecimal currentPhysical = sourceInv != null ? sourceInv.getPhysicalStock() : BigDecimal.ZERO;
@@ -212,7 +219,8 @@ public class StockTransferService {
 
             transfer.addLine(line);
 
-            // AC2: Nếu xuất kho ngay (IN_TRANSIT) -> trừ tồn kho nguồn ngay, CHƯA cộng kho đến
+            // AC2: Nếu xuất kho ngay (IN_TRANSIT) -> trừ tồn kho nguồn ngay, CHƯA cộng kho
+            // đến
             if (StockTransfer.STATUS_IN_TRANSIT.equalsIgnoreCase(targetStatus)) {
                 BigDecimal before = sourceInv.getPhysicalStock();
                 sourceInv.setPhysicalStock(sourceInv.getPhysicalStock().subtract(transferQty));
@@ -231,7 +239,8 @@ public class StockTransferService {
     }
 
     /**
-     * S5-07 AC2: Xuất kho bắt đầu vận chuyển (chuyển trạng thái từ DRAFT sang IN_TRANSIT).
+     * S5-07 AC2: Xuất kho bắt đầu vận chuyển (chuyển trạng thái từ DRAFT sang
+     * IN_TRANSIT).
      * Trừ tồn kho nguồn, ghi nhận hàng Đang đi đường, CHƯA cộng vào kho đến.
      */
     @Transactional
@@ -294,7 +303,7 @@ public class StockTransferService {
 
         if (!StockTransfer.STATUS_IN_TRANSIT.equalsIgnoreCase(transfer.getStatus())) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "CANNOT_RECEIVE_NON_TRANSIT",
-                    "Chỉ có thể xác nhận nhận hàng khi phiếu ở trạng thái Đang đi đường (IN_TRANSIT)");
+                    "Chỉ có thể xác nhận nhận hàng khi phiếu ở trạng thái Đang đi đường ");
         }
 
         Warehouse destWh = transfer.getDestWarehouse();
@@ -313,7 +322,8 @@ public class StockTransferService {
             ReceiveTransferLineItem item = receivedMap.get(lineKey);
 
             BigDecimal receivedQty = item != null && item.getReceivedQuantity() != null
-                    ? item.getReceivedQuantity() : line.getTransferQuantity();
+                    ? item.getReceivedQuantity()
+                    : line.getTransferQuantity();
 
             if (receivedQty.compareTo(BigDecimal.ZERO) < 0) {
                 throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_RECEIVED_QUANTITY",
@@ -321,8 +331,10 @@ public class StockTransferService {
             }
             if (receivedQty.compareTo(line.getTransferQuantity()) > 0) {
                 throw new BusinessException(HttpStatus.BAD_REQUEST, "RECEIVED_EXCEEDS_TRANSFERRED",
-                        "Mặt hàng [" + line.getProductName() + "]: số nhận (" + receivedQty.stripTrailingZeros().toPlainString()
-                                + ") vượt số đã chuyển (" + line.getTransferQuantity().stripTrailingZeros().toPlainString()
+                        "Mặt hàng [" + line.getProductName() + "]: số nhận ("
+                                + receivedQty.stripTrailingZeros().toPlainString()
+                                + ") vượt số đã chuyển ("
+                                + line.getTransferQuantity().stripTrailingZeros().toPlainString()
                                 + " " + line.getUnit() + ")");
             }
 
@@ -369,7 +381,8 @@ public class StockTransferService {
             auditStock("TRANSFER_RECEIVE", destInv, destWh, line.getProductSku(), before,
                     "Nhận hàng phiếu chuyển " + transfer.getCode() + " từ " + transfer.getSourceWarehouseCode()
                             + (diff.signum() != 0 ? " (chênh lệch " + diff.stripTrailingZeros().toPlainString()
-                            + (StringUtils.hasText(reason) ? ": " + reason.trim() : "") + ")" : ""), actor);
+                                    + (StringUtils.hasText(reason) ? ": " + reason.trim() : "") + ")" : ""),
+                    actor);
 
             // Cập nhật lô hàng tại kho đích nếu có số lô
             if (StringUtils.hasText(line.getBatchNumber())) {
@@ -400,11 +413,15 @@ public class StockTransferService {
 
         StockTransfer saved = stockTransferRepository.save(transfer);
         markAuditLogged();
-        log.info("S5-07: Kho đến đã xác nhận nhận hàng cho phiếu {} (Trạng thái: {})", saved.getCode(), saved.getStatus());
+        log.info("S5-07: Kho đến đã xác nhận nhận hàng cho phiếu {} (Trạng thái: {})", saved.getCode(),
+                saved.getStatus());
         return toResponse(saved);
     }
 
-    /** Nhân viên kho (không phải QL kho / Admin) chỉ thao tác trên kho mình được phân công. */
+    /**
+     * Nhân viên kho (không phải QL kho / Admin) chỉ thao tác trên kho mình được
+     * phân công.
+     */
     private void assertAssignedWarehouse(UserDetailsImpl actor, Warehouse warehouse, String action) {
         if (actor == null || actor.getAuthorities() == null || warehouse == null) {
             return;
@@ -425,7 +442,7 @@ public class StockTransferService {
 
     /** Nhật ký tồn kho trước / sau cho từng dòng (quy tắc 9). */
     private void auditStock(String action, Inventory inv, Warehouse warehouse, String sku, BigDecimal before,
-                            String reason, UserDetailsImpl actor) {
+            String reason, UserDetailsImpl actor) {
         auditLogService.record(AuditModule.INVENTORY, action, "INVENTORY", inv.getId(),
                 warehouse.getCode() + ":" + sku, plain(before), plain(inv.getPhysicalStock()), reason, actor);
     }
@@ -436,7 +453,8 @@ public class StockTransferService {
 
     private static void markAuditLogged() {
         try {
-            ServletRequestAttributes attributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+            ServletRequestAttributes attributes = (ServletRequestAttributes) RequestContextHolder
+                    .getRequestAttributes();
             if (attributes != null && attributes.getRequest() != null) {
                 attributes.getRequest().setAttribute(AuditLogInterceptor.AUDIT_LOGGED_ATTR, Boolean.TRUE);
             }
@@ -445,7 +463,10 @@ public class StockTransferService {
         }
     }
 
-    /** Hệ số quy đổi của ĐVT nhập về ĐVT cơ sở; ĐVT trống hoặc trùng ĐVT cơ sở = 1; ĐVT lạ -> 400. */
+    /**
+     * Hệ số quy đổi của ĐVT nhập về ĐVT cơ sở; ĐVT trống hoặc trùng ĐVT cơ sở = 1;
+     * ĐVT lạ -> 400.
+     */
     static BigDecimal conversionFactor(Product product, String unit) {
         if (!StringUtils.hasText(unit) || unit.trim().equalsIgnoreCase(product.getBaseUnit())) {
             return BigDecimal.ONE;
@@ -470,7 +491,8 @@ public class StockTransferService {
             try {
                 String suffix = c.substring(prefix.length());
                 int seq = Integer.parseInt(suffix);
-                if (seq > maxSeq) maxSeq = seq;
+                if (seq > maxSeq)
+                    maxSeq = seq;
             } catch (Exception ignored) {
             }
         }
@@ -479,8 +501,8 @@ public class StockTransferService {
     }
 
     private StockTransferResponse toResponse(StockTransfer t) {
-        List<StockTransferLineResponse> lineResponses = t.getLines().stream().map(l ->
-                StockTransferLineResponse.builder()
+        List<StockTransferLineResponse> lineResponses = t.getLines().stream()
+                .map(l -> StockTransferLineResponse.builder()
                         .id(String.valueOf(l.getId()))
                         .productId(l.getProduct().getId())
                         .productSku(l.getProductSku())
@@ -494,8 +516,8 @@ public class StockTransferService {
                         .discrepancyReason(l.getDiscrepancyReason())
                         .batchNumber(l.getBatchNumber())
                         .expiredDate(l.getExpiredDate() != null ? l.getExpiredDate().toString() : null)
-                        .build()
-        ).toList();
+                        .build())
+                .toList();
 
         return StockTransferResponse.builder()
                 .id(String.valueOf(t.getId()))

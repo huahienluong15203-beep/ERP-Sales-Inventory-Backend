@@ -37,6 +37,7 @@ public class MinStockAlertController {
     public ResponseEntity<?> fetchConfigs(
             @RequestParam(required = false) String warehouseCode,
             @RequestParam(required = false) Boolean belowThresholdOnly,
+            @RequestParam(required = false) String status,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) Integer page,
             @RequestParam(required = false) Integer size,
@@ -46,7 +47,7 @@ public class MinStockAlertController {
             int p = (page != null && page >= 0) ? page : 0;
             int s = (size != null && size > 0) ? size : 50;
             PageResponse<MinStockAlertResponse> pageRes = minStockAlertService.fetchMinStockConfigsPage(
-                    warehouseCode, belowThresholdOnly, keyword, p, s, actor);
+                    warehouseCode, belowThresholdOnly, status, keyword, p, s, actor);
             return ResponseEntity.ok()
                     .header("X-Total-Count", String.valueOf(pageRes.totalElements()))
                     .header("X-Total-Pages", String.valueOf(pageRes.totalPages()))
@@ -54,7 +55,7 @@ public class MinStockAlertController {
         }
 
         List<MinStockAlertResponse> list = minStockAlertService.fetchMinStockConfigs(
-                warehouseCode, belowThresholdOnly, keyword, actor);
+                warehouseCode, belowThresholdOnly, status, keyword, actor);
         if (limit != null && limit > 0) {
             list = list.stream().limit(limit).toList();
         }
