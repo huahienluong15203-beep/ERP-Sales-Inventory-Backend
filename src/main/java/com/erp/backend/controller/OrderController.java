@@ -223,7 +223,7 @@ public class OrderController {
      * Bắt buộc có lý do (AC2). Đơn đã xuất kho (DISPATCHED trở đi) thì nghiêm cấm hủy (AC3).
      */
     @PostMapping("/{id}/cancel")
-    @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'SALES_REP')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'SALES_REP', 'CUSTOMER')")
     public OrderResponse cancel(@PathVariable Long id,
                                 @Valid @RequestBody OrderCancelRequest request,
                                 @AuthenticationPrincipal UserDetailsImpl actor) {
