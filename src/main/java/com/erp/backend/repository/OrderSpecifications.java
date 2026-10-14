@@ -26,11 +26,19 @@ public final class OrderSpecifications {
     }
 
     public static Specification<SalesOrder> search(OrderSearchCriteria c, Long restrictedSalesRepId, Long restrictedCustomerId) {
+        return search(c, restrictedSalesRepId, restrictedCustomerId, false);
+    }
+
+    public static Specification<SalesOrder> search(OrderSearchCriteria c, Long restrictedSalesRepId, Long restrictedCustomerId, boolean excludeDraft) {
         return (root, query, cb) -> {
             List<Predicate> ps = new ArrayList<>();
             Join<SalesOrder, Customer> customer = root.join("customer");
             if (c.statuses() != null && !c.statuses().isEmpty()) {
                 ps.add(root.get("status").in(c.statuses()));
+            }
+            if (excludeDraft) {
+                // Vai trò Kho hoặc Đại lý: Không xem các đơn nháp DRAFT đang soạn dở của NVKD
+                ps.add(cb.notEqual(root.get("status"), "DRAFT"));
             }
             if (restrictedCustomerId != null) {
                 // S5-01: Đại lý chỉ thấy đơn của chính mình
