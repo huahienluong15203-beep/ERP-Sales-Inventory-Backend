@@ -28,6 +28,7 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -149,14 +150,27 @@ public class OrderApprovalService {
                         Sort.by(Sort.Direction.ASC, "submittedAt").and(Sort.by("id").ascending())))
                 .map(o -> new PendingOrderResponse(o.getId(), o.getCode(), o.getCustomer().getId(),
                         o.getCustomer().getCode(), o.getCustomer().getName(), o.getLines().size(), o.getTotalAmount(),
-                        o.getSubmittedByUsername(), o.getSubmittedAt(), OrderApprovalReasons.of(o))));
+                        o.getSubmittedByUsername(), o.getSubmittedAt(), OrderApprovalReasons.of(o), o.getDesiredDeliveryDate())));
     }
 
     @Transactional
     public OrderResponse approve(Long id, String comment, UserDetailsImpl actor) {
+        return approve(id, comment, null, actor);
+    }
+
+    @Transactional
+    public OrderResponse approve(Long id, String comment, LocalDate confirmedDeliveryDate, UserDetailsImpl actor) {
         SalesOrder order = lockPending(id, actor);
         assertCanDecide(order, actor);
         String note = trimComment(comment, false);
+        if (confirmedDeliveryDate != null) {
+            LocalDate today = LocalDate.now(clock);
+            if (confirmedDeliveryDate.isBefore(today)) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_DELIVERY_DATE",
+                        "Ngày giao xác nhận không được trước hôm nay", "confirmedDeliveryDate");
+            }
+            order.setDesiredDeliveryDate(confirmedDeliveryDate);
+        }
         markApproved(order, actor, LocalDateTime.now(clock));
         order.setLastApprovalComment(note);
         return finishDecision(order, SalesOrderApproval.ACTION_APPROVE, "APPROVE_ORDER", note, actor);

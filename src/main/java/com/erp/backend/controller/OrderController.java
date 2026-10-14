@@ -177,7 +177,10 @@ public class OrderController {
     public OrderResponse approve(@PathVariable Long id,
                                  @Valid @RequestBody(required = false) OrderApprovalActionRequest request,
                                  @AuthenticationPrincipal UserDetailsImpl actor) {
-        return orderApprovalService.approve(id, request != null ? request.getComment() : null, actor);
+        return orderApprovalService.approve(id,
+                request != null ? request.getComment() : null,
+                request != null ? request.getConfirmedDeliveryDate() : null,
+                actor);
     }
 
     /**
