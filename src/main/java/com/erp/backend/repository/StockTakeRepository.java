@@ -23,4 +23,8 @@ public interface StockTakeRepository extends JpaRepository<StockTake, Long>, Jpa
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select s from StockTake s where s.id = :id")
     Optional<StockTake> findByIdForUpdate(@Param("id") Long id);
+
+    java.util.List<StockTake> findByWarehouse_Id(Long warehouseId);
+
+    boolean existsByWarehouse_IdAndStatus(Long warehouseId, String status);
 }

@@ -19,4 +19,6 @@ public interface MinStockThresholdRepository extends JpaRepository<MinStockThres
     List<MinStockThreshold> findByWarehouse_CodeIgnoreCase(String warehouseCode);
 
     List<MinStockThreshold> findByProduct_Id(Long productId);
+
+    void deleteByWarehouse_Id(Long warehouseId);
 }

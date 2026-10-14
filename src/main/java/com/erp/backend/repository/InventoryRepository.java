@@ -43,5 +43,10 @@ public interface InventoryRepository extends JpaRepository<Inventory, Long>, Jpa
 
     boolean existsByWarehouse_Id(Long warehouseId);
 
+    void deleteByWarehouse_Id(Long warehouseId);
+
     boolean existsByProduct_IdAndPhysicalStockGreaterThan(Long productId, java.math.BigDecimal stock);
+
+    @Query("SELECT i FROM Inventory i JOIN FETCH i.product p LEFT JOIN FETCH p.productCategory c WHERE i.warehouse.id = :warehouseId AND LOWER(p.status) = 'active'")
+    List<Inventory> findActiveByWarehouseIdWithProductAndCategory(@Param("warehouseId") Long warehouseId);
 }

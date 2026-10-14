@@ -41,6 +41,9 @@ class WarehouseServiceTest {
     @Mock private com.erp.backend.repository.GoodsReceiptRepository goodsReceiptRepository;
     @Mock private com.erp.backend.repository.StockTransferRepository stockTransferRepository;
     @Mock private com.erp.backend.repository.SalesOrderRepository salesOrderRepository;
+    @Mock private com.erp.backend.repository.StockTakeRepository stockTakeRepository;
+    @Mock private com.erp.backend.repository.MinStockThresholdRepository minStockThresholdRepository;
+    @Mock private com.erp.backend.service.AuditLogService auditLogService;
 
     @InjectMocks private WarehouseService warehouseService;
 

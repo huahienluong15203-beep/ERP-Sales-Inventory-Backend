@@ -16,6 +16,10 @@ import com.erp.backend.repository.UserRepository;
 import com.erp.backend.repository.WarehouseLocationRepository;
 import com.erp.backend.repository.WarehouseRepository;
 import com.erp.backend.security.UserDetailsImpl;
+import com.erp.backend.entity.AuditModule;
+import com.erp.backend.entity.StockTake;
+import com.erp.backend.repository.MinStockThresholdRepository;
+import com.erp.backend.repository.StockTakeRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -48,6 +52,9 @@ public class WarehouseService {
     private final GoodsReceiptRepository goodsReceiptRepository;
     private final StockTransferRepository stockTransferRepository;
     private final SalesOrderRepository salesOrderRepository;
+    private final StockTakeRepository stockTakeRepository;
+    private final MinStockThresholdRepository minStockThresholdRepository;
+    private final AuditLogService auditLogService;
 
     // ==============================================================
     // 1. QUẢN LÝ KHO HÀNG (WAREHOUSE CRUD)
@@ -160,6 +167,17 @@ public class WarehouseService {
 
     @Transactional
     public void delete(Long id, UserDetailsImpl actor) {
+        delete(id, "Xóa kho hàng", actor);
+    }
+
+    @Transactional
+    public void delete(Long id, String reason, UserDetailsImpl actor) {
+        String cleanReason = StringUtils.hasText(reason) ? reason.trim() : null;
+        if (cleanReason == null) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "REASON_REQUIRED",
+                    "Vui lòng nhập lý do xóa kho hàng", "reason");
+        }
+
         Warehouse warehouse = findWarehouse(id);
 
         long locCount = locationRepository.countByWarehouse_Id(id);
@@ -167,15 +185,94 @@ public class WarehouseService {
                 .filter(c -> c.getDefaultWarehouse() != null && id.equals(c.getDefaultWarehouse().getId()))
                 .count();
 
-        if (locCount > 0 || customerCount > 0 || hasTransactions(id)) {
-            // Có dữ liệu ràng buộc -> Soft delete (chuyển sang INACTIVE)
+        boolean hasCommercialTransactions = (goodsReceiptRepository != null && goodsReceiptRepository.existsByWarehouse_Id(id))
+                || (salesOrderRepository != null && salesOrderRepository.existsByReservedWarehouse_Id(id))
+                || (stockTransferRepository != null && stockTransferRepository.existsBySourceWarehouse_IdOrDestWarehouse_Id(id, id))
+                || (stockTakeRepository != null && stockTakeRepository.existsByWarehouse_IdAndStatus(id, StockTake.STATUS_CLOSED));
+
+        boolean hasAssociatedData = locCount > 0 || customerCount > 0 || hasTransactions(id) || hasCommercialTransactions;
+
+        if (STATUS_ACTIVE.equalsIgnoreCase(warehouse.getStatus()) && hasAssociatedData) {
+            // Kho đang hoạt động nhưng có dữ liệu ràng buộc -> Chuyển sang INACTIVE (Soft Delete theo Mục 12)
             warehouse.setStatus(STATUS_INACTIVE);
             warehouseRepository.save(warehouse);
-            log.info("S5-03: Kho id={} có dữ liệu liên quan ({} vị trí, {} đại lý), đã chuyển sang INACTIVE",
-                    id, locCount, customerCount);
-        } else {
-            warehouseRepository.delete(warehouse);
-            log.info("S5-03: Đã xóa hoàn toàn kho id={}", id);
+            log.info("S5-03: Kho id={} có dữ liệu ràng buộc, đã chuyển sang INACTIVE. Lý do: {}", id, cleanReason);
+
+            if (auditLogService != null) {
+                auditLogService.record(
+                        AuditModule.INVENTORY,
+                        "DEACTIVATE_WAREHOUSE",
+                        "WAREHOUSE",
+                        id,
+                        warehouse.getCode(),
+                        "{\"status\":\"ACTIVE\"}",
+                        "{\"status\":\"INACTIVE\"}",
+                        cleanReason,
+                        actor);
+            }
+            return;
+        }
+
+        // Nếu kho đã ở trạng thái INACTIVE hoặc hoàn toàn trống:
+        if (hasCommercialTransactions) {
+            throw new BusinessException(HttpStatus.CONFLICT, "WAREHOUSE_HAS_TRANSACTIONS",
+                    "Kho " + warehouse.getCode() + " đã phát sinh chứng từ xuất nhập/đơn hàng thực tế, không thể xóa vĩnh viễn khỏi cơ sở dữ liệu để bảo toàn lịch sử sổ sách kế toán.", null);
+        }
+
+        // Không có chứng từ giao dịch thương mại/nhập xuất thực tế -> cho phép dọn dẹp dữ liệu khởi tạo/nháp và xóa hoàn toàn
+        if (stockTakeRepository != null) {
+            List<StockTake> stockTakes = stockTakeRepository.findByWarehouse_Id(id);
+            if (stockTakes != null && !stockTakes.isEmpty()) {
+                stockTakeRepository.deleteAll(stockTakes);
+            }
+        }
+
+        if (minStockThresholdRepository != null) {
+            minStockThresholdRepository.deleteByWarehouse_Id(id);
+        }
+
+        if (inventoryRepository != null) {
+            inventoryRepository.deleteByWarehouse_Id(id);
+        }
+
+        if (locationRepository != null) {
+            locationRepository.deleteByWarehouse_Id(id);
+        }
+
+        if (customerRepository != null) {
+            customerRepository.findAll().stream()
+                    .filter(c -> c.getDefaultWarehouse() != null && id.equals(c.getDefaultWarehouse().getId()))
+                    .forEach(c -> {
+                        c.setDefaultWarehouse(null);
+                        customerRepository.save(c);
+                    });
+        }
+
+        if (userRepository != null) {
+            userRepository.findAll().stream()
+                    .filter(u -> u.getWarehouses() != null && u.getWarehouses().stream().anyMatch(w -> id.equals(w.getId())))
+                    .forEach(u -> {
+                        u.getWarehouses().removeIf(w -> id.equals(w.getId()));
+                        userRepository.save(u);
+                    });
+        }
+
+        String oldValue = String.format("{\"code\":\"%s\",\"name\":\"%s\",\"status\":\"%s\"}",
+                warehouse.getCode(), warehouse.getName(), warehouse.getStatus());
+        warehouseRepository.delete(warehouse);
+        log.info("S5-03: Đã xóa hoàn toàn kho id={}, code='{}'. Lý do: {}", id, warehouse.getCode(), cleanReason);
+
+        if (auditLogService != null) {
+            auditLogService.record(
+                    AuditModule.INVENTORY,
+                    "DELETE_WAREHOUSE",
+                    "WAREHOUSE",
+                    id,
+                    warehouse.getCode(),
+                    oldValue,
+                    null,
+                    cleanReason,
+                    actor);
         }
     }
 
@@ -318,12 +415,30 @@ public class WarehouseService {
 
     @Transactional
     public void deleteLocation(Long warehouseId, Long locationId, UserDetailsImpl actor) {
+        deleteLocation(warehouseId, locationId, "Xóa vị trí lưu kho", actor);
+    }
+
+    @Transactional
+    public void deleteLocation(Long warehouseId, Long locationId, String reason, UserDetailsImpl actor) {
         findWarehouse(warehouseId);
         WarehouseLocation location = locationRepository.findByWarehouse_IdAndId(warehouseId, locationId)
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy vị trí lưu trữ trong kho này"));
 
         locationRepository.delete(location);
-        log.info("S5-03: Đã xóa vị trí lưu kho id={}, code='{}'", locationId, location.getCode());
+        log.info("S5-03: Đã xóa vị trí lưu kho id={}, code='{}'. Lý do: {}", locationId, location.getCode(), reason);
+
+        if (auditLogService != null) {
+            auditLogService.record(
+                    AuditModule.INVENTORY,
+                    "DELETE_LOCATION",
+                    "WAREHOUSE_LOCATION",
+                    locationId,
+                    location.getCode(),
+                    location.getName(),
+                    null,
+                    reason,
+                    actor);
+        }
     }
 
     // ==============================================================

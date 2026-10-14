@@ -30,4 +30,6 @@ public interface WarehouseLocationRepository extends JpaRepository<WarehouseLoca
     long countByWarehouse_Id(Long warehouseId);
 
     long countByWarehouse_IdAndStatusIgnoreCase(Long warehouseId, String status);
+
+    void deleteByWarehouse_Id(Long warehouseId);
 }

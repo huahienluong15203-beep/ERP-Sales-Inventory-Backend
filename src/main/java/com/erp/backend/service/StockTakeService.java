@@ -100,10 +100,16 @@ public class StockTakeService {
                 .createdByUsername(actor != null ? actor.getUsername() : null)
                 .build();
 
-        // Chụp số tồn sổ tại thời điểm tạo phiếu
+        // Chụp số tồn sổ tại thời điểm tạo phiếu (ưu tiên JOIN FETCH để chỉ chạy 1 câu SQL duy nhất)
         final Set<Long> scope = categoryIds;
-        inventoryRepository.findByWarehouse_Id(warehouse.getId()).stream()
-                .filter(i -> i.getProduct() != null && "ACTIVE".equalsIgnoreCase(i.getProduct().getStatus()))
+        List<Inventory> inventories = inventoryRepository.findActiveByWarehouseIdWithProductAndCategory(warehouse.getId());
+        if (inventories == null || inventories.isEmpty()) {
+            inventories = inventoryRepository.findByWarehouse_Id(warehouse.getId()).stream()
+                    .filter(i -> i.getProduct() != null && "ACTIVE".equalsIgnoreCase(i.getProduct().getStatus()))
+                    .toList();
+        }
+
+        inventories.stream()
                 .filter(i -> scope == null || (i.getProduct().getProductCategory() != null
                         && scope.contains(i.getProduct().getProductCategory().getId())))
                 .sorted(Comparator.comparing(i -> i.getProduct().getSku()))

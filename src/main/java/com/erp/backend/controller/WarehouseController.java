@@ -63,8 +63,13 @@ public class WarehouseController {
     @DeleteMapping("/api/warehouses/{id}")
     @PreAuthorize("hasAnyRole('ADMIN', 'WH_MANAGER')")
     public ResponseEntity<Void> deleteWarehouse(@PathVariable Long id,
+                                                @RequestBody(required = false) DeleteWarehouseRequest request,
+                                                @RequestParam(required = false) String reason,
                                                 @AuthenticationPrincipal UserDetailsImpl actor) {
-        warehouseService.delete(id, actor);
+        String effectiveReason = request != null && org.springframework.util.StringUtils.hasText(request.getReason())
+                ? request.getReason()
+                : reason;
+        warehouseService.delete(id, effectiveReason, actor);
         return ResponseEntity.noContent().build();
     }
 
@@ -112,8 +117,9 @@ public class WarehouseController {
     @PreAuthorize("hasAnyRole('ADMIN', 'WH_MANAGER')")
     public ResponseEntity<Void> deleteLocation(@PathVariable Long warehouseId,
                                                @PathVariable Long locationId,
+                                               @RequestParam(required = false) String reason,
                                                @AuthenticationPrincipal UserDetailsImpl actor) {
-        warehouseService.deleteLocation(warehouseId, locationId, actor);
+        warehouseService.deleteLocation(warehouseId, locationId, reason, actor);
         return ResponseEntity.noContent().build();
     }
 
