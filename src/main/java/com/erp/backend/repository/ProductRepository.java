@@ -62,4 +62,15 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
                                  @Param("category") String category,
                                  @Param("status") String status,
                                  Pageable pageable);
+
+    @Query("SELECT p FROM Product p WHERE " +
+            "(:keyword IS NULL OR :keyword = '' OR LOWER(p.name) LIKE LOWER(CONCAT('%', :keyword, '%')) OR LOWER(p.sku) LIKE LOWER(CONCAT('%', :keyword, '%'))) " +
+            "AND (:hasCategories = false OR p.category IN :categoryNames OR (p.productCategory IS NOT NULL AND p.productCategory.id IN :categoryIds)) " +
+            "AND (:status IS NULL OR :status = '' OR p.status = :status)")
+    Page<Product> searchProductsHierarchical(@Param("keyword") String keyword,
+                                             @Param("hasCategories") boolean hasCategories,
+                                             @Param("categoryNames") java.util.Collection<String> categoryNames,
+                                             @Param("categoryIds") java.util.Collection<Long> categoryIds,
+                                             @Param("status") String status,
+                                             Pageable pageable);
 }

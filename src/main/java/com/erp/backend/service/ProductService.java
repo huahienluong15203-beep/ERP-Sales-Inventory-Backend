@@ -244,12 +244,67 @@ public class ProductService {
      */
     @Transactional(readOnly = true)
     public PageResponse<ProductResponse> searchProducts(String keyword, String category, String status, Pageable pageable, UserDetailsImpl actor) {
-        Page<Product> page = productRepository.searchProducts(
-                StringUtils.hasText(keyword) ? keyword.trim() : null,
-                StringUtils.hasText(category) ? category.trim() : null,
-                StringUtils.hasText(status) ? status.trim() : null,
-                pageable
-        );
+        boolean hasCategory = StringUtils.hasText(category) && !"ALL".equalsIgnoreCase(category.trim());
+        Page<Product> page;
+        if (hasCategory) {
+            String catSearch = category.trim();
+            java.util.Set<String> categoryNames = new java.util.HashSet<>();
+            java.util.Set<Long> categoryIds = new java.util.HashSet<>();
+            java.util.List<ProductCategory> allCats = productCategoryRepository.findAll();
+
+            ProductCategory target = null;
+            try {
+                Long targetId = Long.parseLong(catSearch);
+                target = allCats.stream().filter(c -> c.getId().equals(targetId)).findFirst().orElse(null);
+            } catch (NumberFormatException ignored) {}
+
+            if (target == null) {
+                target = allCats.stream()
+                        .filter(c -> c.getCode().equalsIgnoreCase(catSearch) || c.getName().equalsIgnoreCase(catSearch))
+                        .findFirst()
+                        .orElse(null);
+            }
+
+            if (target != null) {
+                java.util.Map<Long, java.util.List<ProductCategory>> childrenMap = new java.util.HashMap<>();
+                for (ProductCategory c : allCats) {
+                    if (c.getParent() != null) {
+                        childrenMap.computeIfAbsent(c.getParent().getId(), k -> new java.util.ArrayList<>()).add(c);
+                    }
+                }
+                java.util.Deque<ProductCategory> queue = new java.util.ArrayDeque<>();
+                queue.add(target);
+                while (!queue.isEmpty()) {
+                    ProductCategory curr = queue.poll();
+                    categoryIds.add(curr.getId());
+                    categoryNames.add(curr.getName());
+                    java.util.List<ProductCategory> children = childrenMap.get(curr.getId());
+                    if (children != null) {
+                        queue.addAll(children);
+                    }
+                }
+            } else {
+                categoryNames.add(catSearch);
+            }
+
+            page = productRepository.searchProductsHierarchical(
+                    StringUtils.hasText(keyword) ? keyword.trim() : null,
+                    true,
+                    categoryNames,
+                    categoryIds,
+                    StringUtils.hasText(status) ? status.trim() : null,
+                    pageable
+            );
+        } else {
+            page = productRepository.searchProductsHierarchical(
+                    StringUtils.hasText(keyword) ? keyword.trim() : null,
+                    false,
+                    java.util.Collections.emptySet(),
+                    java.util.Collections.emptySet(),
+                    StringUtils.hasText(status) ? status.trim() : null,
+                    pageable
+            );
+        }
 
         boolean canViewCost = canViewCostPrice(actor);
         return PageResponse.of(page.map(p -> mapToResponse(p, canViewCost)));
