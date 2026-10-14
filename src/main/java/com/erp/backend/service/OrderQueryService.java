@@ -64,8 +64,10 @@ public class OrderQueryService {
             restrictedRepId = CustomerAccess.restrictedSalesRepIdForOrders(actor);
         }
 
+        boolean excludeDraft = CustomerAccess.isWarehouseOrderHandler(actor) || CustomerAccess.isCustomer(actor);
+
         return PageResponse.of(orderRepository.findAll(
-                        OrderSpecifications.search(c, restrictedRepId, restrictedCustId),
+                        OrderSpecifications.search(c, restrictedRepId, restrictedCustId, excludeDraft),
                         PageRequest.of(safePage, safeSize,
                                 Sort.by(Sort.Direction.DESC, "updatedAt").and(Sort.by("id").descending())))
                 .map(OrderQueryService::toSummary));
@@ -88,7 +90,9 @@ public class OrderQueryService {
             restrictedRepId = CustomerAccess.restrictedSalesRepIdForOrders(actor);
         }
 
-        return orderRepository.sumTotals(OrderSpecifications.search(c, restrictedRepId, restrictedCustId));
+        boolean excludeDraft = CustomerAccess.isWarehouseOrderHandler(actor) || CustomerAccess.isCustomer(actor);
+
+        return orderRepository.sumTotals(OrderSpecifications.search(c, restrictedRepId, restrictedCustId, excludeDraft));
     }
 
     /** Chuẩn hoá trạng thái (chữ hoa, bỏ trùng), kiểm tra khoảng ngày. */
