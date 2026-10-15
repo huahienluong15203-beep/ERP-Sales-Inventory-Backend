@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Set;
@@ -112,11 +113,23 @@ public class PortalService {
     }
 
     @Transactional(readOnly = true)
-    public PageResponse<OrderSummaryResponse> orders(String status, int page, int size, UserDetailsImpl actor) {
+    public PageResponse<OrderSummaryResponse> orders(List<String> statuses,
+                                                     LocalDate fromDate,
+                                                     LocalDate toDate,
+                                                     String keyword,
+                                                     int page,
+                                                     int size,
+                                                     UserDetailsImpl actor) {
         Customer c = myCustomer(actor);
-        List<String> statuses = StringUtils.hasText(status) ? List.of(status) : null;
-        return orderQueryService.search(new OrderSearchCriteria(statuses, c.getId(), null, null, null, null, null),
+        return orderQueryService.search(
+                new OrderSearchCriteria(statuses, c.getId(), null, null, fromDate, toDate, keyword),
                 page, size, actor);
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<OrderSummaryResponse> orders(String status, int page, int size, UserDetailsImpl actor) {
+        List<String> statuses = StringUtils.hasText(status) ? List.of(status.split(",")) : null;
+        return orders(statuses, null, null, null, page, size, actor);
     }
 
     @Transactional(readOnly = true)

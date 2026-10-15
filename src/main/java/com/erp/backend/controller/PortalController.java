@@ -9,6 +9,7 @@ import com.erp.backend.security.UserDetailsImpl;
 import com.erp.backend.service.PortalService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -16,6 +17,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -68,13 +70,17 @@ public class PortalController {
         return ResponseEntity.status(HttpStatus.CREATED).body(portalService.placeOrder(request, actor));
     }
 
-    /** Lịch sử đơn của đại lý. Vd: ?status=PENDING_APPROVAL&page=0&size=20 */
+    /** Lịch sử đơn của đại lý có bộ lọc và phân trang. Vd: ?status=PENDING_APPROVAL&keyword=DH2610&fromDate=2026-10-01&toDate=2026-10-31&page=0&size=10 */
     @GetMapping("/orders")
-    public PageResponse<OrderSummaryResponse> orders(@RequestParam(required = false) String status,
-                                                     @RequestParam(defaultValue = "0") int page,
-                                                     @RequestParam(defaultValue = "20") int size,
-                                                     @AuthenticationPrincipal UserDetailsImpl actor) {
-        return portalService.orders(status, page, size, actor);
+    public PageResponse<OrderSummaryResponse> orders(
+            @RequestParam(required = false) List<String> status,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        return portalService.orders(status, fromDate, toDate, keyword, page, size, actor);
     }
 
     /**
