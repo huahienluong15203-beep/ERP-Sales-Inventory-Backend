@@ -64,9 +64,9 @@ public class StockTakeController {
         return stockTakeService.updateCounts(id, request, actor);
     }
 
-    /** Chốt kiểm kê: điều chỉnh tồn về số thực đếm, bắt buộc lý do. Chỉ Quản lý kho. */
+    /** Chốt kiểm kê: điều chỉnh tồn về số thực đếm, bắt buộc lý do. Quản lý kho hoặc Admin. */
     @PostMapping("/{id}/close")
-    @PreAuthorize("hasRole('WH_MANAGER')")
+    @PreAuthorize("hasAnyRole('WH_MANAGER', 'ADMIN')")
     public StockTakeResponse close(@PathVariable Long id, @Valid @RequestBody StockTakeReasonRequest request,
                                    @AuthenticationPrincipal UserDetailsImpl actor) {
         return stockTakeService.close(id, request.getReason(), actor);

@@ -44,6 +44,7 @@ class StockTakeServiceTest {
 
     private final UserDetailsImpl staff = actor(5, "ROLE_WAREHOUSE");
     private final UserDetailsImpl manager = actor(6, "ROLE_WH_MANAGER");
+    private final UserDetailsImpl admin = actor(7, "ROLE_ADMIN");
     private final Warehouse hn = Warehouse.builder().id(1L).code("WH-MB01").name("Kho Tổng Miền Bắc").status("ACTIVE").build();
     private final ProductCategory drinks = ProductCategory.builder().id(2L).name("Nước ngọt").level(2).build();
     private final ProductCategory spices = ProductCategory.builder().id(9L).name("Gia vị").level(1).build();
@@ -187,12 +188,22 @@ class StockTakeServiceTest {
     }
 
     @Test
-    @DisplayName("S5-08: Chỉ Quản lý kho được chốt (NV kho -> bị chặn)")
+    @DisplayName("S5-08: Chỉ Quản lý kho hoặc Admin được chốt (NV kho -> bị chặn)")
     void close_byStaff_blocked() {
         assertThatThrownBy(() -> service.close(1L, "Cuối tháng", staff))
                 .isInstanceOf(BusinessException.class)
                 .hasFieldOrPropertyWithValue("code", "STOCKTAKE_CLOSE_NOT_ALLOWED");
         verifyNoInteractions(inventoryRepository, stockTakeRepository);
+    }
+
+    @Test
+    @DisplayName("S5-08: Admin được phép chốt kiểm kê hợp lệ")
+    void close_byAdmin_allowed() {
+        when(stockTakeRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(draft("SP-COCA", "100", "100")));
+
+        StockTakeResponse res = service.close(1L, "Admin chốt kiểm kê cuối tháng", admin);
+        assertThat(res.status()).isEqualTo("CLOSED");
+        assertThat(res.closedByUsername()).isEqualTo(admin.getUsername());
     }
 
     @Test

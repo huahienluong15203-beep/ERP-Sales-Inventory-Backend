@@ -155,11 +155,11 @@ public class StockTakeService {
 
     // ======================= CHỐT / HUỶ =======================
 
-    /** Chỉ QL kho (kiểm ở controller và ở đây). Mọi dòng phải đã đếm; điều chỉnh tồn trong cùng transaction. */
+    /** QL kho hoặc Quản trị viên (kiểm ở controller và ở đây). Mọi dòng phải đã đếm; điều chỉnh tồn trong cùng transaction. */
     @Transactional
     public StockTakeResponse close(Long id, String reason, UserDetailsImpl actor) {
-        if (!hasRole(actor, "ROLE_WH_MANAGER")) {
-            throw BusinessException.conflict("STOCKTAKE_CLOSE_NOT_ALLOWED", "Chỉ Quản lý kho được chốt phiếu kiểm kê", null);
+        if (!hasRole(actor, "ROLE_WH_MANAGER") && !hasRole(actor, "ROLE_ADMIN")) {
+            throw BusinessException.conflict("STOCKTAKE_CLOSE_NOT_ALLOWED", "Chỉ Quản lý kho hoặc Quản trị viên được chốt phiếu kiểm kê", null);
         }
         String why = requireReason(reason);
         StockTake st = lockDraft(id, actor);
