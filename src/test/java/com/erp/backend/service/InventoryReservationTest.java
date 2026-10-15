@@ -268,4 +268,33 @@ class InventoryReservationTest {
                 .hasFieldOrPropertyWithValue("code", "INVALID_DISPATCH_QUANTITY");
         verifyNoInteractions(inventoryRepository);
     }
+
+    // ======================= S6-08: NHẬP LẠI HÀNG GIAO KHÔNG ĐƯỢC =======================
+
+    @Test
+    @DisplayName("S6-08: Hàng giao không được chở về -> cộng lại tồn thực tế đúng kho đã xuất, ghi thẻ kho, không đụng giữ chỗ")
+    void returnDeliveredStock_addsBackToDispatchWarehouse() {
+        Inventory southStock = inv(south, beer, "100", "7");
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(3L, 10L)).thenReturn(Optional.of(southStock));
+        SalesOrder o = order(beer, "24");
+        o.setReservedWarehouse(south);
+        o.setReservationStatus(SalesOrder.RESERVATION_DISPATCHED);
+
+        service.returnDeliveredStock(o, List.of(new InventoryService.DispatchLine(o.getLines().get(0), new BigDecimal("24")),
+                new InventoryService.DispatchLine(o.getLines().get(0), BigDecimal.ZERO)), "Giao không thành công", null);
+
+        assertThat(southStock.getPhysicalStock()).isEqualByComparingTo("124");
+        assertThat(southStock.getReservedStock()).isEqualByComparingTo("7");
+        verify(stockMovementService).record(eq(southStock), eq(StockMovement.TYPE_DELIVERY_RETURN),
+                argThat(q -> q != null && q.compareTo(new BigDecimal("24")) == 0),
+                eq(StockMovement.DOC_SALES_ORDER), eq(1001L), eq("DH261010-AAAA"), eq("Giao không thành công"), isNull());
+        verifyNoInteractions(warehouseRepository);
+    }
+
+    @Test
+    @DisplayName("S6-08: Danh sách nhập lại rỗng -> không làm gì")
+    void returnDeliveredStock_empty_noop() {
+        service.returnDeliveredStock(order(beer, "5"), List.of(), "x", null);
+        verifyNoInteractions(inventoryRepository, stockMovementService);
+    }
 }

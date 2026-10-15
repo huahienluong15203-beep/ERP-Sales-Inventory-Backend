@@ -16,5 +16,13 @@ public record OrderFulfillmentInfo(
         boolean backorder,
         Long parentOrderId,
         String parentOrderCode,
-        List<String> backorderCodes) {
+        List<String> backorderCodes,
+        // S6-08: giao hàng
+        String receiverName,
+        LocalDateTime deliveredAt,
+        LocalDateTime deliveryConfirmedAt,
+        String deliveryConfirmedByUsername,
+        boolean hasDeliveryProof,
+        String deliveryFailedReason,
+        LocalDateTime deliveryFailedAt) {
 }

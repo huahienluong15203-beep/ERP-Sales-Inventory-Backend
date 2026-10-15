@@ -418,4 +418,32 @@ class OrderStatusServiceTest {
                 .hasFieldOrPropertyWithValue("code", "CUSTOMER_CANCEL_NOT_ALLOWED");
         verify(inventoryService, never()).releaseReservedStock(any());
     }
+
+    @Test
+    @DisplayName("S6-08: Đơn đã xác nhận giao theo biên bản -> khoá sửa số thực giao (409)")
+    void updateDelivered_afterDeliveryConfirmed_locked() {
+        order.setStatus(SalesOrder.STATUS_DELIVERED);
+        order.setDeliveryConfirmedAt(java.time.LocalDateTime.of(2026, 10, 10, 9, 0));
+        when(orderRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(order));
+        OrderLineDeliveryRequest d = new OrderLineDeliveryRequest();
+        d.setLineId(1L);
+        d.setDeliveredQuantity(BigDecimal.ZERO);
+
+        assertThatThrownBy(() -> service.updateDeliveredQuantities(100L, List.of(d), manager))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "DELIVERY_CONFIRMED_LOCKED");
+        verify(orderRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("S6-08: Đơn giao không thành công (hàng đã nhập lại kho) -> không huỷ được nữa")
+    void cancel_deliveryFailed_conflict() {
+        order.setStatus(SalesOrder.STATUS_DELIVERY_FAILED);
+        when(orderRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(order));
+
+        assertThatThrownBy(() -> service.cancel(100L, "Huỷ", manager))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "ORDER_DELIVERY_FAILED");
+        verifyNoInteractions(inventoryService);
+    }
 }

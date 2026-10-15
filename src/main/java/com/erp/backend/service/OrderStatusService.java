@@ -95,6 +95,11 @@ public class OrderStatusService {
                     "status");
         }
 
+        if (SalesOrder.STATUS_DELIVERY_FAILED.equalsIgnoreCase(currentStatus)) {
+            throw BusinessException.conflict("ORDER_DELIVERY_FAILED",
+                    "Đơn đã ghi nhận giao không thành công (hàng đã nhập lại kho), không cần huỷ", "status");
+        }
+
         if (SalesOrder.STATUS_CANCELLED.equalsIgnoreCase(currentStatus)) {
             throw BusinessException.conflict("ORDER_ALREADY_CANCELLED",
                     "Đơn hàng đã ở trạng thái hủy trước đó", "status");
@@ -501,7 +506,7 @@ public class OrderStatusService {
         return v == null ? "" : v.stripTrailingZeros().toPlainString();
     }
 
-    private static String cut(String s, int max) {
+    static String cut(String s, int max) {
         return s == null || s.length() <= max ? s : s.substring(0, max);
     }
 
@@ -540,6 +545,11 @@ public class OrderStatusService {
                     "Chỉ sửa số lượng thực giao khi đơn đã xuất kho hoặc đã giao (đơn hiện ở trạng thái " + status + ")",
                     "status");
         }
+        // S6-08: đã xác nhận giao (biên bản đã ký, hàng không giao được đã nhập lại kho) thì khoá số thực giao
+        if (order.getDeliveryConfirmedAt() != null) {
+            throw BusinessException.conflict("DELIVERY_CONFIRMED_LOCKED",
+                    "Đơn đã xác nhận giao hàng theo biên bản, không sửa số lượng thực giao được", "status");
+        }
         String before = deliverySummary(order);
 
         applyLineDeliveries(order, lineDeliveries);
@@ -554,7 +564,7 @@ public class OrderStatusService {
         return orderDraftService.toResponse(saved);
     }
 
-    private void applyLineDeliveries(SalesOrder order, List<OrderLineDeliveryRequest> lineDeliveries) {
+    static void applyLineDeliveries(SalesOrder order, List<OrderLineDeliveryRequest> lineDeliveries) {
         for (OrderLineDeliveryRequest req : lineDeliveries) {
             if (req.getLineId() == null) {
                 continue;
@@ -587,7 +597,7 @@ public class OrderStatusService {
         }
     }
 
-    private static String deliverySummary(SalesOrder order) {
+    static String deliverySummary(SalesOrder order) {
         StringBuilder sb = new StringBuilder();
         for (SalesOrderLine l : order.getLines()) {
             if (sb.length() > 0) {
@@ -604,6 +614,12 @@ public class OrderStatusService {
      * Đơn chưa xác định kho thì bỏ qua.
      */
     private void assertAssignedWarehouse(UserDetailsImpl actor, SalesOrder order) {
+        assertAssignedWarehouse(actor, order, userRepository);
+    }
+
+    /** Dùng chung cho xác nhận giao hàng (S6-08). */
+    static void assertAssignedWarehouse(UserDetailsImpl actor, SalesOrder order,
+                                        com.erp.backend.repository.UserRepository userRepository) {
         if (actor == null || actor.getAuthorities() == null || order.getReservedWarehouse() == null) {
             return;
         }
@@ -624,7 +640,7 @@ public class OrderStatusService {
         }
     }
 
-    private static void requireAnyRole(UserDetailsImpl actor, Set<String> roles, String message) {
+    static void requireAnyRole(UserDetailsImpl actor, Set<String> roles, String message) {
         boolean ok = actor != null && actor.getAuthorities() != null
                 && actor.getAuthorities().stream().anyMatch(a -> roles.contains(a.getAuthority()));
         if (!ok) {
@@ -664,6 +680,12 @@ public class OrderStatusService {
 
     private void saveHistory(SalesOrder order, String action, String fromStatus, String toStatus, String comment,
                              UserDetailsImpl actor) {
+        saveHistory(approvalRepository, order, action, fromStatus, toStatus, comment, actor);
+    }
+
+    /** Dùng chung cho xác nhận giao hàng (S6-08). */
+    static void saveHistory(SalesOrderApprovalRepository approvalRepository, SalesOrder order, String action,
+                            String fromStatus, String toStatus, String comment, UserDetailsImpl actor) {
         String c = comment != null && comment.length() > 1000 ? comment.substring(0, 1000) : comment;
         approvalRepository.save(SalesOrderApproval.builder()
                 .order(order)
@@ -679,6 +701,12 @@ public class OrderStatusService {
 
     private void audit(SalesOrder order, String action, String fromStatus, String toStatus, String comment,
                        UserDetailsImpl actor) {
+        audit(auditLogService, order, action, fromStatus, toStatus, comment, actor);
+    }
+
+    /** Dùng chung cho xác nhận giao hàng (S6-08). */
+    static void audit(AuditLogService auditLogService, SalesOrder order, String action, String fromStatus,
+                      String toStatus, String comment, UserDetailsImpl actor) {
         // Cột lý do của nhật ký tối đa 500 ký tự (ghi ở transaction riêng, quá dài sẽ lỗi cả thao tác)
         auditLogService.record(AuditModule.ORDER, action, "SALES_ORDER", order.getId(), order.getCode(),
                 fromStatus, toStatus, cut(comment, MAX_COMMENT), actor);

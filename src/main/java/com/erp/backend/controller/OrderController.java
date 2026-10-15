@@ -41,6 +41,7 @@ public class OrderController {
     private final OrderQueryService orderQueryService;
     private final OrderPrintService orderPrintService;
     private final com.erp.backend.service.OrderStatusService orderStatusService;
+    private final com.erp.backend.service.OrderDeliveryService orderDeliveryService;
 
     /**
      * S3-09 / S4-07: Danh sách đơn có bộ lọc. NV kinh doanh chỉ thấy đơn của đại lý mình phụ trách.
@@ -272,6 +273,47 @@ public class OrderController {
                                           @Valid @RequestBody(required = false) OrderDispatchRequest request,
                                           @AuthenticationPrincipal UserDetailsImpl actor) {
         return orderStatusService.dispatch(id, request, actor);
+    }
+
+    /** S6-08: Tải ảnh biên bản giao hàng có chữ ký (JPG / PNG, tối đa 5MB) cho đơn Đã xuất kho. Form-data: file. */
+    @PostMapping(value = "/{id}/delivery-proof", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'WAREHOUSE', 'WH_MANAGER', 'SALES_REP')")
+    public OrderResponse uploadDeliveryProof(@PathVariable Long id,
+                                             @RequestParam("file") org.springframework.web.multipart.MultipartFile file,
+                                             @AuthenticationPrincipal UserDetailsImpl actor) {
+        return orderDeliveryService.uploadProof(id, file, actor);
+    }
+
+    /** S6-08: Xem ảnh biên bản giao hàng (ai xem được đơn thì xem được ảnh; không phục vụ công khai). */
+    @GetMapping("/{id}/delivery-proof")
+    public ResponseEntity<byte[]> deliveryProof(@PathVariable Long id, @AuthenticationPrincipal UserDetailsImpl actor) {
+        com.erp.backend.service.DeliveryProofStorageService.LoadedFile f = orderDeliveryService.loadProof(id, actor);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(f.contentType()))
+                .header(org.springframework.http.HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .header("X-Content-Type-Options", "nosniff")
+                .body(f.content());
+    }
+
+    /**
+     * S6-08: Xác nhận giao thành công (Đã xuất -> Đã giao): người nhận, thời điểm giao, số thực giao.
+     * Bắt buộc đã tải ảnh biên bản. Phần giao thiếu nhập lại kho; sau đó khoá số thực giao để lập hoá đơn.
+     */
+    @PostMapping("/{id}/confirm-delivery")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'WAREHOUSE', 'WH_MANAGER', 'SALES_REP')")
+    public OrderResponse confirmDelivery(@PathVariable Long id,
+                                         @Valid @RequestBody OrderDeliveryConfirmRequest request,
+                                         @AuthenticationPrincipal UserDetailsImpl actor) {
+        return orderDeliveryService.confirmDelivery(id, request, actor);
+    }
+
+    /** S6-08: Giao không thành công: bắt buộc lý do, toàn bộ hàng nhập lại kho, đơn sang DELIVERY_FAILED. */
+    @PostMapping("/{id}/delivery-failed")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'WAREHOUSE', 'WH_MANAGER', 'SALES_REP')")
+    public OrderResponse deliveryFailed(@PathVariable Long id,
+                                        @Valid @RequestBody OrderDeliveryFailedRequest request,
+                                        @AuthenticationPrincipal UserDetailsImpl actor) {
+        return orderDeliveryService.markFailed(id, request.getReason(), actor);
     }
 
     /**

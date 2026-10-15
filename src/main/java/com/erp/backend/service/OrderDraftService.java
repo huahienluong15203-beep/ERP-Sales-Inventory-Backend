@@ -791,7 +791,7 @@ public class OrderDraftService {
                 hasShortage, shortageLineCount, fulfillment(o));
     }
 
-    /** S6-05: thông tin xuất kho và đơn nợ hàng (đơn chưa lưu thì không có). */
+    /** S6-05 / S6-08: thông tin xuất kho, đơn nợ hàng, giao hàng (đơn chưa lưu thì không có). */
     private OrderFulfillmentInfo fulfillment(SalesOrder o) {
         if (o.getId() == null) {
             return null;
@@ -799,7 +799,9 @@ public class OrderDraftService {
         List<String> backorderCodes = orderRepository.findBackorderCodes(o.getId());
         return new OrderFulfillmentInfo(o.getDispatchedAt(), o.getDispatchedByUsername(), o.getDispatchNote(),
                 o.isBackorderOrder(), o.getParentOrder() != null ? o.getParentOrder().getId() : null,
-                o.getParentOrderCode(), backorderCodes != null ? backorderCodes : List.of());
+                o.getParentOrderCode(), backorderCodes != null ? backorderCodes : List.of(),
+                o.getReceiverName(), o.getDeliveredAt(), o.getDeliveryConfirmedAt(), o.getDeliveryConfirmedByUsername(),
+                o.getDeliveryProofFile() != null, o.getDeliveryFailedReason(), o.getDeliveryFailedAt());
     }
 
     /** S3-07 AC3: cảnh báo khi đại lý của đơn đang bị khoá giao dịch. S4-02: cảnh báo vượt hạn mức / nợ quá hạn. S4-01: cảnh báo bán dưới giá sàn. S4-03: cảnh báo vượt tồn kho khả dụng. */

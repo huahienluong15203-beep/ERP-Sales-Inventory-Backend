@@ -37,6 +37,8 @@ public class SalesOrder {
     public static final String STATUS_CLOSED = "CLOSED";
     public static final String STATUS_CANCELLED = "CANCELLED";
     public static final String STATUS_REJECTED = "REJECTED";
+    // S6-08: giao không thành công (đại lý không nhận), hàng đã nhập lại kho
+    public static final String STATUS_DELIVERY_FAILED = "DELIVERY_FAILED";
 
     // S4-10: nguồn tạo đơn: nhân viên gõ đơn hay đại lý tự đặt qua cổng đại lý
     public static final String SOURCE_STAFF = "STAFF";
@@ -197,6 +199,36 @@ public class SalesOrder {
 
     @Column(name = "parent_order_code", length = 30)
     private String parentOrderCode;
+
+    // S6-08: xác nhận giao hàng: người nhận, thời điểm giao thực tế, ảnh biên bản có chữ ký
+    @Column(name = "receiver_name", length = 100)
+    private String receiverName;
+
+    @Column(name = "delivered_at")
+    private LocalDateTime deliveredAt;
+
+    @Column(name = "delivery_confirmed_at")
+    private LocalDateTime deliveryConfirmedAt;
+
+    @Column(name = "delivery_confirmed_by_username", length = 50)
+    private String deliveryConfirmedByUsername;
+
+    /** Tên tệp ảnh biên bản giao hàng trong thư mục lưu trữ riêng (không phục vụ tĩnh, xem qua API có kiểm quyền). */
+    @Column(name = "delivery_proof_file", length = 120)
+    private String deliveryProofFile;
+
+    @Column(name = "delivery_proof_content_type", length = 30)
+    private String deliveryProofContentType;
+
+    @Column(name = "delivery_proof_uploaded_at")
+    private LocalDateTime deliveryProofUploadedAt;
+
+    // S6-08: giao không thành công
+    @Column(name = "delivery_failed_reason", length = 500)
+    private String deliveryFailedReason;
+
+    @Column(name = "delivery_failed_at")
+    private LocalDateTime deliveryFailedAt;
 
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("lineNo ASC")
