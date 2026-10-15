@@ -67,7 +67,7 @@ public class Product {
     private String status = "ACTIVE";
 
     // S6-01: Quản lý theo lô & HSD theo từng SKU (Bật/Tắt)
-    @Column(name = "has_batch_management", nullable = false)
+    @Column(name = "has_batch_management", nullable = false, columnDefinition = "boolean default false")
     @Builder.Default
     private Boolean hasBatchManagement = false;
 

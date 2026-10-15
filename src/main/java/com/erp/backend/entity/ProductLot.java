@@ -63,7 +63,7 @@ public class ProductLot {
     private String notes;
 
     // S6-01: Trạng thái lô hàng: ACTIVE (Hoạt động), LOCKED (Khóa không cho xuất)
-    @Column(length = 30, nullable = false)
+    @Column(length = 30, nullable = false, columnDefinition = "varchar(30) default 'ACTIVE'")
     @Builder.Default
     private String status = "ACTIVE";
 
