@@ -72,6 +72,11 @@ public class ProductLot {
     @JoinColumn(name = "supplier_id")
     private Supplier supplier;
 
+    // S6-03: Vị trí lưu kho của lô hàng
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "location_id")
+    private WarehouseLocation location;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false, columnDefinition = "timestamp default now()")
     private LocalDateTime createdAt;

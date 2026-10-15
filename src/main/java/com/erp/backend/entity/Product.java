@@ -71,6 +71,11 @@ public class Product {
     @Builder.Default
     private Boolean hasBatchManagement = false;
 
+    // S6-03: Vị trí lưu kho mặc định để sắp xếp đường đi soạn hàng
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "default_location_id")
+    private WarehouseLocation defaultLocation;
+
     // Mã vạch sản phẩm (Barcode / EAN-13...)
     @Column(length = 50)
     private String barcode;
