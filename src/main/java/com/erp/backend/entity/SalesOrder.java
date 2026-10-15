@@ -230,6 +230,13 @@ public class SalesOrder {
     @Column(name = "delivery_failed_at")
     private LocalDateTime deliveryFailedAt;
 
+    // S7-01: hoá đơn đã lập cho phần thực giao của đơn (null = chưa lập)
+    @Column(name = "invoice_id")
+    private Long invoiceId;
+
+    @Column(name = "invoice_code", length = 30)
+    private String invoiceCode;
+
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("lineNo ASC")
     @Builder.Default
