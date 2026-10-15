@@ -22,6 +22,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 
@@ -184,5 +185,23 @@ class PortalServiceTest {
         ArgumentCaptor<OrderSearchCriteria> c = ArgumentCaptor.forClass(OrderSearchCriteria.class);
         verify(orderQueryService).search(c.capture(), eq(0), eq(20), eq(agent));
         assertThat(c.getValue().customerId()).isEqualTo(6L);
+    }
+
+    @Test
+    @DisplayName("S4-10: Lịch sử đơn hỗ trợ lọc trạng thái, từ khóa, khoảng ngày và phân trang")
+    void orders_withFilters_passesCriteria() {
+        LocalDate from = LocalDate.of(2026, 10, 1);
+        LocalDate to = LocalDate.of(2026, 10, 15);
+        List<String> statuses = List.of("PENDING_APPROVAL", "APPROVED");
+
+        service.orders(statuses, from, to, "DH2610", 1, 10, agent);
+
+        ArgumentCaptor<OrderSearchCriteria> c = ArgumentCaptor.forClass(OrderSearchCriteria.class);
+        verify(orderQueryService).search(c.capture(), eq(1), eq(10), eq(agent));
+        assertThat(c.getValue().customerId()).isEqualTo(6L);
+        assertThat(c.getValue().statuses()).containsExactly("PENDING_APPROVAL", "APPROVED");
+        assertThat(c.getValue().fromDate()).isEqualTo(from);
+        assertThat(c.getValue().toDate()).isEqualTo(to);
+        assertThat(c.getValue().keyword()).isEqualTo("DH2610");
     }
 }
