@@ -35,6 +35,7 @@ import java.util.Set;
  * - Xác nhận giao thành công: người nhận, thời điểm giao, số thực giao; bắt buộc đã có ảnh biên bản.
  *   Phần giao thiếu chở về được nhập lại kho (thẻ kho). Sau khi xác nhận thì khoá số thực giao -> dùng lập hoá đơn (S7-01).
  * - Giao không thành công: bắt buộc lý do, toàn bộ hàng nhập lại kho, đơn sang DELIVERY_FAILED (không tính công nợ).
+ * - S6-07: đơn đang trên chuyến giao còn chạy thì hàng giao không được vẫn thuộc chuyến, chỉ nhập lại kho khi kết thúc chuyến.
  */
 @Slf4j
 @Service
@@ -165,9 +166,13 @@ public class OrderDeliveryService {
                     "Đại lý không nhận dòng hàng nào: hãy ghi nhận Giao không thành công", "lineDeliveries");
         }
 
-        // Hàng giao thiếu được chở về: nhập lại kho đã xuất (cùng transaction, ghi thẻ kho)
-        inventoryService.returnDeliveredStock(order, returns,
-                "Hàng giao thiếu chở về kho (đơn " + order.getCode() + ")", actor);
+        // Hàng giao thiếu được chở về: nhập lại kho đã xuất (cùng transaction, ghi thẻ kho).
+        // S6-07: đơn đang trên 1 chuyến giao còn chạy thì hàng vẫn thuộc trách nhiệm chuyến, nhập lại khi kết thúc chuyến
+        if (!DeliveryTripService.onActiveTrip(order)) {
+            inventoryService.returnDeliveredStock(order, returns,
+                    "Hàng giao thiếu chở về kho (đơn " + order.getCode() + ")", actor);
+            order.setStockReturnedAt(now);
+        }
 
         order.setReceiverName(receiver);
         order.setDeliveredAt(deliveredAt);
@@ -178,7 +183,9 @@ public class OrderDeliveryService {
             order.setLastApprovalComment(note);
         }
         String comment = "Đại lý đã nhận hàng, người nhận: " + receiver
-                + (shortLines > 0 ? " (giao thiếu " + shortLines + " dòng, phần thiếu đã nhập lại kho)" : "")
+                + (shortLines > 0 ? " (giao thiếu " + shortLines + " dòng, " + (DeliveryTripService.onActiveTrip(order)
+                ? "phần thiếu còn trên chuyến " + order.getDeliveryTrip().getCode() + ", nhập lại kho khi kết thúc chuyến)"
+                : "phần thiếu đã nhập lại kho)") : "")
                 + (StringUtils.hasText(note) ? ". " + note : "");
         OrderStatusService.saveHistory(approvalRepository, order, SalesOrder.STATUS_DELIVERED,
                 SalesOrder.STATUS_DISPATCHED, SalesOrder.STATUS_DELIVERED, comment, actor);
@@ -212,11 +219,14 @@ public class OrderDeliveryService {
             line.setDeliveredQuantity(BigDecimal.ZERO);
             line.setShortageReason(OrderStatusService.cut(why, 255));
         }
-        // Toàn bộ hàng đã xuất được chở về: nhập lại kho đã xuất
-        inventoryService.returnDeliveredStock(order, returns,
-                "Giao không thành công, nhập lại kho (đơn " + order.getCode() + "): " + why, actor);
-
         LocalDateTime now = LocalDateTime.now(clock);
+        // Toàn bộ hàng đã xuất được chở về: nhập lại kho đã xuất.
+        // S6-07: đơn đang trên chuyến giao còn chạy thì chờ kết thúc chuyến mới nhập lại
+        if (!DeliveryTripService.onActiveTrip(order)) {
+            inventoryService.returnDeliveredStock(order, returns,
+                    "Giao không thành công, nhập lại kho (đơn " + order.getCode() + "): " + why, actor);
+            order.setStockReturnedAt(now);
+        }
         order.setStatus(SalesOrder.STATUS_DELIVERY_FAILED);
         order.setDeliveryFailedReason(why);
         order.setDeliveryFailedAt(now);

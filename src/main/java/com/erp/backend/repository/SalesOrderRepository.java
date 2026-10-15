@@ -156,6 +156,18 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, Long>, J
     @Query("select o from SalesOrder o where o.id in :ids order by o.id asc")
     List<SalesOrder> findAllByIdForUpdate(@Param("ids") Collection<Long> ids);
 
+    /** S6-07: các đơn (điểm giao) của những chuyến giao. */
+    @Query("select o from SalesOrder o join fetch o.customer where o.deliveryTrip.id in :tripIds order by o.id asc")
+    List<SalesOrder> findByDeliveryTripIds(@Param("tripIds") Collection<Long> tripIds);
+
+    /** S6-07: id các đơn của 1 chuyến (không nạp đơn trước khi khoá). */
+    @Query("select o.id from SalesOrder o where o.deliveryTrip.id = :tripId order by o.id asc")
+    List<Long> findIdsByDeliveryTripId(@Param("tripId") Long tripId);
+
+    /** S6-07: đơn đã xuất kho chưa xếp vào chuyến giao nào. */
+    @Query("select o from SalesOrder o where o.status = :status and o.deliveryTrip is null")
+    List<SalesOrder> findByStatusWithoutTrip(@Param("status") String status);
+
     /** S6-05: mã các đơn nợ hàng tách ra từ đơn :parentId (theo thứ tự tạo). */
     @Query("select o.code from SalesOrder o where o.parentOrder.id = :parentId order by o.id")
     List<String> findBackorderCodes(@Param("parentId") Long parentId);

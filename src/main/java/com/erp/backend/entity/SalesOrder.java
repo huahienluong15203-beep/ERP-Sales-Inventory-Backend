@@ -189,6 +189,15 @@ public class SalesOrder {
     @Column(name = "dispatch_note", length = 500)
     private String dispatchNote;
 
+    // S6-07: chuyến giao đang chở đơn này (null = chưa xếp chuyến)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "delivery_trip_id")
+    private DeliveryTrip deliveryTrip;
+
+    // S6-07: thời điểm phần hàng giao không được đã nhập lại kho (null = chưa nhập lại / chưa phát sinh)
+    @Column(name = "stock_returned_at")
+    private LocalDateTime stockReturnedAt;
+
     // S6-05: đơn nợ hàng (phần còn thiếu khi xuất kho được tách sang đơn này để giao lần sau)
     @Column(name = "is_backorder")
     private Boolean backorder;
