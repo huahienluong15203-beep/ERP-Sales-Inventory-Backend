@@ -16,6 +16,7 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -197,5 +198,74 @@ class InventoryReservationTest {
 
         assertThat(o.getReservationExpiresAt()).isEqualTo(NOW.plusDays(7));
         verify(inventoryRepository, never()).save(any());
+    }
+
+    // ======================= S6-05: XUẤT THIẾU =======================
+
+    @Test
+    @DisplayName("S6-05: Xuất thiếu 168/240 -> tồn thực tế trừ 168, giải phóng TOÀN BỘ 240 đang giữ chỗ của đơn")
+    void dispatchStock_partial_releasesWholeReservation() {
+        Inventory stock = inv(north, beer, "300", "250");
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(1L, 10L)).thenReturn(Optional.of(stock));
+        SalesOrder o = order(beer, "240");
+        o.setReservedWarehouse(north);
+        o.setReservationStatus(SalesOrder.RESERVATION_RESERVED);
+
+        service.dispatchStock(o, List.of(new InventoryService.DispatchLine(o.getLines().get(0), new BigDecimal("168"))), null);
+
+        assertThat(stock.getPhysicalStock()).isEqualByComparingTo("132");
+        assertThat(stock.getReservedStock()).isEqualByComparingTo("10");
+        assertThat(o.getReservationStatus()).isEqualTo(SalesOrder.RESERVATION_DISPATCHED);
+        verify(stockMovementService).record(eq(stock), eq(StockMovement.TYPE_SALES_DISPATCH),
+                argThat(q -> q != null && q.compareTo(new BigDecimal("-168")) == 0),
+                eq(StockMovement.DOC_SALES_ORDER), eq(1001L), eq("DH261010-AAAA"), anyString(), isNull());
+    }
+
+    @Test
+    @DisplayName("S6-05: Đơn không còn giữ chỗ (đơn nợ hàng) -> phải đủ tồn KHẢ DỤNG, không lấy hàng đang giữ cho đơn khác")
+    void dispatchStock_released_requiresAvailable() {
+        Inventory stock = inv(north, beer, "50", "40");
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(1L, 10L)).thenReturn(Optional.of(stock));
+        SalesOrder o = order(beer, "15");
+        o.setReservedWarehouse(north);
+        o.setReservationStatus(SalesOrder.RESERVATION_RELEASED);
+
+        assertThatThrownBy(() -> service.dispatchStock(o, null, null))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "INSUFFICIENT_AVAILABLE_STOCK");
+        assertThat(stock.getPhysicalStock()).isEqualByComparingTo("50");
+        assertThat(stock.getReservedStock()).isEqualByComparingTo("40");
+        verify(inventoryRepository, never()).save(any(Inventory.class));
+    }
+
+    @Test
+    @DisplayName("S6-05: Cùng 1 sản phẩm ở 2 dòng -> gộp số cần xuất khi kiểm tồn (không để tồn âm)")
+    void dispatchStock_sameProductTwoLines_aggregated() {
+        Inventory stock = inv(north, beer, "12", "15");
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(1L, 10L)).thenReturn(Optional.of(stock));
+        SalesOrder o = order(beer, "10");
+        o.addLine(line(beer, "5"));
+        o.setReservedWarehouse(north);
+        o.setReservationStatus(SalesOrder.RESERVATION_RESERVED);
+
+        assertThatThrownBy(() -> service.dispatchStock(o, null, null))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "INSUFFICIENT_PHYSICAL_STOCK");
+        assertThat(stock.getPhysicalStock()).isEqualByComparingTo("12");
+        verify(inventoryRepository, times(1)).findByWarehouseIdAndProductIdForUpdate(1L, 10L);
+    }
+
+    @Test
+    @DisplayName("S6-05: Số thực xuất lớn hơn số của dòng -> 400, không khoá / trừ tồn")
+    void dispatchStock_moreThanLine_badRequest() {
+        SalesOrder o = order(beer, "10");
+        o.setReservedWarehouse(north);
+        o.setReservationStatus(SalesOrder.RESERVATION_RESERVED);
+
+        assertThatThrownBy(() -> service.dispatchStock(o,
+                List.of(new InventoryService.DispatchLine(o.getLines().get(0), new BigDecimal("11"))), null))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "INVALID_DISPATCH_QUANTITY");
+        verifyNoInteractions(inventoryRepository);
     }
 }

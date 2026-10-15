@@ -129,4 +129,8 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, Long>, J
                                                Pageable pageable);
 
     boolean existsByReservedWarehouse_Id(Long warehouseId);
+
+    /** S6-05: mã các đơn nợ hàng tách ra từ đơn :parentId (theo thứ tự tạo). */
+    @Query("select o.code from SalesOrder o where o.parentOrder.id = :parentId order by o.id")
+    List<String> findBackorderCodes(@Param("parentId") Long parentId);
 }

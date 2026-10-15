@@ -177,6 +177,27 @@ public class SalesOrder {
     @Column(name = "created_by_username", length = 50)
     private String createdByUsername;
 
+    // S6-05: xuất kho (có thể xuất thiếu): thời điểm, người xác nhận, ghi chú / lý do xuất thiếu
+    @Column(name = "dispatched_at")
+    private LocalDateTime dispatchedAt;
+
+    @Column(name = "dispatched_by_username", length = 50)
+    private String dispatchedByUsername;
+
+    @Column(name = "dispatch_note", length = 500)
+    private String dispatchNote;
+
+    // S6-05: đơn nợ hàng (phần còn thiếu khi xuất kho được tách sang đơn này để giao lần sau)
+    @Column(name = "is_backorder")
+    private Boolean backorder;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "parent_order_id")
+    private SalesOrder parentOrder;
+
+    @Column(name = "parent_order_code", length = 30)
+    private String parentOrderCode;
+
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("lineNo ASC")
     @Builder.Default
@@ -189,6 +210,11 @@ public class SalesOrder {
     @UpdateTimestamp
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    /** S6-05: đơn nợ hàng tách ra từ lần xuất thiếu của đơn khác. */
+    public boolean isBackorderOrder() {
+        return Boolean.TRUE.equals(backorder);
+    }
 
     public void addLine(SalesOrderLine line) {
         line.setOrder(this);

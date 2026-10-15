@@ -30,7 +30,7 @@ import static com.erp.backend.service.CustomerTestData.customer;
 import static com.erp.backend.service.CustomerTestData.salesRep;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -253,7 +253,7 @@ class OrderStatusServiceTest {
         service.transitionStatus(100L, "DISPATCHED", "Xe tải 29H-12345 rời kho", manager);
 
         assertThat(order.getStatus()).isEqualTo(SalesOrder.STATUS_DISPATCHED);
-        verify(inventoryService).dispatchReservedStock(order, manager);
+        verify(inventoryService).dispatchStock(eq(order), anyList(), eq(manager));
 
         ArgumentCaptor<SalesOrderApproval> captor = ArgumentCaptor.forClass(SalesOrderApproval.class);
         verify(approvalRepository).save(captor.capture());

@@ -1,7 +1,10 @@
 package com.erp.backend.service;
 
 import com.erp.backend.config.AuditLogInterceptor;
+import com.erp.backend.dto.order.OrderDispatchRequest;
+import com.erp.backend.dto.order.OrderDispatchResponse;
 import com.erp.backend.dto.order.OrderLineDeliveryRequest;
+import com.erp.backend.dto.order.OrderLineDispatchRequest;
 import com.erp.backend.dto.order.OrderResponse;
 import com.erp.backend.entity.AuditModule;
 import com.erp.backend.entity.SalesOrder;
@@ -22,10 +25,14 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -145,17 +152,44 @@ public class OrderStatusService {
     @Transactional
     public OrderResponse transitionStatus(Long id, String targetStatus, String note,
                                           List<OrderLineDeliveryRequest> lineDeliveries, UserDetailsImpl actor) {
+        if (targetStatus != null && SalesOrder.STATUS_CANCELLED.equalsIgnoreCase(targetStatus.trim())) {
+            requireAnyRole(actor, CANCEL_ROLES, "Bạn không có quyền huỷ đơn hàng");
+            return cancel(id, note, actor);
+        }
+        return orderDraftService.toResponse(doTransition(id, targetStatus, note, lineDeliveries, null, actor).order());
+    }
+
+    /**
+     * S6-05: Xác nhận xuất kho đơn đang soạn hàng, cho phép xuất thiếu.
+     * Giữ chỗ chuyển thành xuất thực tế (trừ tồn đúng số thực xuất), đơn sang Đã xuất (DISPATCHED);
+     * phần còn thiếu tách thành đơn nợ hàng (APPROVED) để giao lần sau. Đã xuất rồi thì không sửa được.
+     */
+    @Transactional
+    public OrderDispatchResponse dispatch(Long id, OrderDispatchRequest request, UserDetailsImpl actor) {
+        OrderDispatchRequest req = request != null ? request : new OrderDispatchRequest();
+        Transition t = doTransition(id, SalesOrder.STATUS_DISPATCHED, req.getNote(), null, req, actor);
+        return new OrderDispatchResponse(orderDraftService.toResponse(t.order()),
+                t.backorder() != null ? orderDraftService.toResponse(t.backorder()) : null);
+    }
+
+    /** Kết quả chuyển trạng thái: đơn đã lưu và đơn nợ hàng mới (nếu có). */
+    record Transition(SalesOrder order, SalesOrder backorder) {
+    }
+
+    private Transition doTransition(Long id, String targetStatus, String note,
+                                    List<OrderLineDeliveryRequest> lineDeliveries, OrderDispatchRequest dispatchRequest,
+                                    UserDetailsImpl actor) {
         if (!StringUtils.hasText(targetStatus)) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "STATUS_REQUIRED",
                     "Trạng thái mới không được để trống", "status");
         }
         String cleanTarget = targetStatus.trim().toUpperCase();
 
-        // Nếu chuyển sang CANCELLED thì đi theo quy trình huỷ đơn (bắt buộc lý do & nhả tồn).
-        // Phải kiểm quyền như API /cancel, không để kho lách quyền huỷ đơn qua API /status.
+        // Huỷ đơn (CANCELLED) đã tách sang cancel(...) ở transitionStatus: bắt buộc lý do & nhả tồn,
+        // kiểm quyền như API /cancel để kho không lách quyền huỷ đơn qua API /status.
         if (SalesOrder.STATUS_CANCELLED.equals(cleanTarget)) {
-            requireAnyRole(actor, CANCEL_ROLES, "Bạn không có quyền huỷ đơn hàng");
-            return cancel(id, note, actor);
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_STATUS_TRANSITION",
+                    "Huỷ đơn dùng chức năng Huỷ đơn", "status");
         }
         if (SalesOrder.STATUS_PICKING.equals(cleanTarget) || SalesOrder.STATUS_DISPATCHED.equals(cleanTarget)) {
             requireAnyRole(actor, WAREHOUSE_STEP_ROLES, "Soạn hàng và xuất kho do bộ phận kho thực hiện");
@@ -179,9 +213,15 @@ public class OrderStatusService {
                     "Ghi chú tối đa " + MAX_COMMENT + " ký tự", "note");
         }
 
-        // Khi xuất kho (DISPATCHED): trừ tồn thực tế và giải phóng giữ chỗ
+        // Khi xuất kho (DISPATCHED): trừ tồn thực tế (đúng số thực xuất) và giải phóng giữ chỗ;
+        // S6-05: xuất thiếu thì tách phần còn nợ sang đơn nợ hàng
+        LocalDateTime now = LocalDateTime.now(clock);
+        DispatchResult dispatchResult = null;
         if (SalesOrder.STATUS_DISPATCHED.equals(cleanTarget)) {
-            inventoryService.dispatchReservedStock(order, actor);
+            dispatchResult = applyDispatch(order, dispatchRequest, cleanNote, actor);
+            order.setDispatchedAt(now);
+            order.setDispatchedByUsername(actor != null ? actor.getUsername() : null);
+            order.setDispatchNote(StringUtils.hasText(cleanNote) ? cleanNote : null);
         }
 
         // S5-01: Cập nhật số lượng thực giao khi giao hàng (DELIVERED)
@@ -208,7 +248,13 @@ public class OrderStatusService {
         }
 
         String comment;
-        if (StringUtils.hasText(cleanNote)) {
+        if (dispatchResult != null && dispatchResult.shortLineCount() > 0) {
+            comment = "Xuất thiếu " + dispatchResult.shortLineCount() + " dòng hàng"
+                    + (dispatchResult.backorder() != null
+                    ? ", phần còn nợ chuyển sang đơn nợ hàng " + dispatchResult.backorder().getCode()
+                    : ", phần còn thiếu không giao nữa")
+                    + (StringUtils.hasText(cleanNote) ? ". " + cleanNote : "");
+        } else if (StringUtils.hasText(cleanNote)) {
             comment = cleanNote;
         } else if (SalesOrder.STATUS_DELIVERED.equals(cleanTarget) && hasShortageDelivery) {
             comment = "Đại lý đã nhận hàng (có ghi nhận giao thiếu một số dòng hàng)";
@@ -219,11 +265,257 @@ public class OrderStatusService {
         saveHistory(order, cleanTarget, currentStatus, cleanTarget, comment, actor);
         SalesOrder saved = orderRepository.saveAndFlush(order);
         audit(saved, "CHANGE_STATUS_" + cleanTarget, currentStatus, cleanTarget, comment, actor);
+        SalesOrder backorder = null;
+        if (dispatchResult != null && dispatchResult.shortLineCount() > 0) {
+            // Quy tắc 9: số lượng / tiền trước và sau khi xuất thiếu
+            audit(saved, "DISPATCH_SHORTAGE", dispatchResult.before(), quantitySummary(saved), comment, actor);
+            backorder = dispatchResult.backorder();
+            if (backorder != null) {
+                backorder = orderRepository.saveAndFlush(backorder);
+                String boComment = "Đơn nợ hàng tách từ đơn " + saved.getCode() + " do kho xuất thiếu";
+                saveHistory(backorder, ACTION_BACKORDER_CREATED, null, SalesOrder.STATUS_APPROVED, boComment, actor);
+                audit(backorder, "CREATE_BACKORDER", null, quantitySummary(backorder), boComment, actor);
+            }
+        }
 
         log.info("S4-06: Đơn hàng {} chuyển trạng thái từ {} sang {}, thực hiện bởi {}",
                 saved.getCode(), currentStatus, cleanTarget, actor != null ? actor.getUsername() : "anonymous");
 
-        return orderDraftService.toResponse(saved);
+        return new Transition(saved, backorder);
+    }
+
+    // ======================= S6-05: XUẤT KHO / XUẤT THIẾU =======================
+
+    static final String ACTION_BACKORDER_CREATED = "BACKORDER_CREATED";
+    static final int MAX_BACKORDER_SUFFIX = 99;
+
+    /** Kết quả xuất kho: số dòng xuất thiếu, đơn nợ hàng (chưa lưu), tóm tắt số lượng trước khi tách. */
+    record DispatchResult(int shortLineCount, SalesOrder backorder, String before) {
+    }
+
+    private record ShortLine(SalesOrderLine line, BigDecimal dispatched, BigDecimal dispatchedBase, String reason) {
+    }
+
+    /**
+     * Kiểm số thực xuất từng dòng, trừ tồn (InventoryService.dispatchStock), rồi tách phần thiếu.
+     * Tiền dòng chia theo tỉ lệ số thực xuất / số đặt; phần còn lại = tổng cũ - phần giữ lại nên tổng 2 đơn đúng bằng đơn cũ.
+     */
+    private DispatchResult applyDispatch(SalesOrder order, OrderDispatchRequest req, String cleanNote, UserDetailsImpl actor) {
+        List<OrderLineDispatchRequest> reqLines = req != null && req.getLines() != null ? req.getLines() : List.of();
+        boolean createBackorder = req == null || req.getCreateBackorder() == null || req.getCreateBackorder();
+
+        Map<Long, OrderLineDispatchRequest> byLine = new HashMap<>();
+        for (OrderLineDispatchRequest r : reqLines) {
+            if (r == null || r.getLineId() == null) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST, "ORDER_LINE_REQUIRED",
+                        "Thiếu mã dòng hàng trong danh sách xuất kho", "lines");
+            }
+            if (byLine.put(r.getLineId(), r) != null) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST, "DUPLICATE_DISPATCH_LINE",
+                        "Dòng hàng " + r.getLineId() + " bị gửi 2 lần", "lines");
+            }
+            boolean exists = order.getLines().stream().anyMatch(l -> java.util.Objects.equals(l.getId(), r.getLineId()));
+            if (!exists) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST, "ORDER_LINE_NOT_FOUND",
+                        "Không tìm thấy dòng hàng với ID " + r.getLineId(), "lines");
+            }
+        }
+
+        String before = quantitySummary(order);
+        List<InventoryService.DispatchLine> dispatchLines = new ArrayList<>();
+        List<ShortLine> shorts = new ArrayList<>();
+        boolean anyDispatched = false;
+        for (SalesOrderLine line : order.getLines()) {
+            OrderLineDispatchRequest r = line.getId() != null ? byLine.get(line.getId()) : null;
+            BigDecimal ordered = line.getQuantity();
+            BigDecimal dispatched = r != null ? r.getDispatchedQuantity() : ordered;
+            if (dispatched == null || dispatched.signum() < 0) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_DISPATCH_QUANTITY",
+                        "Dòng " + line.getProductSku() + ": số lượng thực xuất không được để trống hoặc âm", "lines");
+            }
+            if (dispatched.compareTo(ordered) > 0) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST, "DISPATCH_EXCEEDS_ORDERED",
+                        "Dòng " + line.getProductSku() + ": số thực xuất (" + plain(dispatched) + ") vượt số lượng đặt ("
+                                + plain(ordered) + " " + line.getUnitName() + ")", "lines");
+            }
+            BigDecimal lineBase = InventoryService.lineBaseQuantity(line);
+            BigDecimal dispatchedBase = dispatched.compareTo(ordered) == 0
+                    ? lineBase
+                    : dispatched.multiply(factorOf(line)).setScale(4, RoundingMode.HALF_UP).min(lineBase);
+            dispatchLines.add(new InventoryService.DispatchLine(line, dispatchedBase));
+            if (dispatched.signum() > 0) {
+                anyDispatched = true;
+            }
+            if (dispatched.compareTo(ordered) < 0) {
+                String reason = r != null && StringUtils.hasText(r.getShortageReason()) ? r.getShortageReason().trim() : cleanNote;
+                if (!StringUtils.hasText(reason)) {
+                    throw new BusinessException(HttpStatus.BAD_REQUEST, "DISPATCH_SHORTAGE_REASON_REQUIRED",
+                            "Dòng " + line.getProductSku() + " xuất thiếu: bắt buộc nhập lý do", "shortageReason");
+                }
+                shorts.add(new ShortLine(line, dispatched, dispatchedBase, cut(reason, 255)));
+            }
+        }
+        if (!anyDispatched && !order.getLines().isEmpty()) {
+            throw BusinessException.conflict("DISPATCH_NOTHING",
+                    "Không có dòng hàng nào được xuất. Nếu không giao được đơn này, hãy huỷ đơn.", "lines");
+        }
+
+        // Trừ tồn + giải phóng giữ chỗ khi dòng còn số lượng gốc (phải gọi trước khi tách dòng)
+        inventoryService.dispatchStock(order, dispatchLines, actor);
+        if (shorts.isEmpty()) {
+            return new DispatchResult(0, null, before);
+        }
+
+        SalesOrder backorder = createBackorder ? newBackorder(order, actor) : null;
+        int lineNo = 1;
+        for (ShortLine sl : shorts) {
+            SalesOrderLine line = sl.line();
+            BigDecimal ordered = line.getQuantity();
+            BigDecimal remaining = ordered.subtract(sl.dispatched());
+            BigDecimal origBase = InventoryService.lineBaseQuantity(line);
+            BigDecimal gross = nz(line.getGrossAmount());
+            BigDecimal discount = nz(line.getDiscountAmount());
+            BigDecimal keepGross = prorate(gross, sl.dispatched(), ordered);
+            BigDecimal keepDiscount = prorate(discount, sl.dispatched(), ordered);
+            BigDecimal restGross = gross.subtract(keepGross);
+            BigDecimal restDiscount = discount.subtract(keepDiscount);
+
+            if (line.getOrderedQuantity() == null) {
+                line.setOrderedQuantity(ordered);
+            }
+            line.setQuantity(sl.dispatched());
+            line.setBaseQuantity(sl.dispatchedBase());
+            line.setGrossAmount(keepGross);
+            line.setDiscountAmount(keepDiscount);
+            line.setNetAmount(net(keepGross, keepDiscount));
+            line.setDispatchShortageReason(sl.reason());
+            line.setBackorderQuantity(backorder != null ? remaining : null);
+
+            if (backorder != null) {
+                backorder.addLine(SalesOrderLine.builder()
+                        .lineNo(lineNo++)
+                        .product(line.getProduct())
+                        .productSku(line.getProductSku())
+                        .productName(line.getProductName())
+                        .unitName(line.getUnitName())
+                        .conversionFactor(line.getConversionFactor())
+                        .quantity(remaining)
+                        .baseUnit(line.getBaseUnit())
+                        .baseQuantity(origBase.subtract(sl.dispatchedBase()))
+                        .priceList(line.getPriceList())
+                        .unitPrice(line.getUnitPrice())
+                        .pricePerUnit(line.getPricePerUnit())
+                        .isCustomPrice(line.getIsCustomPrice())
+                        .floorPrice(line.getFloorPrice())
+                        .grossAmount(restGross)
+                        .discountPolicyCode(line.getDiscountPolicyCode())
+                        .discountAmount(restDiscount)
+                        .netAmount(net(restGross, restDiscount))
+                        .build());
+            }
+        }
+        recalcTotals(order);
+        if (backorder != null) {
+            recalcTotals(backorder);
+        }
+        return new DispatchResult(shorts.size(), backorder, before);
+    }
+
+    /** Đơn nợ hàng: đã duyệt sẵn (tiền đã tính công nợ từ đơn gốc), không giữ chỗ tồn, cùng kho với đơn gốc. */
+    private SalesOrder newBackorder(SalesOrder parent, UserDetailsImpl actor) {
+        String parentNote = "Đơn nợ hàng của đơn " + parent.getCode();
+        return SalesOrder.builder()
+                .code(backorderCode(parent))
+                .customer(parent.getCustomer())
+                .deliveryAddress(parent.getDeliveryAddress())
+                .status(SalesOrder.STATUS_APPROVED)
+                .note(parentNote)
+                .source(parent.getSource() != null ? parent.getSource() : SalesOrder.SOURCE_STAFF)
+                // Giữ mốc duyệt của đơn gốc: hạn nợ và doanh số tính như đơn gốc
+                .approvedAt(parent.getApprovedAt())
+                .approvedById(parent.getApprovedById())
+                .approvedByUsername(parent.getApprovedByUsername())
+                .submittedAt(parent.getSubmittedAt())
+                .submittedByUsername(parent.getSubmittedByUsername())
+                .lastApprovalComment("Tách từ đơn " + parent.getCode() + " do kho xuất thiếu")
+                .reservedWarehouse(parent.getReservedWarehouse())
+                .reservationStatus(SalesOrder.RESERVATION_RELEASED)
+                .backorder(Boolean.TRUE)
+                .parentOrder(parent)
+                .parentOrderCode(parent.getCode())
+                .createdById(actor != null ? actor.getId() : null)
+                .createdByUsername(actor != null ? actor.getUsername() : null)
+                .build();
+    }
+
+    /** Mã đơn nợ hàng: mã đơn gốc + "-N1", "-N2"... (đơn nợ của đơn nợ vẫn đánh tiếp theo mã gốc). */
+    String backorderCode(SalesOrder parent) {
+        String base = parent.getCode() != null ? parent.getCode().replaceFirst("-N\\d+$", "") : "DH";
+        if (base.length() > 26) {
+            base = base.substring(0, 26);
+        }
+        for (int k = 1; k <= MAX_BACKORDER_SUFFIX; k++) {
+            String code = base + "-N" + k;
+            if (!orderRepository.existsByCode(code)) {
+                return code;
+            }
+        }
+        throw BusinessException.conflict("BACKORDER_CODE_EXHAUSTED",
+                "Đơn " + parent.getCode() + " đã tách quá nhiều đơn nợ hàng", "code");
+    }
+
+    private static void recalcTotals(SalesOrder order) {
+        BigDecimal subtotal = BigDecimal.ZERO;
+        BigDecimal discountTotal = BigDecimal.ZERO;
+        for (SalesOrderLine l : order.getLines()) {
+            subtotal = subtotal.add(nz(l.getGrossAmount()));
+            discountTotal = discountTotal.add(nz(l.getDiscountAmount()));
+        }
+        order.setSubtotal(subtotal.setScale(2, RoundingMode.HALF_UP));
+        order.setDiscountTotal(discountTotal.setScale(2, RoundingMode.HALF_UP));
+        order.setTotalAmount(subtotal.subtract(discountTotal).setScale(2, RoundingMode.HALF_UP));
+    }
+
+    /** amount * part / whole, làm tròn 2 số lẻ. */
+    static BigDecimal prorate(BigDecimal amount, BigDecimal part, BigDecimal whole) {
+        if (whole == null || whole.signum() == 0) {
+            return BigDecimal.ZERO.setScale(2);
+        }
+        return amount.multiply(part).divide(whole, 2, RoundingMode.HALF_UP);
+    }
+
+    private static BigDecimal net(BigDecimal gross, BigDecimal discount) {
+        return gross.subtract(discount).max(BigDecimal.ZERO).setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private static BigDecimal factorOf(SalesOrderLine line) {
+        return line.getConversionFactor() != null && line.getConversionFactor().signum() > 0
+                ? line.getConversionFactor() : BigDecimal.ONE;
+    }
+
+    private static BigDecimal nz(BigDecimal v) {
+        return v == null ? BigDecimal.ZERO : v;
+    }
+
+    private static String plain(BigDecimal v) {
+        return v == null ? "" : v.stripTrailingZeros().toPlainString();
+    }
+
+    private static String cut(String s, int max) {
+        return s == null || s.length() <= max ? s : s.substring(0, max);
+    }
+
+    /** "SKU=SL ĐVT; ...; Tổng=..." để ghi nhật ký trước / sau. */
+    static String quantitySummary(SalesOrder order) {
+        StringBuilder sb = new StringBuilder();
+        for (SalesOrderLine l : order.getLines()) {
+            if (sb.length() > 0) {
+                sb.append("; ");
+            }
+            sb.append(l.getProductSku()).append('=').append(plain(l.getQuantity())).append(' ').append(l.getUnitName());
+        }
+        sb.append("; Tổng=").append(plain(order.getTotalAmount()));
+        return sb.toString();
     }
 
     /**
@@ -387,8 +679,9 @@ public class OrderStatusService {
 
     private void audit(SalesOrder order, String action, String fromStatus, String toStatus, String comment,
                        UserDetailsImpl actor) {
+        // Cột lý do của nhật ký tối đa 500 ký tự (ghi ở transaction riêng, quá dài sẽ lỗi cả thao tác)
         auditLogService.record(AuditModule.ORDER, action, "SALES_ORDER", order.getId(), order.getCode(),
-                fromStatus, toStatus, comment, actor);
+                fromStatus, toStatus, cut(comment, MAX_COMMENT), actor);
         markAuditLogged();
     }
 

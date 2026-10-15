@@ -75,6 +75,20 @@ public class OrderController {
                 keyword), actor);
     }
 
+    /**
+     * S6-05: Đơn nợ hàng (phần còn thiếu của lần xuất trước) để xếp giao lần sau, cũ nhất lên trước.
+     * Mặc định status=APPROVED,PICKING. Vd: ?customerId=6&keyword=DH261015&page=0&size=20
+     */
+    @GetMapping("/backorders")
+    public PageResponse<OrderSummaryResponse> backorders(@RequestParam(required = false) List<String> status,
+                                                         @RequestParam(required = false) Long customerId,
+                                                         @RequestParam(required = false) String keyword,
+                                                         @RequestParam(defaultValue = "0") int page,
+                                                         @RequestParam(defaultValue = "20") int size,
+                                                         @AuthenticationPrincipal UserDetailsImpl actor) {
+        return orderQueryService.backorders(status, customerId, keyword, page, size, actor);
+    }
+
     /** S4-05: Đơn chờ duyệt kèm lý do và mức vi phạm, đơn chờ lâu nhất lên đầu. Vd: ?keyword=DL001&page=0&size=20 */
     @GetMapping("/pending-approval")
     @PreAuthorize("hasAnyRole('SALES_MANAGER', 'SALES_REP')")
@@ -245,6 +259,19 @@ public class OrderController {
                                       @AuthenticationPrincipal UserDetailsImpl actor) {
         return orderStatusService.transitionStatus(id, request.getStatus(), request.getNote(),
                 request.getLineDeliveries(), actor);
+    }
+
+    /**
+     * S6-05: Xác nhận xuất kho đơn đang soạn hàng (PICKING -> DISPATCHED), cho phép xuất thiếu.
+     * Body (tuỳ chọn): {"lines":[{"lineId":12,"dispatchedQuantity":3,"shortageReason":"Kho hết hàng"}],
+     * "note":"...", "createBackorder":true}. Dòng không gửi = xuất đủ. Phần thiếu tách thành đơn nợ hàng.
+     */
+    @PostMapping("/{id}/dispatch")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'WAREHOUSE', 'WH_MANAGER')")
+    public OrderDispatchResponse dispatch(@PathVariable Long id,
+                                          @Valid @RequestBody(required = false) OrderDispatchRequest request,
+                                          @AuthenticationPrincipal UserDetailsImpl actor) {
+        return orderStatusService.dispatch(id, request, actor);
     }
 
     /**

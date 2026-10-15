@@ -46,7 +46,47 @@ public record OrderResponse(
         String cancelledByUsername,
         // S5-01: Tình trạng giao thiếu hàng
         Boolean hasShortage,
-        Integer shortageLineCount) {
+        Integer shortageLineCount,
+        // S6-05 / S6-08: xuất kho, đơn nợ hàng, giao hàng
+        OrderFulfillmentInfo fulfillment) {
+
+    public OrderResponse(
+            Long id,
+            String code,
+            String status,
+            Long customerId,
+            String customerCode,
+            String customerName,
+            String customerGroup,
+            String customerGroupLabel,
+            DeliveryAddressInfo deliveryAddress,
+            LocalDate desiredDeliveryDate,
+            String note,
+            List<OrderLineResponse> lines,
+            BigDecimal subtotal,
+            BigDecimal discountTotal,
+            BigDecimal totalAmount,
+            String createdByUsername,
+            LocalDateTime createdAt,
+            LocalDateTime updatedAt,
+            List<String> warnings,
+            CreditStatusResponse credit,
+            List<ApprovalReason> approvalReasons,
+            String lastApprovalComment,
+            LocalDateTime submittedAt,
+            LocalDateTime approvedAt,
+            String approvedByUsername,
+            String cancelReason,
+            LocalDateTime cancelledAt,
+            String cancelledByUsername,
+            Boolean hasShortage,
+            Integer shortageLineCount) {
+        this(id, code, status, customerId, customerCode, customerName, customerGroup, customerGroupLabel,
+                deliveryAddress, desiredDeliveryDate, note, lines, subtotal, discountTotal, totalAmount,
+                createdByUsername, createdAt, updatedAt, warnings, credit, approvalReasons, lastApprovalComment,
+                submittedAt, approvedAt, approvedByUsername, cancelReason, cancelledAt, cancelledByUsername,
+                hasShortage, shortageLineCount, null);
+    }
 
     public OrderResponse(
             Long id,
@@ -124,7 +164,7 @@ public record OrderResponse(
                 deliveryAddress, desiredDeliveryDate, note, safeLines, subtotal, discountTotal, totalAmount,
                 createdByUsername, createdAt, updatedAt, warnings, credit, approvalReasons, lastApprovalComment,
                 submittedAt, approvedAt, approvedByUsername, cancelReason, cancelledAt, cancelledByUsername,
-                hasShortage, shortageLineCount);
+                hasShortage, shortageLineCount, fulfillment);
     }
 
     public record DeliveryAddressInfo(Long id, String label, String address, String receiverName, String receiverPhone) {

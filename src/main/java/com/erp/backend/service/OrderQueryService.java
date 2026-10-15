@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -72,6 +73,39 @@ public class OrderQueryService {
                                 Sort.by(Sort.Direction.DESC, "updatedAt").and(Sort.by("id").descending())))
                 .map(OrderQueryService::toSummary));
     }
+
+    /**
+     * S6-05: Danh sách đơn nợ hàng (phần còn thiếu của lần xuất trước) để kho xếp giao lần sau.
+     * Mặc định chỉ lấy đơn chưa xuất (Đã duyệt, Đang soạn hàng); cũ nhất lên trước. Cùng phạm vi xem như danh sách đơn.
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<OrderSummaryResponse> backorders(List<String> statuses, Long customerId, String keyword,
+                                                         int page, int size, UserDetailsImpl actor) {
+        List<String> st = statuses == null || statuses.stream().noneMatch(StringUtils::hasText)
+                ? BACKORDER_OPEN_STATUSES : statuses;
+        OrderSearchCriteria c = normalize(new OrderSearchCriteria(st, customerId, null, null, null, null, keyword));
+        int safePage = Math.max(page, 0);
+        int safeSize = size <= 0 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
+
+        Long restrictedRepId = null;
+        Long restrictedCustId = null;
+        if (CustomerAccess.isCustomer(actor)) {
+            Customer cust = CustomerAccess.resolveCustomerForActor(actor, customerRepository);
+            if (cust == null) {
+                return PageResponse.of(Page.empty());
+            }
+            restrictedCustId = cust.getId();
+        } else {
+            restrictedRepId = CustomerAccess.restrictedSalesRepIdForOrders(actor);
+        }
+        Specification<SalesOrder> spec = OrderSpecifications.search(c, restrictedRepId, restrictedCustId, true)
+                .and(OrderSpecifications.backorderOnly());
+        return PageResponse.of(orderRepository.findAll(spec,
+                        PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.ASC, "createdAt").and(Sort.by("id").ascending())))
+                .map(OrderQueryService::toSummary));
+    }
+
+    static final List<String> BACKORDER_OPEN_STATUSES = List.of(SalesOrder.STATUS_APPROVED, SalesOrder.STATUS_PICKING);
 
     @Transactional(readOnly = true)
     public OrderTotalsResponse totals(OrderSearchCriteria criteria, UserDetailsImpl actor) {
@@ -143,6 +177,8 @@ public class OrderQueryService {
                 c.getRegion() != null ? c.getRegion().getId() : null,
                 c.getRegion() != null ? c.getRegion().getName() : null,
                 o.getCreatedAt(),
-                hasShortage);
+                hasShortage,
+                o.isBackorderOrder(),
+                o.getParentOrderCode());
     }
 }
