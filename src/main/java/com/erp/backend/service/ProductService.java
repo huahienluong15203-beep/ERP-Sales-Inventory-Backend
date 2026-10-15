@@ -387,6 +387,7 @@ public class ProductService {
                 .barcode(p.getBarcode())
                 .imageUrl(p.getImageUrl())
                 .description(p.getDescription())
+                .hasBatchManagement(Boolean.TRUE.equals(p.getHasBatchManagement()))
                 .createdAt(p.getCreatedAt())
                 .updatedAt(p.getUpdatedAt())
                 .build();
@@ -415,6 +416,7 @@ public class ProductService {
                 .barcode(p.getBarcode())
                 .imageUrl(p.getImageUrl())
                 .description(p.getDescription())
+                .hasBatchManagement(Boolean.TRUE.equals(p.getHasBatchManagement()))
                 .createdAt(p.getCreatedAt())
                 .updatedAt(p.getUpdatedAt())
                 .unitConversions(conversionsOnly)
