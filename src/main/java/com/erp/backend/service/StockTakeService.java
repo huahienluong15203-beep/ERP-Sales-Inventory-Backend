@@ -64,6 +64,7 @@ public class StockTakeService {
     private final ProductCategoryRepository categoryRepository;
     private final StockLedgerService stockLedgerService;
     private final AuditLogService auditLogService;
+    private final StockMovementService stockMovementService;
 
     Clock clock = Clock.system(VN_ZONE);
 
@@ -209,6 +210,9 @@ public class StockTakeService {
             auditLogService.record(AuditModule.INVENTORY, "STOCKTAKE_ADJUST", "INVENTORY", inv.getId(),
                     st.getWarehouse().getCode() + ":" + l.getSku(), plain(before), plain(afters.get(i)),
                     "Kiểm kê " + st.getCode() + " (chênh lệch " + plain(l.getDifference()) + "): " + why, actor);
+            // S6-02: thẻ kho ghi cùng transaction với điều chỉnh tồn
+            stockMovementService.record(inv, StockMovement.TYPE_STOCKTAKE_ADJUST, afters.get(i).subtract(before),
+                    StockMovement.DOC_STOCK_TAKE, st.getId(), st.getCode(), "Điều chỉnh kiểm kê: " + why, actor);
         }
 
         st.setStatus(StockTake.STATUS_CLOSED);

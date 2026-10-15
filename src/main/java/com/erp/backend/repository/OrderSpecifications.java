@@ -70,4 +70,9 @@ public final class OrderSpecifications {
             return cb.and(ps.toArray(new Predicate[0]));
         };
     }
+
+    /** S6-05: chỉ đơn nợ hàng. */
+    public static Specification<SalesOrder> backorderOnly() {
+        return (root, query, cb) -> cb.isTrue(root.get("backorder"));
+    }
 }

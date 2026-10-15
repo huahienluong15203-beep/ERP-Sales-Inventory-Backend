@@ -30,7 +30,7 @@ import static com.erp.backend.service.CustomerTestData.customer;
 import static com.erp.backend.service.CustomerTestData.salesRep;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -253,7 +253,7 @@ class OrderStatusServiceTest {
         service.transitionStatus(100L, "DISPATCHED", "Xe tải 29H-12345 rời kho", manager);
 
         assertThat(order.getStatus()).isEqualTo(SalesOrder.STATUS_DISPATCHED);
-        verify(inventoryService).dispatchReservedStock(order);
+        verify(inventoryService).dispatchStock(eq(order), anyList(), eq(manager));
 
         ArgumentCaptor<SalesOrderApproval> captor = ArgumentCaptor.forClass(SalesOrderApproval.class);
         verify(approvalRepository).save(captor.capture());
@@ -417,5 +417,33 @@ class OrderStatusServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .hasFieldOrPropertyWithValue("code", "CUSTOMER_CANCEL_NOT_ALLOWED");
         verify(inventoryService, never()).releaseReservedStock(any());
+    }
+
+    @Test
+    @DisplayName("S6-08: Đơn đã xác nhận giao theo biên bản -> khoá sửa số thực giao (409)")
+    void updateDelivered_afterDeliveryConfirmed_locked() {
+        order.setStatus(SalesOrder.STATUS_DELIVERED);
+        order.setDeliveryConfirmedAt(java.time.LocalDateTime.of(2026, 10, 10, 9, 0));
+        when(orderRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(order));
+        OrderLineDeliveryRequest d = new OrderLineDeliveryRequest();
+        d.setLineId(1L);
+        d.setDeliveredQuantity(BigDecimal.ZERO);
+
+        assertThatThrownBy(() -> service.updateDeliveredQuantities(100L, List.of(d), manager))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "DELIVERY_CONFIRMED_LOCKED");
+        verify(orderRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("S6-08: Đơn giao không thành công (hàng đã nhập lại kho) -> không huỷ được nữa")
+    void cancel_deliveryFailed_conflict() {
+        order.setStatus(SalesOrder.STATUS_DELIVERY_FAILED);
+        when(orderRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(order));
+
+        assertThatThrownBy(() -> service.cancel(100L, "Huỷ", manager))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "ORDER_DELIVERY_FAILED");
+        verifyNoInteractions(inventoryService);
     }
 }

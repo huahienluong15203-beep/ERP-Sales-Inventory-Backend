@@ -26,7 +26,10 @@ public record OrderSummaryResponse(
         Long regionId,
         String regionName,
         LocalDateTime createdAt,
-        Boolean hasShortage) {
+        Boolean hasShortage,
+        // S6-05: đơn nợ hàng và đơn gốc của nó
+        Boolean backorder,
+        String parentOrderCode) {
 
     public OrderSummaryResponse(
             Long id,
@@ -47,6 +50,6 @@ public record OrderSummaryResponse(
             LocalDateTime createdAt) {
         this(id, code, status, customerId, customerCode, customerName, desiredDeliveryDate,
                 lineCount, totalAmount, createdByUsername, updatedAt, salesRepId, salesRepName,
-                regionId, regionName, createdAt, false);
+                regionId, regionName, createdAt, false, false, null);
     }
 }

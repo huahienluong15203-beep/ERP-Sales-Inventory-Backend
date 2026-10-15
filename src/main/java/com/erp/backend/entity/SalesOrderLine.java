@@ -94,4 +94,17 @@ public class SalesOrderLine {
     // S5-01: Lý do giao thiếu nếu phát sinh giao thiếu so với số lượng đặt
     @Column(name = "shortage_reason", length = 255)
     private String shortageReason;
+
+    // S6-05: số lượng đặt ban đầu (theo unitName) khi kho xuất thiếu; quantity lúc đó = số thực xuất.
+    // null = dòng chưa từng bị xuất thiếu (quantity chính là số đặt)
+    @Column(name = "ordered_quantity", precision = 15, scale = 4)
+    private BigDecimal orderedQuantity;
+
+    // S6-05: số lượng còn nợ (theo unitName) đã chuyển sang đơn nợ hàng
+    @Column(name = "backorder_quantity", precision = 15, scale = 4)
+    private BigDecimal backorderQuantity;
+
+    // S6-05: lý do kho xuất thiếu dòng này
+    @Column(name = "dispatch_shortage_reason", length = 255)
+    private String dispatchShortageReason;
 }

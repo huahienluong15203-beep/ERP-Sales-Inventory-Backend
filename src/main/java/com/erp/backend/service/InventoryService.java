@@ -5,6 +5,7 @@ import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.InventoryRepository;
 import com.erp.backend.repository.WarehouseRepository;
+import com.erp.backend.security.UserDetailsImpl;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import lombok.extern.slf4j.Slf4j;
@@ -27,6 +28,7 @@ public class InventoryService {
 
     private final InventoryRepository inventoryRepository;
     private final WarehouseRepository warehouseRepository;
+    private final StockMovementService stockMovementService;
 
     // S5-06: số ngày giữ chỗ tối đa trước khi tự nhả (application.properties: erp.order.reservation-days)
     @Value("${erp.order.reservation-days:7}")
@@ -278,6 +280,12 @@ public class InventoryService {
                 : resolveWarehouseForCustomer(order.getCustomer());
     }
 
+    /** S6-02: diễn giải dòng thẻ kho khi xuất bán. */
+    private static String dispatchNote(SalesOrder order) {
+        Customer c = order.getCustomer();
+        return c != null && StringUtils.hasText(c.getName()) ? "Xuất bán cho đại lý " + c.getName() : "Xuất bán";
+    }
+
     /** S5-06: đơn đã nhả hoặc đã xuất kho thì không trừ giữ chỗ lần nữa. */
     private static boolean reservationClosed(SalesOrder order) {
         return SalesOrder.RESERVATION_RELEASED.equals(order.getReservationStatus())
@@ -333,6 +341,30 @@ public class InventoryService {
      */
     @Transactional
     public void dispatchReservedStock(SalesOrder order) {
+        dispatchReservedStock(order, null);
+    }
+
+    /** S6-02: như trên, ghi thẻ kho (Xuất bán) kèm người thực hiện. Xuất đủ mọi dòng. */
+    @Transactional
+    public void dispatchReservedStock(SalesOrder order, UserDetailsImpl actor) {
+        dispatchStock(order, null, actor);
+    }
+
+    /** S6-05: số lượng thực xuất (ĐVT cơ sở) của 1 dòng đơn. */
+    public record DispatchLine(SalesOrderLine line, BigDecimal baseQuantity) {
+    }
+
+    /**
+     * S6-05: Xuất kho đơn hàng, cho phép xuất thiếu.
+     * - dispatchLines: số thực xuất từng dòng (ĐVT cơ sở); null = xuất đủ mọi dòng. Dòng không có trong danh sách = xuất đủ.
+     * - Trừ tồn thực tế đúng số thực xuất; giải phóng TOÀN BỘ phần giữ chỗ của đơn (phần còn nợ không giữ chỗ nữa,
+     *   đơn nợ hàng sẽ kiểm tồn khả dụng lúc xuất).
+     * - Đơn không còn giữ chỗ (đã nhả / đơn nợ hàng) thì phải đủ tồn KHẢ DỤNG, không lấy phần đang giữ cho đơn khác.
+     * - Gọi TRƯỚC khi tách dòng (cần baseQuantity gốc của dòng = phần đang giữ chỗ).
+     * Khoá dòng tồn theo thứ tự productId (tránh deadlock), kiểm tra hết rồi mới trừ.
+     */
+    @Transactional
+    public void dispatchStock(SalesOrder order, List<DispatchLine> dispatchLines, UserDetailsImpl actor) {
         if (order == null || order.getLines() == null || order.getLines().isEmpty()) {
             return;
         }
@@ -343,56 +375,139 @@ public class InventoryService {
 
         Warehouse warehouse = reservationWarehouse(order);
 
-        List<SalesOrderLine> sortedLines = new ArrayList<>(order.getLines());
-        sortedLines.sort(Comparator.comparing(l -> l.getProduct().getId()));
+        // Gộp theo sản phẩm (một sản phẩm có thể nằm ở nhiều dòng): số xuất và số đang giữ chỗ
+        Map<Long, BigDecimal> dispatchByProduct = new TreeMap<>();
+        Map<Long, BigDecimal> reservedByProduct = new TreeMap<>();
+        Map<Long, SalesOrderLine> sampleLine = new HashMap<>();
+        for (SalesOrderLine line : order.getLines()) {
+            Long productId = line.getProduct().getId();
+            BigDecimal lineBase = lineBaseQuantity(line);
+            BigDecimal dispatchBase = lineBase;
+            if (dispatchLines != null) {
+                for (DispatchLine d : dispatchLines) {
+                    if (d.line() == line) {
+                        dispatchBase = d.baseQuantity();
+                    }
+                }
+            }
+            if (dispatchBase.signum() < 0 || dispatchBase.compareTo(lineBase) > 0) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_DISPATCH_QUANTITY",
+                        "Dòng " + line.getProductSku() + ": số thực xuất phải từ 0 đến số lượng đặt", "lines");
+            }
+            dispatchByProduct.merge(productId, dispatchBase, BigDecimal::add);
+            reservedByProduct.merge(productId, lineBase, BigDecimal::add);
+            sampleLine.putIfAbsent(productId, line);
+        }
 
-        // Bước 1: khoá mọi dòng tồn và kiểm tra đủ tồn thực tế trước khi trừ (thiếu -> báo lỗi, không trừ âm rồi ép về 0)
+        // Bước 1: khoá mọi dòng tồn và kiểm tra đủ tồn trước khi trừ (thiếu -> báo lỗi, không trừ âm rồi ép về 0)
         List<Inventory> inventories = new ArrayList<>();
-        List<BigDecimal> baseQuantities = new ArrayList<>();
-        for (SalesOrderLine line : sortedLines) {
+        List<Long> productIds = new ArrayList<>(dispatchByProduct.keySet());
+        for (Long productId : productIds) {
+            SalesOrderLine line = sampleLine.get(productId);
             Product product = line.getProduct();
-            BigDecimal baseQty = line.getBaseQuantity() != null
-                    ? line.getBaseQuantity()
-                    : line.getQuantity().multiply(line.getConversionFactor()).setScale(4, RoundingMode.HALF_UP);
+            BigDecimal qty = dispatchByProduct.get(productId);
 
-            Inventory inventory = inventoryRepository.findByWarehouseIdAndProductIdForUpdate(warehouse.getId(), product.getId())
+            Inventory inventory = inventoryRepository.findByWarehouseIdAndProductIdForUpdate(warehouse.getId(), productId)
                     .orElseThrow(() -> BusinessException.conflict("INVENTORY_NOT_FOUND",
                             "Mặt hàng '" + line.getProductName() + "' (" + line.getProductSku() + ") chưa có dòng tồn tại "
                                     + warehouse.getName() + ", không xuất kho được", "lines"));
             BigDecimal currentPhysical = inventory.getPhysicalStock() != null ? inventory.getPhysicalStock() : BigDecimal.ZERO;
-            if (currentPhysical.compareTo(baseQty) < 0) {
+            if (currentPhysical.compareTo(qty) < 0) {
                 throw BusinessException.conflict("INSUFFICIENT_PHYSICAL_STOCK",
                         "Mặt hàng '" + line.getProductName() + "' (" + line.getProductSku() + ") tại " + warehouse.getName()
-                                + " chỉ còn " + currentPhysical.stripTrailingZeros().toPlainString() + " " + product.getBaseUnit()
-                                + " thực tế, cần xuất " + baseQty.stripTrailingZeros().toPlainString() + " " + product.getBaseUnit()
-                                + ". Kiểm tra lại kiểm kê / nhập kho trước khi xuất.", "lines");
+                                + " chỉ còn " + plain(currentPhysical) + " " + product.getBaseUnit()
+                                + " thực tế, cần xuất " + plain(qty) + " " + product.getBaseUnit()
+                                + ". Kiểm tra lại kiểm kê / nhập kho, hoặc xác nhận xuất thiếu.", "lines");
+            }
+            if (wasReleased) {
+                BigDecimal available = inventory.getAvailableStock();
+                if (available.compareTo(qty) < 0) {
+                    throw BusinessException.conflict("INSUFFICIENT_AVAILABLE_STOCK",
+                            "Mặt hàng '" + line.getProductName() + "' (" + line.getProductSku() + ") tại " + warehouse.getName()
+                                    + " chỉ còn " + plain(available.max(BigDecimal.ZERO)) + " " + product.getBaseUnit()
+                                    + " khả dụng (phần còn lại đang giữ cho đơn khác), cần xuất " + plain(qty) + " "
+                                    + product.getBaseUnit() + ". Hãy xuất thiếu hoặc chờ nhập thêm hàng.", "lines");
+                }
             }
             inventories.add(inventory);
-            baseQuantities.add(baseQty);
         }
 
         // Bước 2: trừ tồn thực tế và giải phóng giữ chỗ
-        for (int i = 0; i < sortedLines.size(); i++) {
-            Product product = sortedLines.get(i).getProduct();
+        for (int i = 0; i < productIds.size(); i++) {
+            Long productId = productIds.get(i);
+            Product product = sampleLine.get(productId).getProduct();
             Inventory inventory = inventories.get(i);
-            BigDecimal baseQty = baseQuantities.get(i);
+            BigDecimal qty = dispatchByProduct.get(productId);
 
-            BigDecimal updatedPhysical = inventory.getPhysicalStock().subtract(baseQty);
+            BigDecimal updatedPhysical = inventory.getPhysicalStock().subtract(qty);
             inventory.setPhysicalStock(updatedPhysical);
 
             // Giải phóng giữ chỗ (đơn đã nhả trước đó thì không trừ lần nữa)
             BigDecimal currentReserved = inventory.getReservedStock() != null ? inventory.getReservedStock() : BigDecimal.ZERO;
-            BigDecimal updatedReserved = wasReleased ? currentReserved : currentReserved.subtract(baseQty);
+            BigDecimal updatedReserved = wasReleased ? currentReserved : currentReserved.subtract(reservedByProduct.get(productId));
             if (updatedReserved.compareTo(BigDecimal.ZERO) < 0) {
                 updatedReserved = BigDecimal.ZERO;
             }
             inventory.setReservedStock(updatedReserved);
 
             inventoryRepository.save(inventory);
+            stockMovementService.record(inventory, StockMovement.TYPE_SALES_DISPATCH, qty.negate(),
+                    StockMovement.DOC_SALES_ORDER, order.getId(), order.getCode(),
+                    dispatchNote(order), actor);
             log.info("S4-06: Đã xuất kho đơn hàng {}: trừ tồn thực tế {} {} (còn {}), giải phóng giữ chỗ (còn {}) cho SKU {} tại kho {}",
-                    order.getCode(), baseQty, product.getBaseUnit(), updatedPhysical, updatedReserved, product.getSku(), warehouse.getCode());
+                    order.getCode(), qty, product.getBaseUnit(), updatedPhysical, updatedReserved, product.getSku(), warehouse.getCode());
         }
         order.setReservationStatus(SalesOrder.RESERVATION_DISPATCHED);
         order.setReservationExpiresAt(null);
+    }
+
+    /**
+     * S6-08: Hàng giao không thành công / đại lý không nhận được chở về -> cộng lại tồn thực tế của kho đã xuất.
+     * returnLines: số lượng nhập lại theo ĐVT cơ sở từng dòng (bỏ qua dòng 0). Không đụng giữ chỗ.
+     */
+    @Transactional
+    public void returnDeliveredStock(SalesOrder order, List<DispatchLine> returnLines, String note, UserDetailsImpl actor) {
+        if (order == null || returnLines == null || returnLines.isEmpty()) {
+            return;
+        }
+        Warehouse warehouse = reservationWarehouse(order);
+        Map<Long, BigDecimal> byProduct = new TreeMap<>();
+        Map<Long, Product> products = new HashMap<>();
+        for (DispatchLine d : returnLines) {
+            if (d.baseQuantity() == null || d.baseQuantity().signum() <= 0) {
+                continue;
+            }
+            Product p = d.line().getProduct();
+            byProduct.merge(p.getId(), d.baseQuantity(), BigDecimal::add);
+            products.putIfAbsent(p.getId(), p);
+        }
+        for (Map.Entry<Long, BigDecimal> e : byProduct.entrySet()) {
+            Product product = products.get(e.getKey());
+            Inventory inventory = inventoryRepository.findByWarehouseIdAndProductIdForUpdate(warehouse.getId(), e.getKey())
+                    .orElseGet(() -> inventoryRepository.save(Inventory.builder()
+                            .warehouse(warehouse)
+                            .product(product)
+                            .physicalStock(BigDecimal.ZERO)
+                            .reservedStock(BigDecimal.ZERO)
+                            .build()));
+            BigDecimal current = inventory.getPhysicalStock() != null ? inventory.getPhysicalStock() : BigDecimal.ZERO;
+            inventory.setPhysicalStock(current.add(e.getValue()));
+            inventoryRepository.save(inventory);
+            stockMovementService.record(inventory, StockMovement.TYPE_DELIVERY_RETURN, e.getValue(),
+                    StockMovement.DOC_SALES_ORDER, order.getId(), order.getCode(), note, actor);
+            log.info("S6-08: Nhập lại kho {} {} {} của đơn {} (giao không thành công)", warehouse.getCode(),
+                    e.getValue(), product.getBaseUnit(), order.getCode());
+        }
+    }
+
+    /** Số lượng ĐVT cơ sở của dòng (đơn cũ thiếu baseQuantity thì quy đổi lại). */
+    static BigDecimal lineBaseQuantity(SalesOrderLine line) {
+        return line.getBaseQuantity() != null
+                ? line.getBaseQuantity()
+                : line.getQuantity().multiply(line.getConversionFactor()).setScale(4, RoundingMode.HALF_UP);
+    }
+
+    private static String plain(BigDecimal v) {
+        return v == null ? "0" : v.stripTrailingZeros().toPlainString();
     }
 }

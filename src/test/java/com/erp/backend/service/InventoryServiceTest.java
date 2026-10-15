@@ -28,6 +28,8 @@ class InventoryServiceTest {
     @Mock private InventoryRepository inventoryRepository;
     @Mock private WarehouseRepository warehouseRepository;
 
+    @Mock private StockMovementService stockMovementService;
+
     @InjectMocks private InventoryService service;
 
     private Warehouse whNorth;

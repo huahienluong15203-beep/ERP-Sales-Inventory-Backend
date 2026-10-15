@@ -60,6 +60,24 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(ex.getStatusCode()).body(ApiError.of(code, message, Map.of()));
     }
 
+    /**
+     * Trùng dữ liệu bị ràng buộc DB chặn (vd 2 người cùng lập hoá đơn cho 1 đơn, S7-01) -> 409 thay vì 500.
+     * Không trả chi tiết lỗi SQL ra ngoài.
+     */
+    @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
+    public ResponseEntity<ApiError> handleDataIntegrity(org.springframework.dao.DataIntegrityViolationException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiError.of("DATA_CONFLICT", "Dữ liệu bị trùng hoặc vừa được người khác cập nhật. Vui lòng tải lại và thử lại.", Map.of()));
+    }
+
+    /** 2 người cùng sửa 1 bản ghi (@Version) hoặc chờ khoá dòng quá lâu -> 409, người dùng tải lại rồi làm lại. */
+    @ExceptionHandler({org.springframework.orm.ObjectOptimisticLockingFailureException.class,
+            org.springframework.dao.PessimisticLockingFailureException.class})
+    public ResponseEntity<ApiError> handleConcurrentUpdate(RuntimeException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiError.of("CONCURRENT_UPDATE", "Dữ liệu vừa được người khác cập nhật. Vui lòng tải lại và thử lại.", Map.of()));
+    }
+
     @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
     public ResponseEntity<ApiError> handleNotReadable(org.springframework.http.converter.HttpMessageNotReadableException ex) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)

@@ -35,6 +35,8 @@ class GoodsReceiptServiceTest {
     @Mock private InventoryRepository inventoryRepository;
     @Mock private UserRepository userRepository;
 
+    @Mock private StockMovementService stockMovementService;
+
     @InjectMocks private GoodsReceiptService goodsReceiptService;
 
     private UserDetailsImpl whStaffActor;
@@ -310,6 +312,9 @@ class GoodsReceiptServiceTest {
         assertThat(res.getStatus()).isEqualTo(GoodsReceipt.STATUS_CONFIRMED);
         assertThat(inventory.getPhysicalStock()).isEqualByComparingTo(BigDecimal.valueOf(290)); // 50 + 240
         verify(inventoryRepository).save(inventory);
+        // S6-02: thẻ kho ghi Nhập kho +240 kèm chứng từ gốc
+        verify(stockMovementService).record(eq(inventory), eq(StockMovement.TYPE_RECEIPT), qtyEq("240"),
+                eq(StockMovement.DOC_GOODS_RECEIPT), eq(20L), eq("PNK-202610-010"), anyString(), eq(whStaffActor));
     }
 
     @Test
@@ -372,5 +377,10 @@ class GoodsReceiptServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting("code").isEqualTo("RECEIPT_WAREHOUSE_NOT_ASSIGNED");
         verify(inventoryRepository, never()).save(any());
+    }
+
+    /** S6-02: so khớp số lượng thẻ kho theo giá trị (không phụ thuộc scale). */
+    private static BigDecimal qtyEq(String v) {
+        return argThat(q -> q != null && q.compareTo(new BigDecimal(v)) == 0);
     }
 }

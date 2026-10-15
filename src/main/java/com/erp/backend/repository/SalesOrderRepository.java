@@ -129,4 +129,34 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, Long>, J
                                                Pageable pageable);
 
     boolean existsByReservedWarehouse_Id(Long warehouseId);
+
+    /**
+     * S7-01: Đơn đã giao của đại lý chưa lập hoá đơn, giao trong [from, to).
+     * Mốc giao = deliveredAt (S6-08); đơn giao theo cách cũ chưa có deliveredAt thì dùng updatedAt.
+     */
+    @Query("select o from SalesOrder o where o.customer.id = :customerId and o.status in :statuses "
+            + "and o.invoiceId is null and coalesce(o.deliveredAt, o.updatedAt) >= :from "
+            + "and coalesce(o.deliveredAt, o.updatedAt) < :to order by coalesce(o.deliveredAt, o.updatedAt) asc, o.id asc")
+    List<SalesOrder> findUninvoiced(@Param("customerId") Long customerId,
+                                    @Param("statuses") Collection<String> statuses,
+                                    @Param("from") LocalDateTime from,
+                                    @Param("to") LocalDateTime to);
+
+    /** S7-01: chỉ lấy id (không nạp đơn vào bộ nhớ trước khi khoá, để lúc khoá đọc được dữ liệu mới nhất). */
+    @Query("select o.id from SalesOrder o where o.customer.id = :customerId and o.status in :statuses "
+            + "and o.invoiceId is null and coalesce(o.deliveredAt, o.updatedAt) >= :from "
+            + "and coalesce(o.deliveredAt, o.updatedAt) < :to")
+    List<Long> findUninvoicedIds(@Param("customerId") Long customerId,
+                                 @Param("statuses") Collection<String> statuses,
+                                 @Param("from") LocalDateTime from,
+                                 @Param("to") LocalDateTime to);
+
+    /** S7-01: Khoá các đơn khi lập hoá đơn (theo id tăng dần để tránh deadlock), chống lập hoá đơn 2 lần. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select o from SalesOrder o where o.id in :ids order by o.id asc")
+    List<SalesOrder> findAllByIdForUpdate(@Param("ids") Collection<Long> ids);
+
+    /** S6-05: mã các đơn nợ hàng tách ra từ đơn :parentId (theo thứ tự tạo). */
+    @Query("select o.code from SalesOrder o where o.parentOrder.id = :parentId order by o.id")
+    List<String> findBackorderCodes(@Param("parentId") Long parentId);
 }
