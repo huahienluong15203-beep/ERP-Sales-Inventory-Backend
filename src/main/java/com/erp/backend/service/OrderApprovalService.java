@@ -107,8 +107,18 @@ public class OrderApprovalService {
         return orderDraftService.toResponse(saved);
     }
 
-    /** Ghi mức vi phạm lúc chốt: vượt hạn mức công nợ (S4-02) và bán dưới giá sàn (S4-01). */
+    /** Ghi mức vi phạm lúc chốt: vượt hạn mức công nợ (S4-02), cờ công nợ (S7-04) và bán dưới giá sàn (S4-01). */
     void applyViolations(SalesOrder order, CreditStatusResponse credit) {
+        // S7-04: đại lý đang bị gắn cờ công nợ -> đơn chốt phải được QL kinh doanh duyệt
+        Customer customer = order.getCustomer();
+        if (customer != null && customer.isCreditFlaggedNow()) {
+            order.setCreditFlaggedAtSubmit(Boolean.TRUE);
+            order.setCreditFlagReason(customer.getCreditFlagReason());
+        } else {
+            order.setCreditFlaggedAtSubmit(null);
+            order.setCreditFlagReason(null);
+        }
+
         if (credit != null && credit.exceedsLimit()) {
             order.setCreditExceededAmount(credit.exceededAmount());
             order.setCreditExceededPercent(credit.creditLimit() != null && credit.creditLimit().signum() > 0
