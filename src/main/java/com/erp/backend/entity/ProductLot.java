@@ -45,6 +45,10 @@ public class ProductLot {
     @Column(name = "batch_number", nullable = false, length = 100)
     private String batchNumber;
 
+    // S6-01: Ngày sản xuất của lô
+    @Column(name = "manufacture_date")
+    private LocalDate manufactureDate;
+
     // Hạn sử dụng của lô
     @Column(name = "expired_date")
     private LocalDate expiredDate;
@@ -53,6 +57,15 @@ public class ProductLot {
     @Column(nullable = false, precision = 15, scale = 4)
     @Builder.Default
     private BigDecimal quantity = BigDecimal.ZERO;
+
+    // S6-01: Ghi chú về lô hàng
+    @Column(length = 500)
+    private String notes;
+
+    // S6-01: Trạng thái lô hàng: ACTIVE (Hoạt động), LOCKED (Khóa không cho xuất)
+    @Column(length = 30, nullable = false)
+    @Builder.Default
+    private String status = "ACTIVE";
 
     // Nhà cung cấp của lô
     @ManyToOne(fetch = FetchType.LAZY)

@@ -33,6 +33,7 @@ public class ProductDetailResponse {
     private String barcode;
     private String imageUrl;
     private String description;
+    private Boolean hasBatchManagement;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
