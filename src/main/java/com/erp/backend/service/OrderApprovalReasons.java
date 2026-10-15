@@ -26,6 +26,11 @@ final class OrderApprovalReasons {
                     "Công nợ sau đơn vượt hạn mức " + CustomerCreditService.vnd(o.getCreditExceededAmount()) + pct,
                     o.getCreditExceededAmount(), o.getCreditExceededPercent()));
         }
+        if (Boolean.TRUE.equals(o.getCreditFlaggedAtSubmit())) {
+            reasons.add(new ApprovalReason(ApprovalReason.CREDIT_FLAGGED, "Đại lý bị gắn cờ công nợ",
+                    o.getCreditFlagReason() != null ? o.getCreditFlagReason() : "Đại lý đang bị cảnh báo công nợ",
+                    null, null));
+        }
         if (o.getBelowFloorLineCount() != null && o.getBelowFloorLineCount() > 0) {
             String amount = o.getBelowFloorAmount() != null ? CustomerCreditService.vnd(o.getBelowFloorAmount()) : "0 ₫";
             String pct = o.getBelowFloorMaxPercent() != null

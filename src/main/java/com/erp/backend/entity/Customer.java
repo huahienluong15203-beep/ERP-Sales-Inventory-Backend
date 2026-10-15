@@ -115,6 +115,21 @@ public class Customer {
     @Column(name = "transaction_locked_at")
     private LocalDateTime transactionLockedAt;
 
+    // S7-04: Cờ cảnh báo công nợ do hệ thống tự gắn (vượt hạn mức hoặc có khoản nợ quá hạn), đánh giá lại mỗi ngày.
+    @Column(name = "credit_flagged", nullable = false, columnDefinition = "boolean default false")
+    @Builder.Default
+    private Boolean creditFlagged = false;
+
+    @Column(name = "credit_flag_reason", length = 500)
+    private String creditFlagReason;
+
+    @Column(name = "credit_flagged_at")
+    private LocalDateTime creditFlaggedAt;
+
+    // S7-04: lần đánh giá cờ công nợ gần nhất
+    @Column(name = "credit_checked_at")
+    private LocalDateTime creditCheckedAt;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
@@ -122,6 +137,11 @@ public class Customer {
     @UpdateTimestamp
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    /** S7-04: đại lý đang bị gắn cờ cảnh báo công nợ. */
+    public boolean isCreditFlaggedNow() {
+        return Boolean.TRUE.equals(creditFlagged);
+    }
 
     public boolean isTransactionLocked() {
         return Boolean.TRUE.equals(transactionLocked);

@@ -816,6 +816,10 @@ public class OrderDraftService {
             warnings.add("Đại lý " + c.getName() + " (" + c.getCode() + ") đang bị khoá giao dịch" + reason
                     + ". Đơn nháp này vẫn xử lý tiếp được nhưng không tạo được đơn mới.");
         }
+        // S7-04: đại lý đang bị hệ thống gắn cờ công nợ
+        if (c.isCreditFlaggedNow() && (o == null || o.getStatus() == null || SalesOrder.STATUS_DRAFT.equals(o.getStatus()))) {
+            warnings.add(CustomerService.creditFlagMessage(c) + " Khi chốt, đơn sẽ chuyển sang Chờ duyệt.");
+        }
         if (credit != null && credit.message() != null) {
             warnings.add(credit.message());
         }

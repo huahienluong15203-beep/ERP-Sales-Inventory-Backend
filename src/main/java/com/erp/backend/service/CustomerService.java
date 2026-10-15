@@ -53,6 +53,10 @@ public class CustomerService {
     private final WarehouseRepository warehouseRepository;
     private final PortalAccountService portalAccountService;
 
+    /** S7-04: đại lý bị gắn cờ công nợ thì BLOCK = chặn tạo đơn mới, REQUIRE_APPROVAL = vẫn tạo nhưng chốt phải duyệt. */
+    @org.springframework.beans.factory.annotation.Value("${erp.credit.flag-action:REQUIRE_APPROVAL}")
+    String creditFlagAction = CreditFlagService.ACTION_REQUIRE_APPROVAL;
+
     // ======================= S3-08: TÌM KIẾM / XEM =======================
 
     /**
@@ -464,6 +468,18 @@ public class CustomerService {
                     customer.getMaxDebtDays(),
                     false);
         }
+        // S7-04: đại lý bị hệ thống gắn cờ công nợ và cấu hình là chặn đơn mới
+        if (customer.isCreditFlaggedNow() && CreditFlagService.blocks(creditFlagAction)) {
+            return new OrderCreationCheckResponse(
+                    customer.getId(),
+                    customer.getCode(),
+                    customer.getName(),
+                    false,
+                    creditFlagMessage(customer) + " Chặn tạo đơn mới.",
+                    customer.getCreditLimit(),
+                    customer.getMaxDebtDays(),
+                    false);
+        }
         // S4-02: có khoản nợ quá số ngày cho phép -> chặn tạo đơn mới
         CreditStatusResponse credit = creditService.evaluate(customer, java.math.BigDecimal.ZERO);
         if (credit != null && credit.overdue()) {
@@ -482,10 +498,18 @@ public class CustomerService {
                 customer.getCode(),
                 customer.getName(),
                 true,
-                null,
+                // S7-04: bị gắn cờ nhưng cấu hình "cần duyệt": vẫn tạo được đơn, báo trước là chốt sẽ phải duyệt
+                customer.isCreditFlaggedNow()
+                        ? creditFlagMessage(customer) + " Đơn mới khi chốt sẽ chuyển sang Chờ duyệt." : null,
                 customer.getCreditLimit(),
                 customer.getMaxDebtDays(),
                 false);
+    }
+
+    /** S7-04: thông báo đại lý đang bị gắn cờ công nợ kèm lý do. */
+    static String creditFlagMessage(Customer customer) {
+        return "Đại lý " + customer.getName() + " (" + customer.getCode() + ") đang bị cảnh báo công nợ"
+                + (customer.getCreditFlagReason() != null ? ": " + customer.getCreditFlagReason() : "") + ".";
     }
 
     /**
@@ -500,6 +524,11 @@ public class CustomerService {
         if (!ACTIVE.equalsIgnoreCase(customer.getStatus())) {
             throw BusinessException.badRequest("CUSTOMER_INACTIVE",
                     "Đại lý " + customer.getName() + " (" + customer.getCode() + ") đã ngừng giao dịch.");
+        }
+        // S7-04: đại lý bị gắn cờ công nợ + cấu hình BLOCK -> chặn đơn mới
+        if (customer.isCreditFlaggedNow() && CreditFlagService.blocks(creditFlagAction)) {
+            throw BusinessException.conflict("CUSTOMER_CREDIT_FLAGGED",
+                    creditFlagMessage(customer) + " Chặn tạo đơn mới.", "customerId");
         }
         // S4-02: nợ quá hạn -> chặn tạo đơn mới hoàn toàn
         creditService.assertNoOverdueDebt(customer);

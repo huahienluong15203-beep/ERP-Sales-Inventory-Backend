@@ -162,6 +162,13 @@ public class SalesOrder {
     @Column(name = "credit_exceeded_percent", precision = 9, scale = 2)
     private BigDecimal creditExceededPercent;
 
+    // S7-04: lúc chốt, đại lý đang bị gắn cờ công nợ (cấu hình "chuyển cần duyệt") -> đơn phải được duyệt
+    @Column(name = "credit_flagged_at_submit")
+    private Boolean creditFlaggedAtSubmit;
+
+    @Column(name = "credit_flag_reason", length = 500)
+    private String creditFlagReason;
+
     @Column(name = "below_floor_line_count")
     private Integer belowFloorLineCount;
 

@@ -22,4 +22,6 @@ public record ApprovalReason(
     public static final String BELOW_FLOOR_PRICE = "BELOW_FLOOR_PRICE";
     /** S4-10: đơn đại lý tự đặt qua cổng, chờ nhân viên phụ trách xác nhận */
     public static final String PORTAL_ORDER = "PORTAL_ORDER";
+    /** S7-04: đại lý đang bị hệ thống gắn cờ cảnh báo công nợ. */
+    public static final String CREDIT_FLAGGED = "CREDIT_FLAGGED";
 }

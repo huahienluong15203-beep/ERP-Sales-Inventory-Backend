@@ -746,6 +746,53 @@ class CustomerServiceTest {
                 .extracting("code").isEqualTo("CUSTOMER_DEBT_OVERDUE");
     }
 
+    // ======================= S7-04: CỜ CẢNH BÁO CÔNG NỢ =======================
+
+    private static Customer flagged(Customer c) {
+        c.setCreditFlagged(true);
+        c.setCreditFlagReason("Có 1 khoản nợ quá hạn 12 ngày");
+        return c;
+    }
+
+    @Test
+    @DisplayName("S7-04: Cấu hình BLOCK -> đại lý bị gắn cờ không tạo được đơn mới")
+    void assertCanCreateOrder_flagged_block() {
+        service.creditFlagAction = "BLOCK";
+        Customer c = flagged(customer(1L, null));
+
+        assertThatThrownBy(() -> service.assertCanCreateOrder(c))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("CUSTOMER_CREDIT_FLAGGED");
+        verify(creditService, never()).assertNoOverdueDebt(any());
+    }
+
+    @Test
+    @DisplayName("S7-04: Cấu hình REQUIRE_APPROVAL (mặc định) -> vẫn tạo được đơn, kiểm tra tạo đơn báo trước sẽ phải duyệt")
+    void flagged_requireApproval_allowedWithNotice() {
+        service.creditFlagAction = "REQUIRE_APPROVAL";
+        Customer c = flagged(customer(1L, null));
+        when(customerRepository.findById(1L)).thenReturn(Optional.of(c));
+
+        service.assertCanCreateOrder(c);
+        OrderCreationCheckResponse res = service.checkOrderCreation(1L);
+
+        assertThat(res.allowed()).isTrue();
+        assertThat(res.blockReason()).contains("cảnh báo công nợ").contains("quá hạn 12 ngày").contains("Chờ duyệt");
+    }
+
+    @Test
+    @DisplayName("S7-04: Cấu hình BLOCK -> kiểm tra tạo đơn trả về không được tạo kèm lý do cờ")
+    void checkOrderCreation_flagged_block() {
+        service.creditFlagAction = "block";
+        Customer c = flagged(customer(1L, null));
+        when(customerRepository.findById(1L)).thenReturn(Optional.of(c));
+
+        OrderCreationCheckResponse res = service.checkOrderCreation(1L);
+
+        assertThat(res.allowed()).isFalse();
+        assertThat(res.blockReason()).contains("cảnh báo công nợ").contains("Chặn tạo đơn mới");
+    }
+
     // ======================= XOÁ HỒ SƠ ĐẠI LÝ =======================
 
     private static DeleteCustomerRequest deleteReq(String reason) {

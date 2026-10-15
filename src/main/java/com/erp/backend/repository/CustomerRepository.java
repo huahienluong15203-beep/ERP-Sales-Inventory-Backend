@@ -32,6 +32,14 @@ public interface CustomerRepository extends JpaRepository<Customer, Long>, JpaSp
     @Query("select c from Customer c where c.id = :id")
     Optional<Customer> findByIdForUpdate(@Param("id") Long id);
 
+    /** S7-04: id các đại lý theo trạng thái (để quét cờ công nợ từng đại lý một). */
+    @Query("select c.id from Customer c where c.status = :status order by c.id asc")
+    List<Long> findIdsByStatus(@Param("status") String status);
+
+    /** S7-04: đại lý đang bị gắn cờ công nợ. */
+    @Query("select c from Customer c left join fetch c.salesRep where c.creditFlagged = true order by c.creditFlaggedAt asc, c.id asc")
+    List<Customer> findCreditFlagged();
+
     /** S4-10: Đại lý gắn với tài khoản cổng đại lý đang đăng nhập. */
     Optional<Customer> findByPortalUser_Id(Long userId);
 
