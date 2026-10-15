@@ -47,6 +47,12 @@ public class FefoLotSuggestionResponse {
     @Schema(description = "Số lượng yêu cầu xuất (theo ĐVT cơ sở)")
     private BigDecimal requestedQuantity;
 
+    @Schema(description = "Số lô mặc định được gợi ý theo FEFO")
+    private String suggestedBatchNumber;
+
+    @Schema(description = "Lô gợi ý đơn lẻ có đủ toàn bộ số lượng yêu cầu hay không")
+    private Boolean isSingleLotSufficient;
+
     @Schema(description = "Lô mặc định được gợi ý (hạn dùng gần nhất còn đủ số lượng)")
     private SuggestedLotItem suggestedLot;
 

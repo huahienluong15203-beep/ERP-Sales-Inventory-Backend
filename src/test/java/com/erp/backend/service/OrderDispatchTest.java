@@ -1,5 +1,6 @@
 package com.erp.backend.service;
 
+import com.erp.backend.dto.inventory.lot.FefoLotSuggestionResponse;
 import com.erp.backend.dto.order.OrderDispatchRequest;
 import com.erp.backend.dto.order.OrderDispatchResponse;
 import com.erp.backend.dto.order.OrderLineDispatchRequest;
@@ -45,6 +46,7 @@ class OrderDispatchTest {
     @Mock private AuditLogService auditLogService;
     @Mock private OrderDraftService orderDraftService;
     @Mock private com.erp.backend.repository.UserRepository userRepository;
+    @Mock private ProductLotService productLotService;
 
     @InjectMocks private OrderStatusService service;
 
@@ -336,5 +338,111 @@ class OrderDispatchTest {
                 .isEqualByComparingTo("33.33");
         assertThat(OrderStatusService.prorate(new BigDecimal("100.00"), BigDecimal.ONE, BigDecimal.ZERO))
                 .isEqualByComparingTo("0");
+    }
+
+    @Test
+    @DisplayName("S6-04: Xuất kho với sản phẩm quản lý lô tự động gợi ý FEFO và trừ tồn lô")
+    void dispatch_withBatchManagement_fefoSuggestionAndDeduction() {
+        pepsi.setHasBatchManagement(true);
+        stubOrder();
+        stubSave();
+        when(orderDraftService.toResponse(any(SalesOrder.class))).thenReturn(mock(OrderResponse.class));
+
+        FefoLotSuggestionResponse fefo = FefoLotSuggestionResponse.builder()
+                .suggestedBatchNumber("LOT-PEP-01")
+                .suggestedLot(FefoLotSuggestionResponse.SuggestedLotItem.builder()
+                        .batchNumber("LOT-PEP-01")
+                        .expiredDate(java.time.LocalDate.now().plusMonths(6))
+                        .build())
+                .build();
+
+        when(productLotService.getFefoLotSuggestion(eq(11L), eq(1L), any(BigDecimal.class), any()))
+                .thenReturn(fefo);
+
+        ProductLot deducted = ProductLot.builder().id(99L).batchNumber("LOT-PEP-01").quantity(new BigDecimal("50")).build();
+        when(productLotService.deductLotStock(eq(11L), eq(1L), eq("LOT-PEP-01"), any(BigDecimal.class), anyString(), anyLong(), anyString(), any()))
+                .thenReturn(deducted);
+
+        OrderDispatchRequest req = OrderDispatchRequest.builder()
+                .lines(List.of(
+                        lineReq(1L, "10", null),
+                        lineReq(2L, "50", null)
+                ))
+                .build();
+
+        OrderDispatchResponse res = service.dispatch(100L, req, whManager);
+
+        assertThat(order.getStatus()).isEqualTo(SalesOrder.STATUS_DISPATCHED);
+        assertThat(pepsiLine.getSuggestedBatchNumber()).isEqualTo("LOT-PEP-01");
+        assertThat(pepsiLine.getBatchNumber()).isEqualTo("LOT-PEP-01");
+        verify(productLotService).deductLotStock(eq(11L), eq(1L), eq("LOT-PEP-01"), eq(new BigDecimal("50")), anyString(), anyLong(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("S6-04: Thủ kho chọn lô khác gợi ý FEFO mà không có lý do -> Báo lỗi 400")
+    void dispatch_withBatchManagement_changedBatchWithoutReason_throwsBadRequest() {
+        pepsi.setHasBatchManagement(true);
+        stubOrder();
+
+        FefoLotSuggestionResponse fefo = FefoLotSuggestionResponse.builder()
+                .suggestedBatchNumber("LOT-PEP-01")
+                .suggestedLot(FefoLotSuggestionResponse.SuggestedLotItem.builder()
+                        .batchNumber("LOT-PEP-01")
+                        .build())
+                .build();
+
+        when(productLotService.getFefoLotSuggestion(eq(11L), eq(1L), any(BigDecimal.class), any()))
+                .thenReturn(fefo);
+
+        OrderLineDispatchRequest line2Req = lineReq(2L, "50", null);
+        line2Req.setBatchNumber("LOT-PEP-02");
+        line2Req.setLotChangeReason("");
+
+        OrderDispatchRequest req = OrderDispatchRequest.builder()
+                .lines(List.of(lineReq(1L, "10", null), line2Req))
+                .build();
+
+        assertThatThrownBy(() -> service.dispatch(100L, req, whManager))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "LOT_CHANGE_REASON_REQUIRED");
+    }
+
+    @Test
+    @DisplayName("S6-04: Thủ kho chọn lô khác gợi ý FEFO kèm lý do hợp lệ -> Thành công ghi nhận lý do và trừ đúng tồn lô đã chọn")
+    void dispatch_withBatchManagement_changedBatchWithReason_success() {
+        pepsi.setHasBatchManagement(true);
+        stubOrder();
+        stubSave();
+        when(orderDraftService.toResponse(any(SalesOrder.class))).thenReturn(mock(OrderResponse.class));
+
+        FefoLotSuggestionResponse fefo = FefoLotSuggestionResponse.builder()
+                .suggestedBatchNumber("LOT-PEP-01")
+                .suggestedLot(FefoLotSuggestionResponse.SuggestedLotItem.builder()
+                        .batchNumber("LOT-PEP-01")
+                        .build())
+                .build();
+
+        when(productLotService.getFefoLotSuggestion(eq(11L), eq(1L), any(BigDecimal.class), any()))
+                .thenReturn(fefo);
+
+        ProductLot deducted = ProductLot.builder().id(98L).batchNumber("LOT-PEP-02").quantity(new BigDecimal("100")).build();
+        when(productLotService.deductLotStock(eq(11L), eq(1L), eq("LOT-PEP-02"), any(BigDecimal.class), anyString(), anyLong(), anyString(), any()))
+                .thenReturn(deducted);
+
+        OrderLineDispatchRequest line2Req = lineReq(2L, "50", null);
+        line2Req.setBatchNumber("LOT-PEP-02");
+        line2Req.setLotChangeReason("Khách yêu cầu lấy lô mới hơn");
+
+        OrderDispatchRequest req = OrderDispatchRequest.builder()
+                .lines(List.of(lineReq(1L, "10", null), line2Req))
+                .build();
+
+        OrderDispatchResponse res = service.dispatch(100L, req, whManager);
+
+        assertThat(order.getStatus()).isEqualTo(SalesOrder.STATUS_DISPATCHED);
+        assertThat(pepsiLine.getSuggestedBatchNumber()).isEqualTo("LOT-PEP-01");
+        assertThat(pepsiLine.getBatchNumber()).isEqualTo("LOT-PEP-02");
+        assertThat(pepsiLine.getLotChangeReason()).isEqualTo("Khách yêu cầu lấy lô mới hơn");
+        verify(productLotService).deductLotStock(eq(11L), eq(1L), eq("LOT-PEP-02"), eq(new BigDecimal("50")), anyString(), anyLong(), anyString(), any());
     }
 }

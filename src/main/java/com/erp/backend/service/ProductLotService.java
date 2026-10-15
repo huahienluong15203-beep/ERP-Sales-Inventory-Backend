@@ -731,6 +731,8 @@ public class ProductLotService {
                 .warehouseCode(warehouse.getCode())
                 .warehouseName(warehouse.getName())
                 .requestedQuantity(reqQty)
+                .suggestedBatchNumber(primarySuggestedLot != null ? primarySuggestedLot.getBatchNumber() : null)
+                .isSingleLotSufficient(defaultSufficientLot != null)
                 .suggestedLot(suggestedItem)
                 .allocations(allocations)
                 .availableLots(availableLotItems)
