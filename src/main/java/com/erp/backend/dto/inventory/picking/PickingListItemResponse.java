@@ -33,6 +33,7 @@ public class PickingListItemResponse {
     private String suggestedBatchNumber;
     private LocalDate suggestedExpiredDate;
     private String actualBatchNumber;
+    private String lotChangeReason;
 
     // Tiến độ soạn hàng
     private BigDecimal requestedQuantity;

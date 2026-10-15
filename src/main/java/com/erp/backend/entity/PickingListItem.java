@@ -82,6 +82,10 @@ public class PickingListItem {
     @Column(name = "actual_batch_number", length = 100)
     private String actualBatchNumber;
 
+    // S6-04: Lý do đổi lô khác với lô gợi ý FEFO (bắt buộc khi actualBatchNumber khác suggestedBatchNumber)
+    @Column(name = "lot_change_reason", length = 500)
+    private String lotChangeReason;
+
     // Tổng số lượng cần soạn (tính theo ĐVT cơ sở) gộp từ tất cả các đơn
     @Column(name = "requested_quantity", nullable = false, precision = 18, scale = 4)
     @Builder.Default
