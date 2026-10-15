@@ -181,7 +181,7 @@ public class OrderStatusService {
 
         // Khi xuất kho (DISPATCHED): trừ tồn thực tế và giải phóng giữ chỗ
         if (SalesOrder.STATUS_DISPATCHED.equals(cleanTarget)) {
-            inventoryService.dispatchReservedStock(order);
+            inventoryService.dispatchReservedStock(order, actor);
         }
 
         // S5-01: Cập nhật số lượng thực giao khi giao hàng (DELIVERED)

@@ -40,6 +40,8 @@ class StockTakeServiceTest {
     @Mock private StockLedgerService stockLedgerService;
     @Mock private AuditLogService auditLogService;
 
+    @Mock private StockMovementService stockMovementService;
+
     @InjectMocks private StockTakeService service;
 
     private final UserDetailsImpl staff = actor(5, "ROLE_WAREHOUSE");
@@ -176,6 +178,10 @@ class StockTakeServiceTest {
         assertThat(res.closedByUsername()).isEqualTo("user6");
         verify(auditLogService).record(eq(AuditModule.INVENTORY), eq("STOCKTAKE_ADJUST"), eq("INVENTORY"), eq(110L),
                 eq("WH-MB01:SP-COCA"), eq("110"), eq("107"), contains("KK261010-AAAA"), eq(manager));
+        // S6-02: thẻ kho ghi điều chỉnh -3, chỉ dòng có chênh lệch
+        verify(stockMovementService).record(eq(cocaStock), eq(StockMovement.TYPE_STOCKTAKE_ADJUST), qtyEq("-3"),
+                eq(StockMovement.DOC_STOCK_TAKE), any(), eq("KK261010-AAAA"), contains("Kiểm kê cuối tháng"), eq(manager));
+        verify(stockMovementService, times(1)).record(any(), anyString(), any(), anyString(), any(), any(), any(), any());
     }
 
     @Test
@@ -295,5 +301,10 @@ class StockTakeServiceTest {
 
         verify(stockTakeRepository).save(saved.capture());
         assertThat(saved.getValue().getStatus()).isEqualTo(StockTake.STATUS_CANCELLED);
+    }
+
+    /** S6-02: so khớp số lượng thẻ kho theo giá trị (không phụ thuộc scale). */
+    private static BigDecimal qtyEq(String v) {
+        return argThat(q -> q != null && q.compareTo(new BigDecimal(v)) == 0);
     }
 }

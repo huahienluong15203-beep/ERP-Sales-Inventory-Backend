@@ -33,6 +33,7 @@ public class GoodsReceiptService {
     private final ProductRepository productRepository;
     private final InventoryRepository inventoryRepository;
     private final UserRepository userRepository;
+    private final StockMovementService stockMovementService;
 
     /**
      * S5-04: Lấy danh sách phiếu nhập kho có bộ lọc & tìm kiếm.
@@ -226,15 +227,18 @@ public class GoodsReceiptService {
         receipt.setTotalBaseQuantity(totalBaseQty);
         receipt.setTotalAmount(totalAmount);
 
+        List<StockMovement> movements = List.of();
         // 6. Nếu lưu với trạng thái CONFIRMED -> cộng tồn kho ngay (AC4)
         if (GoodsReceipt.STATUS_CONFIRMED.equalsIgnoreCase(targetStatus)) {
             receipt.setConfirmedAt(LocalDateTime.now());
             receipt.setConfirmedBy(user);
             receipt.setConfirmedByUsername(username);
-            applyInventoryAddition(receipt);
+            movements = applyInventoryAddition(receipt, actor);
         }
 
         GoodsReceipt saved = goodsReceiptRepository.save(receipt);
+        // S6-02: phiếu mới lưu mới có id -> gắn vào các dòng thẻ kho vừa ghi
+        stockMovementService.linkDocument(movements, saved.getId());
         log.info("S5-04: Đã lập phiếu nhập kho {} với trạng thái {}, tổng {} dòng, {} đơn vị cơ sở",
                 saved.getCode(), saved.getStatus(), saved.getTotalLines(), saved.getTotalBaseQuantity());
 
@@ -276,7 +280,7 @@ public class GoodsReceiptService {
         receipt.setConfirmedByUsername(username);
 
         // Cộng tồn kho theo đơn vị cơ sở và cập nhật lô/hạn
-        applyInventoryAddition(receipt);
+        applyInventoryAddition(receipt, actor);
 
         GoodsReceipt saved = goodsReceiptRepository.save(receipt);
         log.info("S5-04: Đã xác nhận phiếu nhập kho {} (AC4), tồn kho đã được cộng thêm", saved.getCode());
@@ -286,8 +290,9 @@ public class GoodsReceiptService {
     /**
      * Cộng tồn kho thực tế (physical_stock) theo ĐVT cơ sở và ghi nhận lô/hạn.
      */
-    private void applyInventoryAddition(GoodsReceipt receipt) {
+    private List<StockMovement> applyInventoryAddition(GoodsReceipt receipt, UserDetailsImpl actor) {
         Warehouse warehouse = receipt.getWarehouse();
+        List<StockMovement> movements = new ArrayList<>();
 
         for (GoodsReceiptLine line : receipt.getLines()) {
             Product product = line.getProduct();
@@ -308,6 +313,11 @@ public class GoodsReceiptService {
 
             inv.setPhysicalStock(inv.getPhysicalStock().add(baseQty));
             inventoryRepository.save(inv);
+            // S6-02: ghi thẻ kho trong cùng transaction
+            movements.add(stockMovementService.record(inv, StockMovement.TYPE_RECEIPT, baseQty,
+                    StockMovement.DOC_GOODS_RECEIPT, receipt.getId(), receipt.getCode(),
+                    "Nhập kho" + (StringUtils.hasText(receipt.getSupplierName()) ? " từ NCC " + receipt.getSupplierName() : ""),
+                    actor));
 
             // 2. Ghi nhận thông tin số lô & hạn sử dụng (AC3)
             if (StringUtils.hasText(line.getBatchNumber())) {
@@ -330,6 +340,7 @@ public class GoodsReceiptService {
                 productLotRepository.save(lot);
             }
         }
+        return movements;
     }
 
     /**

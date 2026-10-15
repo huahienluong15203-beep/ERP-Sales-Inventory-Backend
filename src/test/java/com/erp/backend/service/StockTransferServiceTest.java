@@ -35,6 +35,8 @@ class StockTransferServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private AuditLogService auditLogService;
 
+    @Mock private StockMovementService stockMovementService;
+
     @InjectMocks private StockTransferService stockTransferService;
 
     private UserDetailsImpl whStaffActor;
@@ -153,6 +155,10 @@ class StockTransferServiceTest {
         stockTransferService.createTransfer(req, whStaffActor);
 
         assertThat(sourceInventory.getPhysicalStock()).isEqualByComparingTo("452");
+        // S6-02: thẻ kho ghi Xuất chuyển kho -48 Lon (phiếu chưa có id lúc ghi -> gắn sau khi lưu)
+        verify(stockMovementService).record(eq(sourceInventory), eq(StockMovement.TYPE_TRANSFER_OUT), qtyEq("-48"),
+                eq(StockMovement.DOC_STOCK_TRANSFER), isNull(), anyString(), contains("WH-MT01"), eq(whStaffActor));
+        verify(stockMovementService).linkDocument(anyList(), any());
     }
 
     @Test
@@ -279,6 +285,9 @@ class StockTransferServiceTest {
         // TC507-16: nhật ký tồn kho trước / sau
         verify(auditLogService).record(eq(AuditModule.INVENTORY), eq("TRANSFER_DISPATCH"), eq("INVENTORY"), eq(100L),
                 eq("WH-MB01:BEV-PEPSI-330"), eq("500"), eq("400"), contains("TRF-202610-001"), eq(whStaffActor));
+        // S6-02: thẻ kho
+        verify(stockMovementService).record(eq(sourceInventory), eq(StockMovement.TYPE_TRANSFER_OUT), qtyEq("-100"),
+                eq(StockMovement.DOC_STOCK_TRANSFER), eq(50L), eq("TRF-202610-001"), anyString(), eq(whStaffActor));
     }
 
     @Test
@@ -498,5 +507,10 @@ class StockTransferServiceTest {
         assertThat(res.getDiscrepancyGeneralReason()).isEqualTo("Biên bản sự cố xe số 29H-882.19");
         // Tồn kho đến được cộng theo số lượng thực nhận (95 lon)
         assertThat(destInventory.getPhysicalStock()).isEqualByComparingTo(BigDecimal.valueOf(95));
+    }
+
+    /** S6-02: so khớp số lượng thẻ kho theo giá trị (không phụ thuộc scale). */
+    private static BigDecimal qtyEq(String v) {
+        return argThat(q -> q != null && q.compareTo(new BigDecimal(v)) == 0);
     }
 }

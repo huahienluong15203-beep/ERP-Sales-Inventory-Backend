@@ -20,7 +20,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /** S5-06: Giữ chỗ tồn ghi nhận kho + hạn giữ chỗ, nhả đúng kho, không nhả 2 lần, lỗi giữa chừng thì không ghi nhận. */
@@ -29,6 +29,8 @@ class InventoryReservationTest {
 
     @Mock private InventoryRepository inventoryRepository;
     @Mock private WarehouseRepository warehouseRepository;
+
+    @Mock private StockMovementService stockMovementService;
 
     @InjectMocks private InventoryService service;
 
@@ -155,6 +157,10 @@ class InventoryReservationTest {
         assertThat(stock.getPhysicalStock()).isEqualByComparingTo("35");
         assertThat(stock.getReservedStock()).isEqualByComparingTo("5");
         assertThat(o.getReservationStatus()).isEqualTo(SalesOrder.RESERVATION_DISPATCHED);
+        // S6-02: thẻ kho ghi Xuất bán -15 theo đơn
+        verify(stockMovementService).record(eq(stock), eq(StockMovement.TYPE_SALES_DISPATCH),
+                argThat(q -> q != null && q.compareTo(new BigDecimal("-15")) == 0),
+                eq(StockMovement.DOC_SALES_ORDER), eq(1001L), eq("DH261010-AAAA"), anyString(), isNull());
     }
 
     @Test
@@ -177,6 +183,7 @@ class InventoryReservationTest {
         assertThat(cocaStock.getPhysicalStock()).isEqualByComparingTo("3");
         assertThat(o.getReservationStatus()).isEqualTo(SalesOrder.RESERVATION_RESERVED);
         verify(inventoryRepository, never()).save(any(Inventory.class));
+        verifyNoInteractions(stockMovementService);
     }
 
     @Test

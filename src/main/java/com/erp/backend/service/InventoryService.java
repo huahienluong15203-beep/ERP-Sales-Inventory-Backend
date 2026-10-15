@@ -5,6 +5,7 @@ import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.InventoryRepository;
 import com.erp.backend.repository.WarehouseRepository;
+import com.erp.backend.security.UserDetailsImpl;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import lombok.extern.slf4j.Slf4j;
@@ -27,6 +28,7 @@ public class InventoryService {
 
     private final InventoryRepository inventoryRepository;
     private final WarehouseRepository warehouseRepository;
+    private final StockMovementService stockMovementService;
 
     // S5-06: số ngày giữ chỗ tối đa trước khi tự nhả (application.properties: erp.order.reservation-days)
     @Value("${erp.order.reservation-days:7}")
@@ -278,6 +280,12 @@ public class InventoryService {
                 : resolveWarehouseForCustomer(order.getCustomer());
     }
 
+    /** S6-02: diễn giải dòng thẻ kho khi xuất bán. */
+    private static String dispatchNote(SalesOrder order) {
+        Customer c = order.getCustomer();
+        return c != null && StringUtils.hasText(c.getName()) ? "Xuất bán cho đại lý " + c.getName() : "Xuất bán";
+    }
+
     /** S5-06: đơn đã nhả hoặc đã xuất kho thì không trừ giữ chỗ lần nữa. */
     private static boolean reservationClosed(SalesOrder order) {
         return SalesOrder.RESERVATION_RELEASED.equals(order.getReservationStatus())
@@ -333,6 +341,12 @@ public class InventoryService {
      */
     @Transactional
     public void dispatchReservedStock(SalesOrder order) {
+        dispatchReservedStock(order, null);
+    }
+
+    /** S6-02: như trên, ghi thẻ kho (Xuất bán) kèm người thực hiện. */
+    @Transactional
+    public void dispatchReservedStock(SalesOrder order, UserDetailsImpl actor) {
         if (order == null || order.getLines() == null || order.getLines().isEmpty()) {
             return;
         }
@@ -389,6 +403,9 @@ public class InventoryService {
             inventory.setReservedStock(updatedReserved);
 
             inventoryRepository.save(inventory);
+            stockMovementService.record(inventory, StockMovement.TYPE_SALES_DISPATCH, baseQty.negate(),
+                    StockMovement.DOC_SALES_ORDER, order.getId(), order.getCode(),
+                    dispatchNote(order), actor);
             log.info("S4-06: Đã xuất kho đơn hàng {}: trừ tồn thực tế {} {} (còn {}), giải phóng giữ chỗ (còn {}) cho SKU {} tại kho {}",
                     order.getCode(), baseQty, product.getBaseUnit(), updatedPhysical, updatedReserved, product.getSku(), warehouse.getCode());
         }

@@ -36,6 +36,7 @@ public class StockTransferService {
     private final InventoryRepository inventoryRepository;
     private final UserRepository userRepository;
     private final AuditLogService auditLogService;
+    private final StockMovementService stockMovementService;
 
     /**
      * S5-07: Tìm kiếm danh sách phiếu chuyển kho theo bộ lọc.
@@ -167,6 +168,9 @@ public class StockTransferService {
                         StockTransfer.STATUS_IN_TRANSIT.equalsIgnoreCase(targetStatus) ? LocalDateTime.now() : null)
                 .build();
 
+        // S6-02: dòng thẻ kho ghi trước khi phiếu có id -> gắn id sau khi lưu phiếu
+        List<StockMovement> movements = new ArrayList<>();
+
         // 2. Kiểm tra danh sách hàng và tồn kho
         for (CreateStockTransferLinePayload lineReq : payload.getLines()) {
             Product product = productRepository.findById(lineReq.getProductId())
@@ -227,10 +231,13 @@ public class StockTransferService {
                 inventoryRepository.save(sourceInv);
                 auditStock("TRANSFER_DISPATCH", sourceInv, sourceWh, product.getSku(), before,
                         "Xuất chuyển kho phiếu " + code + " sang " + destWh.getCode(), actor);
+                movements.add(stockMovementService.record(sourceInv, StockMovement.TYPE_TRANSFER_OUT, transferQty.negate(),
+                        StockMovement.DOC_STOCK_TRANSFER, null, code, "Xuất chuyển sang kho " + destWh.getCode(), actor));
             }
         }
 
         StockTransfer saved = stockTransferRepository.save(transfer);
+        stockMovementService.linkDocument(movements, saved.getId());
         markAuditLogged();
         log.info("S5-07: Đã tạo phiếu chuyển kho {} từ {} sang {}, trạng thái: {}",
                 saved.getCode(), saved.getSourceWarehouseCode(), saved.getDestWarehouseCode(), saved.getStatus());
@@ -279,6 +286,9 @@ public class StockTransferService {
             inventoryRepository.save(sourceInv);
             auditStock("TRANSFER_DISPATCH", sourceInv, sourceWh, line.getProductSku(), before,
                     "Xuất chuyển kho phiếu " + transfer.getCode() + " sang " + transfer.getDestWarehouseCode(), actor);
+            stockMovementService.record(sourceInv, StockMovement.TYPE_TRANSFER_OUT, transferQty.negate(),
+                    StockMovement.DOC_STOCK_TRANSFER, transfer.getId(), transfer.getCode(),
+                    "Xuất chuyển sang kho " + transfer.getDestWarehouseCode(), actor);
             // S5-07 (Mai): chuyển theo lô thì trừ cả số lượng của lô đó ở kho đi
             // (trước đây chỉ cộng lô ở kho đến khi nhận, lô ở kho đi giữ nguyên -> tồn theo lô bị đếm 2 lần)
             if (StringUtils.hasText(line.getBatchNumber())) {
@@ -397,6 +407,12 @@ public class StockTransferService {
             inventoryRepository.save(destInv);
             auditStock("TRANSFER_RECEIVE", destInv, destWh, line.getProductSku(), before,
                     "Nhận hàng phiếu chuyển " + transfer.getCode() + " từ " + transfer.getSourceWarehouseCode()
+                            + (diff.signum() != 0 ? " (chênh lệch " + diff.stripTrailingZeros().toPlainString()
+                                    + (StringUtils.hasText(reason) ? ": " + reason.trim() : "") + ")" : ""),
+                    actor);
+            stockMovementService.record(destInv, StockMovement.TYPE_TRANSFER_IN, receivedQty,
+                    StockMovement.DOC_STOCK_TRANSFER, transfer.getId(), transfer.getCode(),
+                    "Nhận chuyển từ kho " + transfer.getSourceWarehouseCode()
                             + (diff.signum() != 0 ? " (chênh lệch " + diff.stripTrailingZeros().toPlainString()
                                     + (StringUtils.hasText(reason) ? ": " + reason.trim() : "") + ")" : ""),
                     actor);
