@@ -164,7 +164,7 @@ public class StockLedgerService {
         return null;
     }
 
-    private static Sort sort(String sort) {
+    static Sort sort(String sort) {
         Sort fallback = Sort.by("warehouse.code").ascending().and(Sort.by("product.sku").ascending());
         if (!StringUtils.hasText(sort)) {
             return fallback;
