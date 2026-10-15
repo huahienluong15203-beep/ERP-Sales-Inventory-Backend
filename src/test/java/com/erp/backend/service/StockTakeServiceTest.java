@@ -307,4 +307,43 @@ class StockTakeServiceTest {
     private static BigDecimal qtyEq(String v) {
         return argThat(q -> q != null && q.compareTo(new BigDecimal(v)) == 0);
     }
+
+    @Test
+    @DisplayName("S5-08: Tạo phiếu chọn nhiều nhóm hàng (Multi-select Categories)")
+    void create_snapshotByMultipleCategories() {
+        when(warehouseRepository.findById(1L)).thenReturn(Optional.of(hn));
+        when(categoryRepository.findById(2L)).thenReturn(Optional.of(drinks));
+        when(stockLedgerService.categoryWithDescendants(2L)).thenReturn(Set.of(2L));
+        when(stockLedgerService.categoryWithDescendants(9L)).thenReturn(Set.of(9L));
+        when(stockTakeRepository.existsByWarehouse_IdAndCategory_IdAndStatus(eq(1L), any(), eq(StockTake.STATUS_DRAFT))).thenReturn(false);
+        when(inventoryRepository.findByWarehouse_Id(1L)).thenReturn(List.of(
+                inv(pepsi, "20"), inv(coca, "100"), inv(salt, "50"), inv(oldItem, "7")
+        ));
+
+        StockTakeCreateRequest req = new StockTakeCreateRequest();
+        req.setWarehouseId(1L);
+        req.setCategoryIds(List.of(2L, 9L));
+
+        StockTakeResponse res = service.create(req, staff);
+
+        assertThat(res.code()).startsWith("KK");
+        assertThat(res.lines()).extracting(StockTakeResponse.Line::sku).containsExactlyInAnyOrder("SP-COCA", "SP-PEPSI", "SP-MUOI");
+    }
+
+    @Test
+    @DisplayName("S5-08: getCategoriesByWarehouse chỉ trả về nhóm hàng có sản phẩm tồn tại trong kho")
+    void getCategoriesByWarehouse_returnsOnlyCategoriesInWarehouse() {
+        when(inventoryRepository.findActiveByWarehouseIdWithProductAndCategory(1L)).thenReturn(List.of(
+                inv(coca, "100"), inv(pepsi, "20")
+        ));
+        when(categoryRepository.findAllByOrderByLevelAscNameAsc()).thenReturn(List.of(drinks, spices));
+        when(stockLedgerService.categoryWithDescendants(2L)).thenReturn(Set.of(2L));
+        when(stockLedgerService.categoryWithDescendants(9L)).thenReturn(Set.of(9L));
+
+        var result = service.getCategoriesByWarehouse(1L, staff);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).id()).isEqualTo(2L);
+        assertThat(result.get(0).skuCount()).isEqualTo(2L);
+    }
 }

@@ -1,6 +1,7 @@
 package com.erp.backend.service;
 
 import com.erp.backend.config.AuditLogInterceptor;
+import com.erp.backend.dto.stocktake.StockTakeCategoryOption;
 import com.erp.backend.dto.stocktake.StockTakeCountRequest;
 import com.erp.backend.dto.stocktake.StockTakeCreateRequest;
 import com.erp.backend.dto.stocktake.StockTakeResponse;
@@ -77,15 +78,28 @@ public class StockTakeService {
         assertWarehouseAllowed(warehouse.getId(), actor);
         ProductCategory category = null;
         Set<Long> categoryIds = null;
-        if (req.getCategoryId() != null) {
+        if (req.getCategoryIds() != null && !req.getCategoryIds().isEmpty()) {
+            categoryIds = new HashSet<>();
+            for (Long cId : req.getCategoryIds()) {
+                if (cId != null) {
+                    categoryIds.addAll(stockLedgerService.categoryWithDescendants(cId));
+                    if (category == null) {
+                        category = categoryRepository.findById(cId).orElse(null);
+                    }
+                }
+            }
+            if (categoryIds.isEmpty()) {
+                categoryIds = null;
+            }
+        } else if (req.getCategoryId() != null) {
             category = categoryRepository.findById(req.getCategoryId())
                     .orElseThrow(() -> BusinessException.notFound("Không tìm thấy nhóm hàng"));
             categoryIds = stockLedgerService.categoryWithDescendants(category.getId());
         }
-        boolean duplicate = category == null
+        boolean duplicate = (category == null && (categoryIds == null || categoryIds.isEmpty()))
                 ? stockTakeRepository.existsByWarehouse_IdAndCategoryIsNullAndStatus(warehouse.getId(), StockTake.STATUS_DRAFT)
-                : stockTakeRepository.existsByWarehouse_IdAndCategory_IdAndStatus(warehouse.getId(), category.getId(),
-                StockTake.STATUS_DRAFT);
+                : (category != null && stockTakeRepository.existsByWarehouse_IdAndCategory_IdAndStatus(warehouse.getId(), category.getId(),
+                StockTake.STATUS_DRAFT));
         if (duplicate) {
             throw BusinessException.conflict("STOCKTAKE_IN_PROGRESS",
                     "Kho " + warehouse.getName() + " đang có phiếu kiểm kê chưa chốt cho phạm vi này", "warehouseId");
@@ -126,6 +140,58 @@ public class StockTakeService {
                     "Kho / nhóm hàng đã chọn không có mặt hàng nào để kiểm kê", "categoryId");
         }
         return toResponse(stockTakeRepository.save(st), true);
+    }
+
+    /**
+     * Lấy danh sách nhóm hàng thực tế có tồn trong kho kèm số lượng SKU (S5-08).
+     * Chỉ trả về các nhóm hàng có ít nhất 1 sản phẩm đang có số dư tồn tại kho này.
+     */
+    @Transactional(readOnly = true)
+    public List<StockTakeCategoryOption> getCategoriesByWarehouse(Long warehouseId, UserDetailsImpl actor) {
+        assertWarehouseAllowed(warehouseId, actor);
+        List<Inventory> inventories = inventoryRepository.findActiveByWarehouseIdWithProductAndCategory(warehouseId);
+        if (inventories == null || inventories.isEmpty()) {
+            inventories = inventoryRepository.findByWarehouse_Id(warehouseId).stream()
+                    .filter(i -> i.getProduct() != null && "ACTIVE".equalsIgnoreCase(i.getProduct().getStatus()))
+                    .toList();
+        }
+
+        Map<Long, Set<Long>> categoryProductMap = new HashMap<>();
+        for (Inventory inv : inventories) {
+            Product p = inv.getProduct();
+            if (p != null && p.getProductCategory() != null) {
+                categoryProductMap.computeIfAbsent(p.getProductCategory().getId(), k -> new HashSet<>())
+                        .add(p.getId());
+            }
+        }
+
+        List<ProductCategory> allCategories = categoryRepository.findAllByOrderByLevelAscNameAsc();
+        List<StockTakeCategoryOption> result = new ArrayList<>();
+
+        for (ProductCategory c : allCategories) {
+            Set<Long> descendantIds = stockLedgerService.categoryWithDescendants(c.getId());
+            Set<Long> productsInDescendants = new HashSet<>();
+            for (Long descId : descendantIds) {
+                Set<Long> prods = categoryProductMap.get(descId);
+                if (prods != null) {
+                    productsInDescendants.addAll(prods);
+                }
+            }
+            if (!productsInDescendants.isEmpty()) {
+                result.add(new StockTakeCategoryOption(
+                        c.getId(),
+                        c.getCode(),
+                        c.getName(),
+                        c.getLevel() != null ? c.getLevel() : 1,
+                        c.getParent() != null ? c.getParent().getId() : null,
+                        c.getParent() != null ? c.getParent().getName() : null,
+                        c.getDescription(),
+                        (long) productsInDescendants.size()
+                ));
+            }
+        }
+
+        return result;
     }
 
     // ======================= NHẬP SỐ ĐẾM =======================

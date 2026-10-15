@@ -1,5 +1,6 @@
 package com.erp.backend.controller;
 
+import com.erp.backend.dto.stocktake.StockTakeCategoryOption;
 import com.erp.backend.dto.stocktake.StockTakeCountRequest;
 import com.erp.backend.dto.stocktake.StockTakeCreateRequest;
 import com.erp.backend.dto.stocktake.StockTakeReasonRequest;
@@ -17,6 +18,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
+import java.util.List;
 
 /**
  * S5-08: Phiếu kiểm kê kho.
@@ -30,6 +32,13 @@ import java.time.LocalDate;
 public class StockTakeController {
 
     private final StockTakeService stockTakeService;
+
+    /** Lấy danh sách nhóm hàng thực tế có tồn trong kho kèm số lượng SKU (S5-08). */
+    @GetMapping("/warehouses/{warehouseId}/categories")
+    public List<StockTakeCategoryOption> getCategoriesByWarehouse(@PathVariable Long warehouseId,
+                                                                  @AuthenticationPrincipal UserDetailsImpl actor) {
+        return stockTakeService.getCategoriesByWarehouse(warehouseId, actor);
+    }
 
     /** Vd: ?warehouseId=1&status=DRAFT&fromDate=2026-10-01&toDate=2026-10-31&page=0&size=20 */
     @GetMapping
