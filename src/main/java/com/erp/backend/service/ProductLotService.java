@@ -41,7 +41,6 @@ public class ProductLotService {
     private final UserRepository userRepository;
     private final SupplierRepository supplierRepository;
     private final AuditLogService auditLogService;
-    private final ProductService productService;
 
     // =========================================================================
     // 1. TÌM KIẾM, LỌC & CHI TIẾT LÔ HÀNG (S6-01)
@@ -236,12 +235,24 @@ public class ProductLotService {
         Product saved = productRepository.save(product);
 
         if (auditLogService != null) {
-            auditLogService.record(AuditModule.PRODUCT, "TOGGLE_BATCH_MANAGEMENT", "PRODUCT", saved.getId(),
+            auditLogService.record(AuditModule.INVENTORY, "TOGGLE_BATCH_MANAGEMENT", "PRODUCT", saved.getId(),
                     saved.getSku(), String.valueOf(oldValue), String.valueOf(enabled),
                     (enabled ? "Bật" : "Tắt") + " quản lý lô theo SKU", actor);
         }
 
-        return productService.getById(saved.getId(), actor);
+        return ProductResponse.builder()
+                .id(saved.getId())
+                .sku(saved.getSku())
+                .name(saved.getName())
+                .categoryId(saved.getProductCategory() != null ? saved.getProductCategory().getId() : null)
+                .category(saved.getProductCategory() != null ? saved.getProductCategory().getName() : null)
+                .packaging(saved.getPackaging())
+                .baseUnit(saved.getBaseUnit())
+                .status(saved.getStatus())
+                .hasBatchManagement(Boolean.TRUE.equals(saved.getHasBatchManagement()))
+                .createdAt(saved.getCreatedAt())
+                .updatedAt(saved.getUpdatedAt())
+                .build();
     }
 
     // =========================================================================
