@@ -327,4 +327,58 @@ class OrderDeliveryServiceTest {
         cocaLine.setDeliveredQuantity(BigDecimal.ZERO);
         assertThat(OrderDeliveryService.undeliveredBase(cocaLine)).isEqualByComparingTo("240");
     }
+
+    // ======================= S6-07: ĐƠN TRÊN CHUYẾN GIAO =======================
+
+    private DeliveryTrip runningTrip() {
+        return DeliveryTrip.builder().id(500L).code("CG261015-AAAA").driverName("Anh Tuấn")
+                .status(DeliveryTrip.STATUS_IN_PROGRESS).departedAt(DISPATCHED_AT).expectedReturnAt(NOW.plusHours(2)).build();
+    }
+
+    @Test
+    @DisplayName("S6-07: Đơn trên chuyến đang chạy giao thiếu -> hàng thiếu vẫn thuộc chuyến, CHƯA nhập lại kho")
+    void confirm_short_onActiveTrip_deferred() {
+        order.setDeliveryTrip(runningTrip());
+        stubOrder();
+        stubSave();
+
+        service.confirmDelivery(100L, OrderDeliveryConfirmRequest.builder().receiverName("Chị Lan")
+                .lineDeliveries(List.of(delivered(1L, "8", "Móp 2 thùng"))).build(), whManager);
+
+        assertThat(order.getStatus()).isEqualTo(SalesOrder.STATUS_DELIVERED);
+        assertThat(order.getStockReturnedAt()).isNull();
+        verifyNoInteractions(inventoryService);
+        ArgumentCaptor<SalesOrderApproval> h = ArgumentCaptor.forClass(SalesOrderApproval.class);
+        verify(approvalRepository).save(h.capture());
+        assertThat(h.getValue().getComment()).contains("CG261015-AAAA");
+    }
+
+    @Test
+    @DisplayName("S6-07: Đơn trên chuyến đang chạy giao không thành công -> chưa nhập lại kho (chờ kết thúc chuyến)")
+    void markFailed_onActiveTrip_deferred() {
+        order.setDeliveryTrip(runningTrip());
+        stubOrder();
+        stubSave();
+
+        service.markFailed(100L, "Đại lý đóng cửa", whManager);
+
+        assertThat(order.getStatus()).isEqualTo(SalesOrder.STATUS_DELIVERY_FAILED);
+        assertThat(order.getStockReturnedAt()).isNull();
+        verifyNoInteractions(inventoryService);
+    }
+
+    @Test
+    @DisplayName("S6-07: Đơn không trên chuyến (hoặc chuyến đã kết thúc) -> nhập lại kho ngay như cũ, ghi thời điểm")
+    void markFailed_notOnTrip_returnsNow() {
+        DeliveryTrip done = runningTrip();
+        done.setStatus(DeliveryTrip.STATUS_COMPLETED);
+        order.setDeliveryTrip(done);
+        stubOrder();
+        stubSave();
+
+        service.markFailed(100L, "Đại lý đóng cửa", whManager);
+
+        assertThat(capturedReturns()).hasSize(2);
+        assertThat(order.getStockReturnedAt()).isEqualTo(NOW);
+    }
 }
