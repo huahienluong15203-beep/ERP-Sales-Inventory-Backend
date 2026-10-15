@@ -75,7 +75,7 @@ public class ProductManagementController {
     @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'WH_MANAGER', 'WAREHOUSE', 'SALES_REP', 'ACCOUNTANT')")
     public ResponseEntity<List<ProductOptionItemResponse>> searchProductOptions(
             @RequestParam(required = false) String keyword,
-            @RequestParam(defaultValue = "30") int limit,
+            @RequestParam(defaultValue = "200") int limit,
             @AuthenticationPrincipal UserDetailsImpl actor) {
         return ResponseEntity.ok(productService.searchProductOptions(keyword, limit, actor));
     }

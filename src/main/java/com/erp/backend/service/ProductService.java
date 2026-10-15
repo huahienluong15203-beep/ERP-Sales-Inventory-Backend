@@ -320,7 +320,7 @@ public class ProductService {
      */
     @Transactional(readOnly = true)
     public List<ProductOptionItemResponse> searchProductOptions(String keyword, int limit, UserDetailsImpl actor) {
-        int safeLimit = Math.max(1, Math.min(limit, 100));
+        int safeLimit = Math.max(1, Math.min(limit, 2000));
         org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(0, safeLimit, org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.ASC, "sku"));
         Page<Product> page = productRepository.searchProducts(
                 StringUtils.hasText(keyword) ? keyword.trim() : null,
