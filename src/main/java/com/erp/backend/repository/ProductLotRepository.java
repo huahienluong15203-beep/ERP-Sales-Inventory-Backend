@@ -9,10 +9,22 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
 @Repository
 public interface ProductLotRepository extends JpaRepository<ProductLot, Long>, JpaSpecificationExecutor<ProductLot> {
 
     Optional<ProductLot> findByProduct_IdAndWarehouse_IdAndBatchNumber(Long productId, Long warehouseId, String batchNumber);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT l FROM ProductLot l WHERE l.product.id = :productId AND l.warehouse.id = :warehouseId AND l.batchNumber = :batchNumber")
+    Optional<ProductLot> findByProductAndWarehouseAndBatchNumberForUpdate(
+            @Param("productId") Long productId,
+            @Param("warehouseId") Long warehouseId,
+            @Param("batchNumber") String batchNumber);
 
     boolean existsByProduct_IdAndWarehouse_IdAndBatchNumber(Long productId, Long warehouseId, String batchNumber);
 

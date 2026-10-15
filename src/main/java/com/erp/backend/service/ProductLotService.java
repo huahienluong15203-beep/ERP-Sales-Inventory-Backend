@@ -580,6 +580,428 @@ public class ProductLotService {
     }
 
     // =========================================================================
+    // 7. GỢI Ý LÔ XUẤT THEO NGUYÊN TẮC FEFO & XÁC THỰC CHỌN LÔ (S6-04)
+    // =========================================================================
+
+    /**
+     * S6-04 AC1: Thuật toán FEFO gợi ý xuất lô tự động.
+     * Quy tắc:
+     * 1. Lọc các lô còn hạn sử dụng (expiredDate >= today), đang hoạt động (ACTIVE, không LOCKED) và còn tồn kho (> 0).
+     * 2. Sắp xếp theo hạn sử dụng tăng dần (FEFO: lô có HSD gần nhất lên trước).
+     * 3. Mặc định gợi ý lô có hạn sử dụng gần nhất CÒN ĐỦ số lượng (quantity >= requestedQuantity).
+     * 4. Nếu không có lô đơn lẻ nào đủ, gợi ý ghép nhiều lô theo thứ tự FEFO.
+     * 5. Trả về danh sách availableLots để đổ vào Component Dropdown trên UI xuất kho.
+     */
+    @Transactional(readOnly = true)
+    public FefoLotSuggestionResponse getFefoLotSuggestion(
+            Long productId,
+            Long warehouseId,
+            BigDecimal requestedQuantity,
+            UserDetailsImpl actor) {
+
+        assertWarehouseAccess(warehouseId, actor);
+
+        Product product = productRepository.findById(productId)
+                .orElseThrow(() -> BusinessException.notFound("Không tìm thấy sản phẩm với ID: " + productId));
+
+        Warehouse warehouse = warehouseRepository.findById(warehouseId)
+                .orElseThrow(() -> BusinessException.notFound("Không tìm thấy kho với ID: " + warehouseId));
+
+        BigDecimal reqQty = (requestedQuantity != null && requestedQuantity.compareTo(BigDecimal.ZERO) > 0)
+                ? requestedQuantity
+                : BigDecimal.ONE;
+
+        // Nếu sản phẩm không cấu hình quản lý lô
+        if (!Boolean.TRUE.equals(product.getHasBatchManagement())) {
+            return FefoLotSuggestionResponse.builder()
+                    .productId(product.getId())
+                    .productSku(product.getSku())
+                    .productName(product.getName())
+                    .baseUnit(product.getBaseUnit())
+                    .hasBatchManagement(false)
+                    .warehouseId(warehouse.getId())
+                    .warehouseCode(warehouse.getCode())
+                    .warehouseName(warehouse.getName())
+                    .requestedQuantity(reqQty)
+                    .suggestedLot(null)
+                    .allocations(Collections.emptyList())
+                    .availableLots(Collections.emptyList())
+                    .isFullyAllocated(true)
+                    .allocatedQuantity(reqQty)
+                    .unallocatedQuantity(BigDecimal.ZERO)
+                    .requiresReasonIfDifferent(false)
+                    .message("Sản phẩm không quản lý theo lô hàng.")
+                    .build();
+        }
+
+        LocalDate today = LocalDate.now();
+
+        // Lấy tất cả các lô của sản phẩm tại kho sắp xếp theo hạn sử dụng tăng dần (FEFO)
+        List<ProductLot> allLots = productLotRepository
+                .findByProduct_IdAndWarehouse_IdOrderByExpiredDateAsc(productId, warehouseId);
+
+        // Lọc các lô hợp lệ: ACTIVE, tồn > 0, chưa hết hạn (expiredDate == null hoặc >= today)
+        List<ProductLot> validLots = allLots.stream()
+                .filter(lot -> lot.getQuantity() != null && lot.getQuantity().compareTo(BigDecimal.ZERO) > 0)
+                .filter(lot -> !"LOCKED".equalsIgnoreCase(lot.getStatus()))
+                .filter(lot -> lot.getExpiredDate() == null || !lot.getExpiredDate().isBefore(today))
+                .sorted(Comparator.comparing(ProductLot::getExpiredDate, Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(ProductLot::getId))
+                .collect(Collectors.toList());
+
+        if (validLots.isEmpty()) {
+            return FefoLotSuggestionResponse.builder()
+                    .productId(product.getId())
+                    .productSku(product.getSku())
+                    .productName(product.getName())
+                    .baseUnit(product.getBaseUnit())
+                    .hasBatchManagement(true)
+                    .warehouseId(warehouse.getId())
+                    .warehouseCode(warehouse.getCode())
+                    .warehouseName(warehouse.getName())
+                    .requestedQuantity(reqQty)
+                    .suggestedLot(null)
+                    .allocations(Collections.emptyList())
+                    .availableLots(Collections.emptyList())
+                    .isFullyAllocated(false)
+                    .allocatedQuantity(BigDecimal.ZERO)
+                    .unallocatedQuantity(reqQty)
+                    .requiresReasonIfDifferent(true)
+                    .message("Không có lô hàng hợp lệ nào (còn hạn và còn tồn kho) tại kho " + warehouse.getName() + ".")
+                    .build();
+        }
+
+        // 1. Áp dụng quy tắc AC1: Mặc định gợi ý lô có hạn sử dụng gần nhất còn đủ số lượng
+        ProductLot defaultSufficientLot = validLots.stream()
+                .filter(lot -> lot.getQuantity().compareTo(reqQty) >= 0)
+                .findFirst()
+                .orElse(null);
+
+        ProductLot primarySuggestedLot = (defaultSufficientLot != null) ? defaultSufficientLot : validLots.get(0);
+
+        // 2. Tính toán phân bổ (allocations)
+        List<FefoLotSuggestionResponse.FefoAllocationItem> allocations = new ArrayList<>();
+        BigDecimal remainingToAllocate = reqQty;
+
+        if (defaultSufficientLot != null) {
+            allocations.add(buildAllocationItem(defaultSufficientLot, reqQty, today));
+            remainingToAllocate = BigDecimal.ZERO;
+        } else {
+            for (ProductLot lot : validLots) {
+                if (remainingToAllocate.compareTo(BigDecimal.ZERO) <= 0) break;
+                BigDecimal canTake = lot.getQuantity().min(remainingToAllocate);
+                allocations.add(buildAllocationItem(lot, canTake, today));
+                remainingToAllocate = remainingToAllocate.subtract(canTake);
+            }
+        }
+
+        BigDecimal totalAllocated = reqQty.subtract(remainingToAllocate);
+        boolean isFully = remainingToAllocate.compareTo(BigDecimal.ZERO) == 0;
+
+        // 3. Xây dựng danh sách availableLots cho Component Dropdown trên UI
+        List<FefoLotSuggestionResponse.SuggestedLotItem> availableLotItems = validLots.stream()
+                .map(lot -> buildSuggestedLotItem(lot, reqQty, primarySuggestedLot, today))
+                .collect(Collectors.toList());
+
+        FefoLotSuggestionResponse.SuggestedLotItem suggestedItem = buildSuggestedLotItem(
+                primarySuggestedLot, reqQty, primarySuggestedLot, today);
+
+        String message;
+        if (defaultSufficientLot != null) {
+            message = "Mặc định gợi ý lô " + defaultSufficientLot.getBatchNumber()
+                    + " (HSD: " + defaultSufficientLot.getExpiredDate()
+                    + ") là lô có hạn dùng gần nhất còn đủ số lượng ("
+                    + defaultSufficientLot.getQuantity() + " " + product.getBaseUnit() + ").";
+        } else if (isFully) {
+            message = "Không có lô đơn lẻ nào đủ toàn bộ số lượng yêu cầu. Hệ thống gợi ý ghép "
+                    + allocations.size() + " lô theo thứ tự FEFO (ưu tiên lô "
+                    + primarySuggestedLot.getBatchNumber() + ").";
+        } else {
+            message = "Kho chỉ còn tổng cộng " + totalAllocated + " " + product.getBaseUnit()
+                    + " khả dụng qua các lô, còn thiếu " + remainingToAllocate + " " + product.getBaseUnit() + ".";
+        }
+
+        return FefoLotSuggestionResponse.builder()
+                .productId(product.getId())
+                .productSku(product.getSku())
+                .productName(product.getName())
+                .baseUnit(product.getBaseUnit())
+                .hasBatchManagement(true)
+                .warehouseId(warehouse.getId())
+                .warehouseCode(warehouse.getCode())
+                .warehouseName(warehouse.getName())
+                .requestedQuantity(reqQty)
+                .suggestedLot(suggestedItem)
+                .allocations(allocations)
+                .availableLots(availableLotItems)
+                .isFullyAllocated(isFully)
+                .allocatedQuantity(totalAllocated)
+                .unallocatedQuantity(remainingToAllocate)
+                .requiresReasonIfDifferent(true)
+                .message(message)
+                .build();
+    }
+
+    /**
+     * S6-04 AC2: Thủ kho chọn lô khác được nhưng phải nhập lý do.
+     * Kiểm tra tính hợp lệ của lô được chọn và bắt buộc lý do nếu chọn khác lô gợi ý FEFO.
+     */
+    @Transactional(readOnly = true)
+    public LotSelectionValidationResponse validateLotSelection(
+            LotSelectionValidationRequest request,
+            UserDetailsImpl actor) {
+
+        assertWarehouseAccess(request.getWarehouseId(), actor);
+
+        ProductLot lot = productLotRepository.findByProduct_IdAndWarehouse_IdAndBatchNumber(
+                request.getProductId(), request.getWarehouseId(), request.getSelectedBatchNumber().trim())
+                .orElse(null);
+
+        if (lot == null) {
+            return LotSelectionValidationResponse.builder()
+                    .valid(false)
+                    .selectedBatchNumber(request.getSelectedBatchNumber())
+                    .message("Không tìm thấy lô '" + request.getSelectedBatchNumber() + "' của sản phẩm tại kho chỉ định.")
+                    .build();
+        }
+
+        LocalDate today = LocalDate.now();
+        LocalDate expDate = lot.getExpiredDate();
+        Long daysToExpiration = expDate != null ? ChronoUnit.DAYS.between(today, expDate) : null;
+        BigDecimal availableQty = lot.getQuantity() != null ? lot.getQuantity() : BigDecimal.ZERO;
+        BigDecimal reqQty = request.getRequestedQuantity();
+
+        boolean isLocked = "LOCKED".equalsIgnoreCase(lot.getStatus());
+        boolean isExpired = expDate != null && expDate.isBefore(today);
+        boolean isNearExpiry = expDate != null && !isExpired && !expDate.isAfter(today.plusDays(30));
+        boolean isInsufficient = availableQty.compareTo(reqQty) < 0;
+
+        // 1. Kiểm tra trạng thái khóa
+        if (isLocked) {
+            return LotSelectionValidationResponse.builder()
+                    .valid(false)
+                    .locked(true)
+                    .expired(isExpired)
+                    .nearExpiry(isNearExpiry)
+                    .insufficientQuantity(isInsufficient)
+                    .selectedBatchNumber(lot.getBatchNumber())
+                    .expiredDate(expDate)
+                    .daysToExpiration(daysToExpiration)
+                    .availableQuantity(availableQty)
+                    .requestedQuantity(reqQty)
+                    .message("Lô hàng '" + lot.getBatchNumber() + "' đang bị khóa (LOCKED), không được phép xuất kho.")
+                    .build();
+        }
+
+        // 2. Kiểm tra quá hạn (trừ khi có ghi đè hợp lệ)
+        boolean overrideApplied = false;
+        if (isExpired) {
+            if (Boolean.TRUE.equals(request.getOverrideExpired())) {
+                if (!hasAnyRole(actor, "WH_MANAGER", "ADMIN")) {
+                    throw BusinessException.forbidden("OVERRIDE_NOT_ALLOWED",
+                            "Chỉ Quản lý kho hoặc Quản trị viên mới có quyền xác nhận ghi đè cho phép xuất lô quá hạn");
+                }
+                if (!StringUtils.hasText(request.getOverrideReason()) || request.getOverrideReason().trim().length() < 5) {
+                    throw BusinessException.badRequest("OVERRIDE_REASON_REQUIRED",
+                            "Cần nhập lý do ghi đè xuất lô quá hạn (tối thiểu 5 ký tự)");
+                }
+                overrideApplied = true;
+            } else {
+                return LotSelectionValidationResponse.builder()
+                        .valid(false)
+                        .locked(false)
+                        .expired(true)
+                        .nearExpiry(false)
+                        .insufficientQuantity(isInsufficient)
+                        .selectedBatchNumber(lot.getBatchNumber())
+                        .expiredDate(expDate)
+                        .daysToExpiration(daysToExpiration)
+                        .availableQuantity(availableQty)
+                        .requestedQuantity(reqQty)
+                        .message("Lô hàng '" + lot.getBatchNumber() + "' đã hết hạn sử dụng (" + expDate
+                                + "). Nghiêm cấm xuất kho trừ khi Quản lý kho xác nhận ghi đè kèm lý do.")
+                        .build();
+            }
+        }
+
+        // 3. Xác định lô mặc định gợi ý theo FEFO để kiểm tra đổi lô
+        String suggestedBatch = request.getSuggestedBatchNumber();
+        if (!StringUtils.hasText(suggestedBatch)) {
+            FefoLotSuggestionResponse fefo = getFefoLotSuggestion(request.getProductId(), request.getWarehouseId(), reqQty, actor);
+            if (fefo.getSuggestedLot() != null) {
+                suggestedBatch = fefo.getSuggestedLot().getBatchNumber();
+            }
+        }
+
+        boolean isDifferent = StringUtils.hasText(suggestedBatch) && !suggestedBatch.equalsIgnoreCase(lot.getBatchNumber());
+        boolean requiresReason = isDifferent;
+        boolean reasonValid = false;
+
+        // RÀNG BUỘC S6-04 AC2: Chọn lô khác lô gợi ý FEFO bắt buộc phải có lý do (tối thiểu 5 ký tự)
+        if (isDifferent) {
+            if (!StringUtils.hasText(request.getLotChangeReason()) || request.getLotChangeReason().trim().length() < 5) {
+                return LotSelectionValidationResponse.builder()
+                        .valid(false)
+                        .isDifferentFromSuggested(true)
+                        .requiresReason(true)
+                        .reasonValid(false)
+                        .locked(false)
+                        .expired(isExpired)
+                        .nearExpiry(isNearExpiry)
+                        .insufficientQuantity(isInsufficient)
+                        .overrideApplied(overrideApplied)
+                        .suggestedBatchNumber(suggestedBatch)
+                        .selectedBatchNumber(lot.getBatchNumber())
+                        .expiredDate(expDate)
+                        .daysToExpiration(daysToExpiration)
+                        .availableQuantity(availableQty)
+                        .requestedQuantity(reqQty)
+                        .message("Thủ kho chọn lô '" + lot.getBatchNumber() + "' khác với lô mặc định FEFO gợi ý ('"
+                                + suggestedBatch + "'). Bắt buộc phải nhập lý do đổi lô (tối thiểu 5 ký tự).")
+                        .build();
+            }
+            reasonValid = true;
+        }
+
+        // 4. Kiểm tra số lượng tồn trong lô
+        if (isInsufficient) {
+            return LotSelectionValidationResponse.builder()
+                    .valid(false)
+                    .isDifferentFromSuggested(isDifferent)
+                    .requiresReason(requiresReason)
+                    .reasonValid(reasonValid)
+                    .locked(false)
+                    .expired(isExpired)
+                    .nearExpiry(isNearExpiry)
+                    .insufficientQuantity(true)
+                    .overrideApplied(overrideApplied)
+                    .suggestedBatchNumber(suggestedBatch)
+                    .selectedBatchNumber(lot.getBatchNumber())
+                    .expiredDate(expDate)
+                    .daysToExpiration(daysToExpiration)
+                    .availableQuantity(availableQty)
+                    .requestedQuantity(reqQty)
+                    .message("Số lượng tồn trong lô '" + lot.getBatchNumber() + "' (" + availableQty
+                            + ") không đủ để xuất (" + reqQty + ").")
+                    .build();
+        }
+
+        String successMsg = isDifferent
+                ? "Lô hàng '" + lot.getBatchNumber() + "' hợp lệ để xuất kho kèm lý do đổi lô: " + request.getLotChangeReason().trim()
+                : "Lô hàng '" + lot.getBatchNumber() + "' trùng với gợi ý FEFO, đủ điều kiện xuất kho.";
+
+        return LotSelectionValidationResponse.builder()
+                .valid(true)
+                .isDifferentFromSuggested(isDifferent)
+                .requiresReason(requiresReason)
+                .reasonValid(reasonValid)
+                .locked(false)
+                .expired(isExpired)
+                .nearExpiry(isNearExpiry)
+                .insufficientQuantity(false)
+                .overrideApplied(overrideApplied)
+                .suggestedBatchNumber(suggestedBatch)
+                .selectedBatchNumber(lot.getBatchNumber())
+                .expiredDate(expDate)
+                .daysToExpiration(daysToExpiration)
+                .availableQuantity(availableQty)
+                .requestedQuantity(reqQty)
+                .message(successMsg)
+                .build();
+    }
+
+    /**
+     * S6-04 AC3: Xuất kho trừ đúng tồn của lô đã chọn.
+     * Áp dụng khóa bi quan (Pessimistic Write Lock) trên lô hàng để đảm bảo tính toàn vẹn dữ liệu đa luồng.
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public ProductLot deductLotStock(
+            Long productId,
+            Long warehouseId,
+            String batchNumber,
+            BigDecimal quantity,
+            String docType,
+            Long docId,
+            String docCode,
+            UserDetailsImpl actor) {
+
+        if (productId == null || warehouseId == null || !StringUtils.hasText(batchNumber)) {
+            throw BusinessException.badRequest("PARAM_REQUIRED", "Thiếu thông tin sản phẩm, kho hoặc số lô để trừ tồn lô");
+        }
+        if (quantity == null || quantity.compareTo(BigDecimal.ZERO) <= 0) {
+            return null;
+        }
+
+        ProductLot lot = productLotRepository
+                .findByProductAndWarehouseAndBatchNumberForUpdate(productId, warehouseId, batchNumber.trim())
+                .orElseThrow(() -> BusinessException.notFound("Không tìm thấy lô '" + batchNumber.trim()
+                        + "' của sản phẩm tại kho chỉ định để trừ tồn"));
+
+        BigDecimal currentQty = lot.getQuantity() != null ? lot.getQuantity() : BigDecimal.ZERO;
+        if (currentQty.compareTo(quantity) < 0) {
+            throw BusinessException.conflict("INSUFFICIENT_LOT_QUANTITY",
+                    "Số lượng tồn trong lô '" + lot.getBatchNumber() + "' (" + currentQty
+                            + ") không đủ để trừ xuất kho (" + quantity + ").", "quantity");
+        }
+
+        BigDecimal updatedQty = currentQty.subtract(quantity);
+        lot.setQuantity(updatedQty);
+        ProductLot saved = productLotRepository.save(lot);
+
+        log.info("S6-04: Đã trừ tồn lô {} tại kho {}: số lượng trừ {}, tồn lô còn lại {}",
+                lot.getBatchNumber(), warehouseId, quantity, updatedQty);
+
+        if (auditLogService != null) {
+            auditLogService.record(AuditModule.INVENTORY, "DEDUCT_LOT_STOCK", "PRODUCT_LOT", saved.getId(),
+                    saved.getBatchNumber(), currentQty.toPlainString(), updatedQty.toPlainString(),
+                    "Xuất kho trừ tồn lô theo chứng từ " + docType + " (" + docCode + "): -" + quantity, actor);
+        }
+
+        return saved;
+    }
+
+    private FefoLotSuggestionResponse.FefoAllocationItem buildAllocationItem(ProductLot lot, BigDecimal allocatedQty, LocalDate today) {
+        Long days = lot.getExpiredDate() != null ? ChronoUnit.DAYS.between(today, lot.getExpiredDate()) : null;
+        String locCode = lot.getLocation() != null ? lot.getLocation().getCode() : null;
+        return FefoLotSuggestionResponse.FefoAllocationItem.builder()
+                .lotId(lot.getId())
+                .batchNumber(lot.getBatchNumber())
+                .allocatedQuantity(allocatedQty)
+                .expiredDate(lot.getExpiredDate())
+                .daysToExpiration(days)
+                .locationCode(locCode)
+                .build();
+    }
+
+    private FefoLotSuggestionResponse.SuggestedLotItem buildSuggestedLotItem(
+            ProductLot lot, BigDecimal reqQty, ProductLot primaryLot, LocalDate today) {
+        Long days = lot.getExpiredDate() != null ? ChronoUnit.DAYS.between(today, lot.getExpiredDate()) : null;
+        String expiryStatus = (days != null && days <= 30) ? "NEAR_EXPIRATION" : "SAFE";
+        boolean isSuff = lot.getQuantity() != null && lot.getQuantity().compareTo(reqQty) >= 0;
+        boolean isDef = primaryLot != null && Objects.equals(lot.getId(), primaryLot.getId());
+
+        WarehouseLocation loc = lot.getLocation();
+
+        return FefoLotSuggestionResponse.SuggestedLotItem.builder()
+                .lotId(lot.getId())
+                .batchNumber(lot.getBatchNumber())
+                .manufactureDate(lot.getManufactureDate())
+                .expiredDate(lot.getExpiredDate())
+                .quantity(lot.getQuantity())
+                .availableQuantity(lot.getQuantity())
+                .daysToExpiration(days)
+                .expiryStatus(expiryStatus)
+                .locationId(loc != null ? loc.getId() : null)
+                .locationCode(loc != null ? loc.getCode() : null)
+                .locationName(loc != null ? loc.getName() : null)
+                .zone(loc != null ? loc.getZone() : null)
+                .shelf(loc != null ? loc.getShelf() : null)
+                .isSufficient(isSuff)
+                .isDefault(isDef)
+                .build();
+    }
+
+    // =========================================================================
     // HELPER METHODS
     // =========================================================================
 
