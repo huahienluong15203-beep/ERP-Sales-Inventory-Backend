@@ -18,6 +18,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
+
 /**
  * Controller quản lý Lô hàng & Hạn sử dụng (SCRUM-48 / S6-01).
  * Tuân thủ quy chuẩn Backend Engineering Best Practices: Thin Controller, @Valid, Method Security.
@@ -167,5 +169,31 @@ public class ProductLotController {
             @Parameter(description = "ID kho lọc") @RequestParam(required = false) Long warehouseId,
             @AuthenticationPrincipal UserDetailsImpl actor) {
         return ResponseEntity.ok(productLotService.getLotSummary(daysThreshold, warehouseId, actor));
+    }
+
+    // =========================================================================
+    // 7. GỢI Ý LÔ XUẤT THEO NGUYÊN TẮC FEFO & XÁC THỰC CHỌN LÔ (S6-04)
+    // =========================================================================
+
+    @GetMapping("/fefo-suggestion")
+    @Operation(summary = "Gợi ý lô xuất theo nguyên tắc FEFO (S6-04)",
+            description = "Mặc định gợi ý lô có hạn sử dụng gần nhất còn đủ số lượng. Trả về danh sách lô khả dụng cho component dropdown trên UI xuất kho.")
+    @PreAuthorize("hasAnyRole('WAREHOUSE', 'WH_MANAGER', 'ADMIN', 'ACCOUNTANT', 'SALES_MANAGER', 'SALES_REP')")
+    public ResponseEntity<FefoLotSuggestionResponse> getFefoLotSuggestion(
+            @Parameter(description = "ID sản phẩm", required = true) @RequestParam Long productId,
+            @Parameter(description = "ID kho", required = true) @RequestParam Long warehouseId,
+            @Parameter(description = "Số lượng yêu cầu xuất (theo ĐVT cơ sở)") @RequestParam(required = false, defaultValue = "1") BigDecimal requestedQuantity,
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        return ResponseEntity.ok(productLotService.getFefoLotSuggestion(productId, warehouseId, requestedQuantity, actor));
+    }
+
+    @PostMapping("/validate-selection")
+    @Operation(summary = "Kiểm tra tính hợp lệ khi thủ kho chọn lô xuất kho (S6-04)",
+            description = "Xác thực tính hợp lệ của lô được chọn và bắt buộc nhập lý do nếu chọn khác lô mặc định do FEFO gợi ý.")
+    @PreAuthorize("hasAnyRole('WAREHOUSE', 'WH_MANAGER', 'ADMIN')")
+    public ResponseEntity<LotSelectionValidationResponse> validateLotSelection(
+            @Valid @RequestBody LotSelectionValidationRequest request,
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        return ResponseEntity.ok(productLotService.validateLotSelection(request, actor));
     }
 }

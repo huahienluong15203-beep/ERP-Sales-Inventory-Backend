@@ -301,4 +301,67 @@ class ProductLotControllerTest {
                 .andExpect(jsonPath("$.totalLots").value(10))
                 .andExpect(jsonPath("$.safeLots").value(7));
     }
+
+    @Test
+    @DisplayName("GET /api/inventory/lots/fefo-suggestion - Gợi ý lô xuất FEFO tự động -> 200 OK")
+    void getFefoLotSuggestion_returnsOk() throws Exception {
+        FefoLotSuggestionResponse response = FefoLotSuggestionResponse.builder()
+                .productId(20L)
+                .warehouseId(10L)
+                .requestedQuantity(new BigDecimal("30"))
+                .suggestedBatchNumber("LOT-202610-A")
+                .isSingleLotSufficient(true)
+                .suggestedLot(FefoLotSuggestionResponse.SuggestedLotItem.builder()
+                        .lotId(1L)
+                        .batchNumber("LOT-202610-A")
+                        .quantity(new BigDecimal("50"))
+                        .availableQuantity(new BigDecimal("50"))
+                        .isDefault(true)
+                        .isSufficient(true)
+                        .build())
+                .build();
+
+        when(productLotService.getFefoLotSuggestion(eq(20L), eq(10L), any(BigDecimal.class), any()))
+                .thenReturn(response);
+
+        mockMvc.perform(get("/api/inventory/lots/fefo-suggestion")
+                        .param("productId", "20")
+                        .param("warehouseId", "10")
+                        .param("requestedQuantity", "30"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.suggestedBatchNumber").value("LOT-202610-A"))
+                .andExpect(jsonPath("$.isSingleLotSufficient").value(true));
+    }
+
+    @Test
+    @DisplayName("POST /api/inventory/lots/validate-selection - Kiểm tra tính hợp lệ và lý do khi thủ kho chọn lô -> 200 OK")
+    void validateLotSelection_returnsOk() throws Exception {
+        LotSelectionValidationRequest req = LotSelectionValidationRequest.builder()
+                .productId(20L)
+                .warehouseId(10L)
+                .selectedBatchNumber("LOT-202610-B")
+                .requestedQuantity(new BigDecimal("20"))
+                .lotChangeReason("Khách yêu cầu date mới")
+                .build();
+
+        LotSelectionValidationResponse response = LotSelectionValidationResponse.builder()
+                .valid(true)
+                .selectedBatchNumber("LOT-202610-B")
+                .suggestedBatchNumber("LOT-202610-A")
+                .isDifferentFromSuggested(true)
+                .requiresReason(true)
+                .reasonValid(true)
+                .message("Lô hàng hợp lệ kèm lý do")
+                .build();
+
+        when(productLotService.validateLotSelection(any(), any())).thenReturn(response);
+
+        mockMvc.perform(post("/api/inventory/lots/validate-selection")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.valid").value(true))
+                .andExpect(jsonPath("$.requiresReason").value(true))
+                .andExpect(jsonPath("$.reasonValid").value(true));
+    }
 }

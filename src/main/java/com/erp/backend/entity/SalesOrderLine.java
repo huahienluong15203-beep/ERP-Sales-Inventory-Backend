@@ -107,4 +107,20 @@ public class SalesOrderLine {
     // S6-05: lý do kho xuất thiếu dòng này
     @Column(name = "dispatch_shortage_reason", length = 255)
     private String dispatchShortageReason;
+
+    // S6-04: Số lô thực xuất
+    @Column(name = "batch_number", length = 100)
+    private String batchNumber;
+
+    // S6-04: Số lô mặc định do FEFO gợi ý
+    @Column(name = "suggested_batch_number", length = 100)
+    private String suggestedBatchNumber;
+
+    // S6-04: Lý do đổi lô khác với lô gợi ý FEFO
+    @Column(name = "lot_change_reason", length = 500)
+    private String lotChangeReason;
+
+    // S6-04: Hạn sử dụng của lô đã xuất
+    @Column(name = "lot_expired_date")
+    private java.time.LocalDate lotExpiredDate;
 }

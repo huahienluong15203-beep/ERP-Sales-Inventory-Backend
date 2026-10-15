@@ -5,11 +5,16 @@ import com.erp.backend.dto.order.OrderDispatchRequest;
 import com.erp.backend.dto.order.OrderDispatchResponse;
 import com.erp.backend.dto.order.OrderLineDeliveryRequest;
 import com.erp.backend.dto.order.OrderLineDispatchRequest;
+import com.erp.backend.dto.inventory.lot.FefoLotSuggestionResponse;
 import com.erp.backend.dto.order.OrderResponse;
 import com.erp.backend.entity.AuditModule;
+import com.erp.backend.entity.Product;
+import com.erp.backend.entity.ProductLot;
 import com.erp.backend.entity.SalesOrder;
 import com.erp.backend.entity.SalesOrderApproval;
 import com.erp.backend.entity.SalesOrderLine;
+import com.erp.backend.entity.StockMovement;
+import com.erp.backend.entity.Warehouse;
 import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.CustomerRepository;
 import com.erp.backend.repository.SalesOrderApprovalRepository;
@@ -27,6 +32,7 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -41,6 +47,7 @@ import java.util.Set;
  * - Nhánh Huỷ (CANCELLED): Bắt buộc nhập lý do (AC2). Tự động nhả tồn đang giữ chỗ (AC2).
  * - Đơn đã xuất kho (DISPATCHED trở đi) thì nghiêm cấm huỷ, phải đi đường trả hàng (AC3).
  * - S5-01: Ghi nhận số lượng thực giao (DELIVERED) và phát hiện giao thiếu.
+ * - S6-04: Gợi ý lô xuất FEFO, xác thực lý do chọn lô khác và trừ đúng tồn của lô đã chọn.
  */
 @Slf4j
 @Service
@@ -58,6 +65,7 @@ public class OrderStatusService {
     private final SalesOrderApprovalRepository approvalRepository;
     private final CustomerRepository customerRepository;
     private final InventoryService inventoryService;
+    private final ProductLotService productLotService;
     private final AuditLogService auditLogService;
     private final OrderDraftService orderDraftService;
     private final com.erp.backend.repository.UserRepository userRepository;
@@ -363,6 +371,75 @@ public class OrderStatusService {
         if (!anyDispatched && !order.getLines().isEmpty()) {
             throw BusinessException.conflict("DISPATCH_NOTHING",
                     "Không có dòng hàng nào được xuất. Nếu không giao được đơn này, hãy huỷ đơn.", "lines");
+        }
+
+        Warehouse warehouse = order.getReservedWarehouse();
+        if (warehouse == null && order.getCustomer() != null) {
+            warehouse = inventoryService.resolveWarehouseForCustomer(order.getCustomer());
+        }
+
+        // S6-04: Xử lý lô xuất theo FEFO & trừ tồn lô đã chọn
+        for (SalesOrderLine line : order.getLines()) {
+            OrderLineDispatchRequest r = line.getId() != null ? byLine.get(line.getId()) : null;
+            BigDecimal ordered = line.getQuantity();
+            BigDecimal dispatched = r != null ? r.getDispatchedQuantity() : ordered;
+            if (dispatched == null || dispatched.signum() <= 0) {
+                continue;
+            }
+            BigDecimal lineBase = InventoryService.lineBaseQuantity(line);
+            BigDecimal dispatchedBase = dispatched.compareTo(ordered) == 0
+                    ? lineBase
+                    : dispatched.multiply(factorOf(line)).setScale(4, RoundingMode.HALF_UP).min(lineBase);
+
+            Product product = line.getProduct();
+            if (product != null && Boolean.TRUE.equals(product.getHasBatchManagement()) && warehouse != null) {
+                // S6-04 AC1: Thuật toán FEFO gợi ý xuất lô tự động (lô HSD gần nhất còn đủ số lượng)
+                FefoLotSuggestionResponse fefo = productLotService.getFefoLotSuggestion(
+                        product.getId(), warehouse.getId(), dispatchedBase, actor);
+                String suggestedBatch = (fefo != null && fefo.getSuggestedLot() != null)
+                        ? fefo.getSuggestedLot().getBatchNumber()
+                        : null;
+                LocalDate suggestedExp = (fefo != null && fefo.getSuggestedLot() != null)
+                        ? fefo.getSuggestedLot().getExpiredDate()
+                        : null;
+                line.setSuggestedBatchNumber(suggestedBatch);
+
+                String chosenBatch = (r != null && StringUtils.hasText(r.getBatchNumber()))
+                        ? r.getBatchNumber().trim()
+                        : (StringUtils.hasText(line.getBatchNumber()) ? line.getBatchNumber().trim() : suggestedBatch);
+
+                String changeReason = (r != null && StringUtils.hasText(r.getLotChangeReason()))
+                        ? r.getLotChangeReason().trim()
+                        : line.getLotChangeReason();
+
+                if (StringUtils.hasText(chosenBatch)) {
+                    // S6-04 AC2: Thủ kho chọn lô khác được nhưng phải nhập lý do
+                    boolean isDifferent = suggestedBatch != null && !suggestedBatch.equalsIgnoreCase(chosenBatch);
+                    if (isDifferent) {
+                        if (!StringUtils.hasText(changeReason) || changeReason.trim().length() < 5) {
+                            throw new BusinessException(HttpStatus.BAD_REQUEST, "LOT_CHANGE_REASON_REQUIRED",
+                                    "Dòng hàng '" + line.getProductName() + "' (" + line.getProductSku()
+                                            + "): chọn xuất lô '" + chosenBatch + "' khác với lô gợi ý FEFO ('"
+                                            + suggestedBatch + "'). Bắt buộc nhập lý do đổi lô (tối thiểu 5 ký tự).", "lines");
+                        }
+                        line.setLotChangeReason(changeReason.trim());
+                    } else {
+                        line.setLotChangeReason(null);
+                    }
+
+                    // S6-04 AC3: Xuất kho trừ đúng tồn của lô đã chọn
+                    ProductLot lotDeducted = productLotService.deductLotStock(
+                            product.getId(), warehouse.getId(), chosenBatch, dispatchedBase,
+                            StockMovement.DOC_SALES_ORDER, order.getId(), order.getCode(), actor);
+
+                    line.setBatchNumber(chosenBatch);
+                    if (lotDeducted != null) {
+                        line.setLotExpiredDate(lotDeducted.getExpiredDate());
+                    } else if (suggestedExp != null && chosenBatch.equalsIgnoreCase(suggestedBatch)) {
+                        line.setLotExpiredDate(suggestedExp);
+                    }
+                }
+            }
         }
 
         // Trừ tồn + giải phóng giữ chỗ khi dòng còn số lượng gốc (phải gọi trước khi tách dòng)

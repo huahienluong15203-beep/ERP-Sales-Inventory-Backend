@@ -26,4 +26,12 @@ public class OrderLineDispatchRequest {
 
     @Size(max = 255, message = "Lý do xuất thiếu tối đa 255 ký tự")
     private String shortageReason;
+
+    // S6-04: Số lô xuất kho (nếu rỗng, hệ thống tự động gợi ý theo FEFO)
+    @Size(max = 100, message = "Số lô tối đa 100 ký tự")
+    private String batchNumber;
+
+    // S6-04: Lý do chọn lô khác lô gợi ý FEFO (bắt buộc khi batchNumber khác lô gợi ý FEFO)
+    @Size(max = 500, message = "Lý do đổi lô tối đa 500 ký tự")
+    private String lotChangeReason;
 }

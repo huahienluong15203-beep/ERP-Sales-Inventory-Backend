@@ -770,7 +770,11 @@ public class OrderDraftService {
                             deliveredQty,
                             shortageQty,
                             isShortage,
-                            l.getShortageReason());
+                            l.getShortageReason(),
+                            l.getBatchNumber(),
+                            l.getSuggestedBatchNumber(),
+                            l.getLotChangeReason(),
+                            l.getLotExpiredDate());
                 })
                 .toList();
 

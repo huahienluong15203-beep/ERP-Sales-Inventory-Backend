@@ -327,7 +327,7 @@ public class PickingListService {
         item.setPickedQuantity(pickedQty);
         item.setIsPicked(Boolean.TRUE.equals(request.getIsPicked()) || pickedQty.compareTo(BigDecimal.ZERO) > 0);
         if (StringUtils.hasText(request.getActualBatchNumber())) {
-            item.setActualBatchNumber(request.getActualBatchNumber().trim());
+            validateAndApplyBatchNumber(item, pickingList.getWarehouse(), request.getActualBatchNumber(), request.getLotChangeReason());
         }
         if (request.getNotes() != null) {
             item.setNotes(request.getNotes().trim());
@@ -389,7 +389,7 @@ public class PickingListService {
             item.setPickedQuantity(picked);
             item.setIsPicked(Boolean.TRUE.equals(progress.getIsPicked()) || picked.compareTo(BigDecimal.ZERO) > 0);
             if (StringUtils.hasText(progress.getActualBatchNumber())) {
-                item.setActualBatchNumber(progress.getActualBatchNumber().trim());
+                validateAndApplyBatchNumber(item, pickingList.getWarehouse(), progress.getActualBatchNumber(), progress.getLotChangeReason());
             }
             if (progress.getNotes() != null) {
                 item.setNotes(progress.getNotes().trim());
@@ -443,6 +443,30 @@ public class PickingListService {
                 }
             }
             item.setIsPicked(true);
+        }
+
+        // S6-04: Đồng bộ số lô thực xuất và lý do đổi lô về các dòng đơn hàng
+        for (PickingListItem item : pickingList.getItems()) {
+            String chosenBatch = StringUtils.hasText(item.getActualBatchNumber())
+                    ? item.getActualBatchNumber().trim()
+                    : item.getSuggestedBatchNumber();
+
+            if (StringUtils.hasText(chosenBatch) && item.getAllocations() != null) {
+                for (PickingListItemAllocation alloc : item.getAllocations()) {
+                    SalesOrder order = alloc.getOrder();
+                    if (order != null && order.getLines() != null) {
+                        for (SalesOrderLine line : order.getLines()) {
+                            if (line.getProduct() != null && line.getProduct().getId().equals(item.getProduct().getId())) {
+                                line.setBatchNumber(chosenBatch);
+                                line.setSuggestedBatchNumber(item.getSuggestedBatchNumber());
+                                line.setLotChangeReason(item.getLotChangeReason());
+                                line.setLotExpiredDate(item.getSuggestedExpiredDate());
+                                salesOrderRepository.save(order);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         pickingList.setStatus(PickingList.STATUS_COMPLETED);
@@ -575,25 +599,6 @@ public class PickingListService {
                     }
                     h.location = loc;
 
-                    // 2. Gợi ý số lô theo FEFO (nếu có quản lý lô)
-                    if (Boolean.TRUE.equals(p.getHasBatchManagement())) {
-                        List<ProductLot> validLots = productLotRepository
-                                .findByProduct_IdAndWarehouse_IdOrderByExpiredDateAsc(p.getId(), warehouseId).stream()
-                                .filter(lot -> lot.getQuantity() != null && lot.getQuantity().compareTo(BigDecimal.ZERO) > 0)
-                                .filter(lot -> lot.getExpiredDate() == null || !lot.getExpiredDate().isBefore(today))
-                                .filter(lot -> !"LOCKED".equalsIgnoreCase(lot.getStatus()))
-                                .collect(Collectors.toList());
-
-                        if (!validLots.isEmpty()) {
-                            ProductLot bestLot = validLots.get(0);
-                            h.suggestedBatchNumber = bestLot.getBatchNumber();
-                            h.suggestedExpiredDate = bestLot.getExpiredDate();
-                            if (h.location == null && bestLot.getLocation() != null) {
-                                h.location = bestLot.getLocation();
-                            }
-                        }
-                    }
-
                     return h;
                 });
 
@@ -604,6 +609,33 @@ public class PickingListService {
                 ah.order = o;
                 ah.requestedQuantity = lineBaseQty;
                 holder.allocations.add(ah);
+            }
+        }
+
+        // 2. Gợi ý số lô theo FEFO (S6-04 AC1: Mặc định gợi ý lô có hạn sử dụng gần nhất còn đủ số lượng)
+        for (GroupedItemHolder h : map.values()) {
+            Product p = h.product;
+            if (Boolean.TRUE.equals(p.getHasBatchManagement())) {
+                List<ProductLot> validLots = productLotRepository
+                        .findByProduct_IdAndWarehouse_IdOrderByExpiredDateAsc(p.getId(), warehouseId).stream()
+                        .filter(lot -> lot.getQuantity() != null && lot.getQuantity().compareTo(BigDecimal.ZERO) > 0)
+                        .filter(lot -> lot.getExpiredDate() == null || !lot.getExpiredDate().isBefore(today))
+                        .filter(lot -> !"LOCKED".equalsIgnoreCase(lot.getStatus()))
+                        .collect(Collectors.toList());
+
+                if (!validLots.isEmpty()) {
+                    // S6-04 AC1: Mặc định gợi ý lô có hạn sử dụng gần nhất còn đủ số lượng
+                    ProductLot bestLot = validLots.stream()
+                            .filter(lot -> lot.getQuantity().compareTo(h.totalQuantity) >= 0)
+                            .findFirst()
+                            .orElse(validLots.get(0));
+
+                    h.suggestedBatchNumber = bestLot.getBatchNumber();
+                    h.suggestedExpiredDate = bestLot.getExpiredDate();
+                    if (h.location == null && bestLot.getLocation() != null) {
+                        h.location = bestLot.getLocation();
+                    }
+                }
             }
         }
 
@@ -650,6 +682,50 @@ public class PickingListService {
                 remainingPicked = BigDecimal.ZERO;
             }
         }
+    }
+
+    private void validateAndApplyBatchNumber(
+            PickingListItem item,
+            Warehouse warehouse,
+            String actualBatch,
+            String lotChangeReason) {
+
+        if (!StringUtils.hasText(actualBatch)) {
+            return;
+        }
+        String cleanActual = actualBatch.trim();
+        String suggested = item.getSuggestedBatchNumber();
+        boolean isChanged = suggested != null && !suggested.equalsIgnoreCase(cleanActual);
+
+        if (isChanged) {
+            if (!StringUtils.hasText(lotChangeReason) || lotChangeReason.trim().length() < 5) {
+                throw BusinessException.badRequest("LOT_CHANGE_REASON_REQUIRED",
+                        "Thủ kho chọn lô thực tế ('" + cleanActual + "') khác với lô gợi ý FEFO ('" + suggested
+                                + "') cho mặt hàng '" + item.getProductName() + "'. Bắt buộc nhập lý do đổi lô (tối thiểu 5 ký tự).");
+            }
+            item.setLotChangeReason(lotChangeReason.trim());
+        } else {
+            item.setLotChangeReason(null);
+        }
+
+        Product product = item.getProduct();
+        if (product != null && Boolean.TRUE.equals(product.getHasBatchManagement())) {
+            ProductLot lot = productLotRepository
+                    .findByProduct_IdAndWarehouse_IdAndBatchNumber(product.getId(), warehouse.getId(), cleanActual)
+                    .orElseThrow(() -> BusinessException.notFound("Không tìm thấy lô '" + cleanActual
+                            + "' của sản phẩm '" + product.getSku() + "' tại kho " + warehouse.getName()));
+
+            if ("LOCKED".equalsIgnoreCase(lot.getStatus())) {
+                throw BusinessException.badRequest("LOT_LOCKED",
+                        "Lô hàng '" + cleanActual + "' đang bị khóa (LOCKED), không được phép lấy để xuất.");
+            }
+            if (lot.getExpiredDate() != null && lot.getExpiredDate().isBefore(LocalDate.now())) {
+                throw BusinessException.badRequest("LOT_EXPIRED",
+                        "Lô hàng '" + cleanActual + "' đã hết hạn sử dụng (" + lot.getExpiredDate() + ").");
+            }
+        }
+
+        item.setActualBatchNumber(cleanActual);
     }
 
     private void recalculateTotals(PickingList pickingList) {
@@ -760,6 +836,7 @@ public class PickingListService {
                 .suggestedBatchNumber(item.getSuggestedBatchNumber())
                 .suggestedExpiredDate(item.getSuggestedExpiredDate())
                 .actualBatchNumber(item.getActualBatchNumber())
+                .lotChangeReason(item.getLotChangeReason())
                 .requestedQuantity(item.getRequestedQuantity())
                 .pickedQuantity(item.getPickedQuantity())
                 .isPicked(item.getIsPicked())

@@ -32,6 +32,10 @@ public class PickingItemUpdateRequest {
     @Schema(description = "Số lô thực tế đã lấy (nếu khác lô gợi ý)")
     private String actualBatchNumber;
 
+    @Size(max = 500, message = "Lý do đổi lô tối đa 500 ký tự")
+    @Schema(description = "Lý do đổi lô khác với lô gợi ý FEFO (BẮT BUỘC nếu actualBatchNumber != suggestedBatchNumber)")
+    private String lotChangeReason;
+
     @Size(max = 500, message = "Ghi chú tối đa 500 ký tự")
     private String notes;
 }

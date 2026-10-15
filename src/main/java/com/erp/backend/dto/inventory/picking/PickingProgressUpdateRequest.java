@@ -42,6 +42,8 @@ public class PickingProgressUpdateRequest {
 
         private String actualBatchNumber;
 
+        private String lotChangeReason;
+
         private String notes;
     }
 }

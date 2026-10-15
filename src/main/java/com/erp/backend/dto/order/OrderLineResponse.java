@@ -45,7 +45,35 @@ public record OrderLineResponse(
         BigDecimal deliveredQuantity,
         BigDecimal shortageQuantity,
         Boolean isShortage,
-        String shortageReason) {
+        String shortageReason,
+        String batchNumber,
+        String suggestedBatchNumber,
+        String lotChangeReason,
+        java.time.LocalDate lotExpiredDate) {
+
+    public OrderLineResponse(Long id, Integer lineNo, Long productId, String productSku,
+                             String productName, String unitName, BigDecimal conversionFactor,
+                             BigDecimal quantity, String baseUnit, BigDecimal baseQuantity,
+                             String priceListCode, BigDecimal unitPrice, BigDecimal pricePerUnit,
+                             BigDecimal floorPrice, BigDecimal grossAmount, String discountPolicyCode,
+                             BigDecimal discountAmount, BigDecimal netAmount,
+                             Boolean isCustomPrice, Boolean isBelowFloor,
+                             String warehouseCode, String warehouseName,
+                             BigDecimal physicalStock, BigDecimal reservedStock,
+                             BigDecimal availableStock, Boolean isOverStock,
+                             BigDecimal maxAllowedQuantity,
+                             BigDecimal deliveredQuantity,
+                             BigDecimal shortageQuantity,
+                             Boolean isShortage,
+                             String shortageReason) {
+        this(id, lineNo, productId, productSku, productName, unitName, conversionFactor,
+                quantity, baseUnit, baseQuantity, priceListCode, unitPrice, pricePerUnit,
+                floorPrice, grossAmount, discountPolicyCode, discountAmount, netAmount,
+                isCustomPrice, isBelowFloor, warehouseCode, warehouseName,
+                physicalStock, reservedStock, availableStock, isOverStock, maxAllowedQuantity,
+                deliveredQuantity, shortageQuantity, isShortage, shortageReason,
+                null, null, null, null);
+    }
 
     public OrderLineResponse(Long id, Integer lineNo, Long productId, String productSku,
                              String productName, String unitName, BigDecimal conversionFactor,
