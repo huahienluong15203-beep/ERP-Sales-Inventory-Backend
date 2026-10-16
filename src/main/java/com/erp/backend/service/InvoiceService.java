@@ -248,6 +248,9 @@ public class InvoiceService {
                 .subtotal(subtotal.setScale(2, RoundingMode.HALF_UP))
                 .discountTotal(discount.setScale(2, RoundingMode.HALF_UP))
                 .totalAmount(total(subtotal, discount))
+                .paidAmount(BigDecimal.ZERO)
+                .remainingAmount(total(subtotal, discount))
+                .paymentStatus(Invoice.PAYMENT_STATUS_UNPAID)
                 .status(Invoice.STATUS_ISSUED)
                 .note(StringUtils.hasText(note) ? note : null)
                 .issuedAt(LocalDateTime.now(clock))
@@ -370,7 +373,11 @@ public class InvoiceService {
                         Sort.by(Sort.Direction.DESC, "seqYear", "seqNumber")))
                 .map(i -> new InvoiceSummaryResponse(i.getId(), i.getCode(), i.getInvoiceDate(), i.getStatus(),
                         i.getCustomer().getId(), i.getCustomerCode(), i.getCustomerName(), i.getLines().size(),
-                        i.getTotalAmount(), i.getIssuedAt(), i.getIssuedByUsername())));
+                        i.getTotalAmount(),
+                        i.getPaidAmount() != null ? i.getPaidAmount() : BigDecimal.ZERO,
+                        i.getRemainingAmount() != null ? i.getRemainingAmount() : (i.getTotalAmount() != null ? i.getTotalAmount() : BigDecimal.ZERO),
+                        i.getPaymentStatus() != null ? i.getPaymentStatus() : Invoice.PAYMENT_STATUS_UNPAID,
+                        i.getIssuedAt(), i.getIssuedByUsername())));
     }
 
     @Transactional(readOnly = true)
@@ -444,8 +451,11 @@ public class InvoiceService {
         return new InvoiceResponse(i.getId(), i.getCode(), i.getInvoiceDate(), i.getStatus(),
                 i.getCustomer() != null ? i.getCustomer().getId() : null, i.getCustomerCode(), i.getCustomerName(),
                 i.getCustomerTaxCode(), i.getCustomerAddress(), i.getPeriodFrom(), i.getPeriodTo(), codes, lines,
-                i.getSubtotal(), i.getDiscountTotal(), i.getTotalAmount(), i.getNote(), i.getIssuedAt(),
-                i.getIssuedByUsername());
+                i.getSubtotal(), i.getDiscountTotal(), i.getTotalAmount(),
+                i.getPaidAmount() != null ? i.getPaidAmount() : BigDecimal.ZERO,
+                i.getRemainingAmount() != null ? i.getRemainingAmount() : (i.getTotalAmount() != null ? i.getTotalAmount() : BigDecimal.ZERO),
+                i.getPaymentStatus() != null ? i.getPaymentStatus() : Invoice.PAYMENT_STATUS_UNPAID,
+                i.getNote(), i.getIssuedAt(), i.getIssuedByUsername());
     }
 
     private static BigDecimal nz(BigDecimal v) {
