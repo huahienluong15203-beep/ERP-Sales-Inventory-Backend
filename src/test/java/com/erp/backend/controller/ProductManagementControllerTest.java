@@ -166,7 +166,7 @@ class ProductManagementControllerTest {
                 .build();
 
         PageResponse<ProductResponse> pageResponse = new PageResponse<>(List.of(pr), 0, 20, 1, 1);
-        when(productService.searchProducts(any(), any(), any(), any(), any())).thenReturn(pageResponse);
+        when(productService.searchProducts(any(), any(), any(), any(), any(), any())).thenReturn(pageResponse);
 
         mockMvc.perform(get("/api/products?keyword=coca&page=0&size=20"))
                 .andExpect(status().isOk())

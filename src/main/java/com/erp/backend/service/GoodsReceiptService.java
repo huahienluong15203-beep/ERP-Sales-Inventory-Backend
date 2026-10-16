@@ -433,4 +433,23 @@ public class GoodsReceiptService {
                     "Bạn không được phân công kho " + warehouse.getName() + " nên không thể nhập hàng vào kho này");
         }
     }
+
+    /**
+     * Xóa phiếu nhập kho nháp (DRAFT). Không cho phép xóa phiếu đã xác nhận.
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteReceipt(Long id, UserDetailsImpl actor) {
+        GoodsReceipt receipt = goodsReceiptRepository.findById(id)
+                .orElseThrow(() -> BusinessException.notFound("Không tìm thấy phiếu nhập kho với ID " + id));
+
+        if (!GoodsReceipt.STATUS_DRAFT.equalsIgnoreCase(receipt.getStatus())) {
+            throw BusinessException.badRequest("CANNOT_DELETE_CONFIRMED_RECEIPT",
+                    "Không thể xóa phiếu nhập kho đã xác nhận. Chỉ phiếu nháp mới được phép xóa.");
+        }
+
+        assertAssignedWarehouse(actor, receipt.getWarehouse());
+
+        goodsReceiptRepository.delete(receipt);
+        log.info("Xóa thành công phiếu nhập kho nháp: id={}, code={}", receipt.getId(), receipt.getCode());
+    }
 }
