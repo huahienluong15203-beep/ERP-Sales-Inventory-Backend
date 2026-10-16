@@ -310,6 +310,7 @@ public class DeliveryTripService {
         int failed = 0;
         int remaining = 0;
         BigDecimal value = BigDecimal.ZERO;
+        BigDecimal totalValue = BigDecimal.ZERO;
         for (SalesOrder o : orders) {
             String st = o.getStatus();
             if (SalesOrder.STATUS_DISPATCHED.equals(st)) {
@@ -322,6 +323,7 @@ public class DeliveryTripService {
             if (t.isInProgress()) {
                 value = value.add(valueOnRoad(o));
             }
+            totalValue = totalValue.add(nz(o.getTotalAmount()));
         }
         boolean overdue = t.isInProgress() && t.getExpectedReturnAt() != null && now.isAfter(t.getExpectedReturnAt());
         long overdueMinutes = overdue ? Duration.between(t.getExpectedReturnAt(), now).toMinutes() : 0;
@@ -329,7 +331,7 @@ public class DeliveryTripService {
         return new DeliveryTripSummaryResponse(t.getId(), t.getCode(), w != null ? w.getId() : null,
                 w != null ? w.getCode() : null, w != null ? w.getName() : null, t.getVehiclePlate(), t.getDriverName(),
                 t.getDriverPhone(), t.getStatus(), t.getDepartedAt(), t.getExpectedReturnAt(), t.getCompletedAt(),
-                orders.size(), delivered, failed, remaining, money(value), overdue, overdueMinutes, t.getNote());
+                orders.size(), delivered, failed, remaining, money(totalValue), money(value), overdue, overdueMinutes, t.getNote());
     }
 
     private DeliveryTripDetailResponse toDetail(DeliveryTrip t, List<SalesOrder> orders, LocalDateTime now) {
