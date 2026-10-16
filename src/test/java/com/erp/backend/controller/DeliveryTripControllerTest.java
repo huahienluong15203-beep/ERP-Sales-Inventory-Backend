@@ -153,6 +153,7 @@ class DeliveryTripControllerTest {
                 "29H-12345", "Anh Tuấn", "0912345678", "IN_PROGRESS",
                 LocalDateTime.now(), LocalDateTime.now().plusHours(4), null,
                 2, 0, 0, 2, new BigDecimal("10000000.00"), new BigDecimal("10000000.00"), false, 0L, null
+                2, 0, 0, 2, new BigDecimal("10000000.00"), new BigDecimal("10000000.00"), false, 0, null
         );
         DeliveryTripDetailResponse detail = new DeliveryTripDetailResponse(summary, List.of());
 
