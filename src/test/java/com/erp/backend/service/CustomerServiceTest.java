@@ -44,6 +44,7 @@ class CustomerServiceTest {
     @Mock private PriceListRepository priceListRepository;
     @Mock private SalesOrderRepository orderRepository;
     @Mock private CustomerCreditService creditService;
+    @Mock private com.erp.backend.repository.InvoiceRepository invoiceRepository;
     @Mock private com.erp.backend.repository.WarehouseRepository warehouseRepository;
     @Mock private PortalAccountService portalAccountService;
 
@@ -117,6 +118,27 @@ class CustomerServiceTest {
 
         assertThat(res.content()).hasSize(1);
         assertThat(res.content().get(0).currentDebt()).isEqualByComparingTo(new BigDecimal("40284000"));
+    }
+
+    @Test
+    @DisplayName("S7-07: Công nợ trong danh sách đại lý = đơn chưa xuất hoá đơn + số còn nợ trên hoá đơn (đã trừ tiền thu)")
+    void search_debtIncludesInvoiceRemaining() {
+        Customer c1 = customer(7, null);
+        Customer c2 = customer(8, null);
+        when(customerRepository.findAll(any(org.springframework.data.jpa.domain.Specification.class),
+                any(org.springframework.data.domain.Pageable.class)))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(c1, c2)));
+        when(orderRepository.sumTotalAmountByCustomerIdsAndStatuses(eq(List.of(7L, 8L)), eq(SalesOrder.OUTSTANDING_DEBT_STATUSES)))
+                .thenReturn(List.<Object[]>of(new Object[]{7L, new BigDecimal("1000000")}));
+        when(invoiceRepository.sumOpenRemainingByCustomerIds(List.of(7L, 8L)))
+                .thenReturn(List.<Object[]>of(new Object[]{7L, new BigDecimal("2500000")},
+                        new Object[]{8L, new BigDecimal("300000")}));
+
+        com.erp.backend.dto.user.PageResponse<CustomerResponse> res =
+                service.search(null, null, null, null, null, null, 0, 20, manager);
+
+        assertThat(res.content().get(0).currentDebt()).isEqualByComparingTo("3500000");
+        assertThat(res.content().get(1).currentDebt()).isEqualByComparingTo("300000");
     }
 
     // ======================= S3-03: TẠO / SỬA =======================
