@@ -36,12 +36,14 @@ public class StockMovement {
     public static final String TYPE_TRANSFER_IN = "TRANSFER_IN";
     public static final String TYPE_STOCKTAKE_ADJUST = "STOCKTAKE_ADJUST";
     public static final String TYPE_SALES_RETURN = "SALES_RETURN";
+    public static final String TYPE_STOCK_ADJUSTMENT = "STOCK_ADJUSTMENT";
 
     public static final String DOC_GOODS_RECEIPT = "GOODS_RECEIPT";
     public static final String DOC_SALES_ORDER = "SALES_ORDER";
     public static final String DOC_STOCK_TRANSFER = "STOCK_TRANSFER";
     public static final String DOC_STOCK_TAKE = "STOCK_TAKE";
     public static final String DOC_SALES_RETURN = "SALES_RETURN";
+    public static final String DOC_STOCK_ADJUSTMENT = "STOCK_ADJUSTMENT";
 
     public static final Map<String, String> TYPE_LABELS = Map.of(
             TYPE_RECEIPT, "Nhập kho",
@@ -50,7 +52,8 @@ public class StockMovement {
             TYPE_TRANSFER_OUT, "Xuất chuyển kho",
             TYPE_TRANSFER_IN, "Nhận chuyển kho",
             TYPE_STOCKTAKE_ADJUST, "Điều chỉnh kiểm kê",
-            TYPE_SALES_RETURN, "Nhập trả hàng từ đại lý");
+            TYPE_SALES_RETURN, "Nhập trả hàng từ đại lý",
+            TYPE_STOCK_ADJUSTMENT, "Điều chỉnh tồn kho (hỏng, mất, huỷ)");
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
