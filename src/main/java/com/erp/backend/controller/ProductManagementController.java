@@ -121,7 +121,7 @@ public class ProductManagementController {
             @AuthenticationPrincipal UserDetailsImpl actor) {
 
         int safePage = Math.max(page, 0);
-        int safeSize = size <= 0 ? 20 : Math.min(size, 100);
+        int safeSize = size <= 0 ? 20 : Math.min(size, 500);
 
         Sort sortOrder = Sort.by(Sort.Direction.DESC, "id");
         if (sort != null && !sort.isBlank()) {
