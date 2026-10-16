@@ -26,6 +26,7 @@ public record DeliveryTripSummaryResponse(
         int deliveredStops,
         int failedStops,
         int remainingStops,
+        BigDecimal totalValue,
         BigDecimal valueOnRoad,
         boolean overdue,
         long overdueMinutes,
