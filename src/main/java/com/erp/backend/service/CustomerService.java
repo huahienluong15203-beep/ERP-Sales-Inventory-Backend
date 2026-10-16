@@ -53,6 +53,7 @@ public class CustomerService {
     private final WarehouseRepository warehouseRepository;
     private final PortalAccountService portalAccountService;
     private final InvoiceRepository invoiceRepository;
+    private final CreditNoteRepository creditNoteRepository;
 
     /** S7-04: đại lý bị gắn cờ công nợ thì BLOCK = chặn tạo đơn mới, REQUIRE_APPROVAL = vẫn tạo nhưng chốt phải duyệt. */
     @org.springframework.beans.factory.annotation.Value("${erp.credit.flag-action:REQUIRE_APPROVAL}")
@@ -101,6 +102,8 @@ public class CustomerService {
             addDebtRows(debtMap, orderRepository.sumTotalAmountByCustomerIdsAndStatuses(
                     customerIds, SalesOrder.OUTSTANDING_DEBT_STATUSES));
             addDebtRows(debtMap, invoiceRepository.sumOpenRemainingByCustomerIds(customerIds));
+            // S8-02: số dư có do giảm trừ trả hàng chưa đối trừ được -> trừ vào công nợ
+            subtractDebtRows(debtMap, creditNoteRepository.sumUnappliedByCustomerIds(customerIds));
         }
 
         Map<CustomerGroup, RefItem> priceListMap = resolveEffectivePriceLists();
@@ -909,6 +912,21 @@ public class CustomerService {
 
     private static String blankToNull(String value) {
         return StringUtils.hasText(value) ? value.trim() : null;
+    }
+
+    /** S8-02: Trừ các dòng [customerId, số tiền] khỏi bảng công nợ theo đại lý. */
+    private static void subtractDebtRows(Map<Long, BigDecimal> debtMap, List<Object[]> rows) {
+        if (rows == null) {
+            return;
+        }
+        List<Object[]> negated = new java.util.ArrayList<>();
+        for (Object[] row : rows) {
+            if (row != null && row.length >= 2 && row[1] != null) {
+                BigDecimal v = row[1] instanceof BigDecimal b ? b : new BigDecimal(row[1].toString());
+                negated.add(new Object[]{row[0], v.negate()});
+            }
+        }
+        addDebtRows(debtMap, negated);
     }
 
     /** Cộng các dòng [customerId, số tiền] vào bảng công nợ theo đại lý. */

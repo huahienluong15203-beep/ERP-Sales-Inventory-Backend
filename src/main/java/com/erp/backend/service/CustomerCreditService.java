@@ -4,6 +4,7 @@ import com.erp.backend.dto.customer.CreditStatusResponse;
 import com.erp.backend.entity.Customer;
 import com.erp.backend.entity.SalesOrder;
 import com.erp.backend.exception.BusinessException;
+import com.erp.backend.repository.CreditNoteRepository;
 import com.erp.backend.repository.CustomerRepository;
 import com.erp.backend.repository.InvoiceRepository;
 import com.erp.backend.repository.SalesOrderRepository;
@@ -27,7 +28,8 @@ import java.util.Locale;
 /**
  * S4-02: Kiểm tra công nợ khi tạo đơn.
  * - Công nợ hiện tại (S7-07) = tiền các đơn đang nợ CHƯA xuất hoá đơn (SalesOrder.OUTSTANDING_DEBT_STATUSES)
- *   + số còn nợ trên các hoá đơn (đã trừ tiền thu ở S7-02). Đơn đã xuất hoá đơn không cộng lần 2.
+ *   + số còn nợ trên các hoá đơn (đã trừ tiền thu ở S7-02 và giảm trừ trả hàng ở S8-02)
+ *   - số dư có do giảm trừ trả hàng chưa đối trừ được (S8-02). Đơn đã xuất hoá đơn không cộng lần 2.
  * - Quá hạn: đơn chưa xuất hoá đơn tính hạn từ ngày duyệt; hoá đơn tính hạn từ ngày hoá đơn (giống màn thu tiền S7-02).
  * - Tiền đơn + công nợ hiện tại > hạn mức -> đơn "cần duyệt" (không chặn, chuyển duyệt ở S4-05).
  * - Có khoản nợ quá số ngày nợ tối đa (maxDebtDays) -> chặn tạo đơn mới hoàn toàn.
@@ -41,6 +43,7 @@ public class CustomerCreditService {
     private final SalesOrderRepository orderRepository;
     private final CustomerRepository customerRepository;
     private final InvoiceRepository invoiceRepository;
+    private final CreditNoteRepository creditNoteRepository;
 
     // Cho phép test cố định "hôm nay"
     Clock clock = Clock.system(VN_ZONE);
@@ -65,7 +68,8 @@ public class CustomerCreditService {
         BigDecimal limit = money(customer.getCreditLimit());
         BigDecimal currentDebt = money(orderRepository.sumTotalAmountByCustomerAndStatuses(
                 customer.getId(), SalesOrder.OUTSTANDING_DEBT_STATUSES))
-                .add(money(invoiceRepository.sumOpenRemainingByCustomer(customer.getId())));
+                .add(money(invoiceRepository.sumOpenRemainingByCustomer(customer.getId())))
+                .subtract(money(creditNoteRepository.sumUnappliedByCustomer(customer.getId())));
         BigDecimal available = limit.subtract(currentDebt);
         BigDecimal debtAfter = currentDebt.add(amount);
         boolean exceeds = amount.signum() > 0 && debtAfter.compareTo(limit) > 0;
