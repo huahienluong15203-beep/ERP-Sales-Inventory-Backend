@@ -34,6 +34,7 @@ class CustomerCreditServiceTest {
     @Mock private SalesOrderRepository orderRepository;
     @Mock private CustomerRepository customerRepository;
     @Mock private InvoiceRepository invoiceRepository;
+    @Mock private com.erp.backend.repository.CreditNoteRepository creditNoteRepository;
 
     @InjectMocks private CustomerCreditService service;
 
@@ -148,6 +149,20 @@ class CustomerCreditServiceTest {
         assertThat(res.currentDebt()).isEqualByComparingTo("3000000");
         assertThat(res.availableCredit()).isEqualByComparingTo("7000000");
         assertThat(res.exceedsLimit()).isFalse();
+    }
+
+    @Test
+    @DisplayName("S8-02: Số dư có do giảm trừ trả hàng chưa đối trừ được -> trừ vào công nợ, tăng hạn mức còn lại")
+    void unappliedCreditNote_reducesDebt() {
+        debt("1000000");
+        when(invoiceRepository.sumOpenRemainingByCustomer(6L)).thenReturn(new BigDecimal("2000000"));
+        when(creditNoteRepository.sumUnappliedByCustomer(6L)).thenReturn(new BigDecimal("500000"));
+        noOverdue();
+
+        CreditStatusResponse res = service.evaluate(customer, BigDecimal.ZERO);
+
+        assertThat(res.currentDebt()).isEqualByComparingTo("2500000");
+        assertThat(res.availableCredit()).isEqualByComparingTo("7500000");
     }
 
     @Test
