@@ -34,6 +34,7 @@ public class PickingProgressUpdateRequest {
         private Long itemId;
 
         @NotNull(message = "Số lượng thực soạn không được để trống")
+        @jakarta.validation.constraints.DecimalMin(value = "0", message = "Số lượng thực soạn không được âm")
         private BigDecimal pickedQuantity;
 
         private Boolean isPicked;

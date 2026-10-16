@@ -45,6 +45,9 @@ public class LotSelectionValidationRequest {
     @Schema(description = "Lý do chọn lô khác lô gợi ý (BẮT BUỘC nếu selectedBatchNumber != suggestedBatchNumber)")
     private String lotChangeReason;
 
+    @Schema(description = "Ngưỡng cảnh báo cận hạn (ngày, mặc định 30)")
+    private Integer nearExpiryDays;
+
     @Schema(description = "Xác nhận ghi đè cho phép xuất nếu lô đã quá hạn (chỉ WH_MANAGER / ADMIN)")
     private Boolean overrideExpired;
 

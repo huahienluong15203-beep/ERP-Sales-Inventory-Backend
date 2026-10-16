@@ -312,6 +312,13 @@ public class PickingListService {
         BigDecimal pickedQty = request.getPickedQuantity();
         BigDecimal requestedQty = item.getRequestedQuantity();
 
+        // RÀNG BUỘC S6-03: Soạn dư bị chặn
+        if (pickedQty.compareTo(requestedQty) > 0) {
+            throw BusinessException.badRequest("PICKED_EXCEEDS_REQUESTED",
+                    "Số lượng thực soạn (" + pickedQty + ") không được vượt quá số lượng yêu cầu (" + requestedQty
+                            + ") cho mặt hàng '" + item.getProductName() + "'.");
+        }
+
         // RÀNG BUỘC S6-03: Soạn thiếu bắt buộc nhập lý do
         if (pickedQty.compareTo(requestedQty) < 0) {
             if (!StringUtils.hasText(request.getShortageReason()) || request.getShortageReason().trim().length() < 5) {
@@ -371,10 +378,21 @@ public class PickingListService {
         for (PickingProgressUpdateRequest.ItemProgress progress : request.getItems()) {
             PickingListItem item = itemMap.get(progress.getItemId());
             if (item == null) {
-                continue;
+                throw BusinessException.notFound("Không tìm thấy dòng hàng với ID " + progress.getItemId() + " trong phiếu soạn hàng này.");
+            }
+
+            if (progress.getPickedQuantity() != null && progress.getPickedQuantity().signum() < 0) {
+                throw BusinessException.badRequest("INVALID_PICKED_QUANTITY",
+                        "Số lượng thực soạn không được âm cho mặt hàng '" + item.getProductName() + "'.");
             }
 
             BigDecimal picked = progress.getPickedQuantity() != null ? progress.getPickedQuantity() : BigDecimal.ZERO;
+            if (picked.compareTo(item.getRequestedQuantity()) > 0) {
+                throw BusinessException.badRequest("PICKED_EXCEEDS_REQUESTED",
+                        "Mặt hàng '" + item.getProductName() + "' soạn vượt quá số lượng yêu cầu (" + picked
+                                + " / " + item.getRequestedQuantity() + ").");
+            }
+
             if (picked.compareTo(item.getRequestedQuantity()) < 0) {
                 if (!StringUtils.hasText(progress.getShortageReason()) || progress.getShortageReason().trim().length() < 5) {
                     throw BusinessException.badRequest("SHORTAGE_REASON_REQUIRED",
@@ -408,8 +426,7 @@ public class PickingListService {
         if (Boolean.TRUE.equals(request.getCompleteIfAllPicked())) {
             boolean allPicked = pickingList.getItems().stream().allMatch(i -> Boolean.TRUE.equals(i.getIsPicked()));
             if (allPicked) {
-                pickingList.setStatus(PickingList.STATUS_COMPLETED);
-                pickingList.setCompletedAt(LocalDateTime.now());
+                applyPickingCompletion(pickingList, actor, "Hoàn thành phiếu soạn hàng (tự động qua cập nhật hàng loạt)");
             }
         }
 
@@ -434,6 +451,18 @@ public class PickingListService {
             throw BusinessException.badRequest("ALREADY_CANCELLED", "Không thể hoàn thành phiếu đã bị hủy.");
         }
 
+        applyPickingCompletion(pickingList, actor, "Hoàn thành phiếu soạn hàng");
+        PickingList saved = pickingListRepository.save(pickingList);
+        return mapToResponse(saved);
+    }
+
+    /**
+     * S6-03 & S6-04: Xử lý nghiệp vụ hoàn tất phiếu soạn hàng:
+     * - Kiểm tra lý do soạn thiếu cho các dòng chưa đủ số lượng
+     * - Đồng bộ số lô thực xuất và HSD thực tế về các dòng đơn hàng
+     * - Cập nhật trạng thái phiếu COMPLETED và ghi nhận audit log
+     */
+    private void applyPickingCompletion(PickingList pickingList, UserDetailsImpl actor, String auditNote) {
         // Kiểm tra tất cả các dòng: nếu dòng nào soạn thiếu thì bắt buộc đã có lý do
         for (PickingListItem item : pickingList.getItems()) {
             if (item.getPickedQuantity().compareTo(item.getRequestedQuantity()) < 0) {
@@ -452,6 +481,16 @@ public class PickingListService {
                     : item.getSuggestedBatchNumber();
 
             if (StringUtils.hasText(chosenBatch) && item.getAllocations() != null) {
+                LocalDate chosenExpiredDate = item.getSuggestedExpiredDate();
+                if (StringUtils.hasText(item.getActualBatchNumber())
+                        && !item.getActualBatchNumber().equalsIgnoreCase(item.getSuggestedBatchNumber())
+                        && item.getProduct() != null) {
+                    chosenExpiredDate = productLotRepository
+                            .findByProduct_IdAndWarehouse_IdAndBatchNumber(item.getProduct().getId(), pickingList.getWarehouse().getId(), item.getActualBatchNumber().trim())
+                            .map(ProductLot::getExpiredDate)
+                            .orElse(item.getSuggestedExpiredDate());
+                }
+
                 for (PickingListItemAllocation alloc : item.getAllocations()) {
                     SalesOrder order = alloc.getOrder();
                     if (order != null && order.getLines() != null) {
@@ -460,7 +499,7 @@ public class PickingListService {
                                 line.setBatchNumber(chosenBatch);
                                 line.setSuggestedBatchNumber(item.getSuggestedBatchNumber());
                                 line.setLotChangeReason(item.getLotChangeReason());
-                                line.setLotExpiredDate(item.getSuggestedExpiredDate());
+                                line.setLotExpiredDate(chosenExpiredDate);
                                 salesOrderRepository.save(order);
                             }
                         }
@@ -469,19 +508,16 @@ public class PickingListService {
             }
         }
 
+        String oldStatus = pickingList.getStatus();
         pickingList.setStatus(PickingList.STATUS_COMPLETED);
         pickingList.setCompletedAt(LocalDateTime.now());
         recalculateTotals(pickingList);
 
-        PickingList saved = pickingListRepository.save(pickingList);
-
         if (auditLogService != null) {
-            auditLogService.record(AuditModule.INVENTORY, "COMPLETE_PICKING_LIST", "PICKING_LIST", saved.getId(),
-                    saved.getCode(), "IN_PROGRESS", "COMPLETED",
-                    "Hoàn thành phiếu soạn hàng", actor);
+            auditLogService.record(AuditModule.INVENTORY, "COMPLETE_PICKING_LIST", "PICKING_LIST", pickingList.getId(),
+                    pickingList.getCode(), oldStatus, "COMPLETED",
+                    auditNote, actor);
         }
-
-        return mapToResponse(saved);
     }
 
     /**
@@ -571,11 +607,6 @@ public class PickingListService {
         Map<Long, GroupedItemHolder> map = new LinkedHashMap<>();
         LocalDate today = LocalDate.now();
 
-        // Lấy danh sách vị trí lưu kho của kho này để fallback nếu cần
-        List<WarehouseLocation> warehouseLocations = locationRepository.findByWarehouse_IdOrderByCodeAsc(warehouseId);
-        Map<String, WarehouseLocation> locationCodeMap = warehouseLocations.stream()
-                .collect(Collectors.toMap(WarehouseLocation::getCode, l -> l, (a, b) -> a));
-
         for (SalesOrder o : orders) {
             if (o.getLines() == null) continue;
             for (SalesOrderLine line : o.getLines()) {
@@ -591,13 +622,8 @@ public class PickingListService {
                     h.totalQuantity = BigDecimal.ZERO;
                     h.allocations = new ArrayList<>();
 
-                    // 1. Xác định vị trí lưu kho
-                    WarehouseLocation loc = p.getDefaultLocation();
-                    if (loc == null && !warehouseLocations.isEmpty()) {
-                        // Fallback: chọn vị trí đầu tiên hoặc theo nhóm hàng
-                        loc = warehouseLocations.get(0);
-                    }
-                    h.location = loc;
+                    // 1. Xác định vị trí lưu kho: ưu tiên vị trí mặc định của sản phẩm
+                    h.location = p.getDefaultLocation();
 
                     return h;
                 });
@@ -829,7 +855,7 @@ public class PickingListService {
                 .baseUnit(item.getBaseUnit())
                 .locationId(item.getLocation() != null ? item.getLocation().getId() : null)
                 .locationCode(item.getLocationCode())
-                .locationName(item.getLocationName())
+                .locationName(StringUtils.hasText(item.getLocationName()) ? item.getLocationName() : "Chưa xác định vị trí")
                 .zone(item.getZone())
                 .shelf(item.getShelf())
                 .routeSequence(item.getRouteSequence())
@@ -927,7 +953,7 @@ public class PickingListService {
                     .baseUnit(product.getBaseUnit())
                     .locationId(location != null ? location.getId() : null)
                     .locationCode(location != null ? location.getCode() : null)
-                    .locationName(location != null ? location.getName() : null)
+                    .locationName(location != null && StringUtils.hasText(location.getName()) ? location.getName() : "Chưa xác định vị trí")
                     .zone(location != null ? location.getZone() : null)
                     .shelf(location != null ? location.getShelf() : null)
                     .routeSequence(routeSequence)
@@ -949,7 +975,7 @@ public class PickingListService {
                     .baseUnit(product.getBaseUnit())
                     .location(location)
                     .locationCode(location != null ? location.getCode() : null)
-                    .locationName(location != null ? location.getName() : null)
+                    .locationName(location != null && StringUtils.hasText(location.getName()) ? location.getName() : "Chưa xác định vị trí")
                     .zone(location != null ? location.getZone() : null)
                     .shelf(location != null ? location.getShelf() : null)
                     .routeSequence(routeSequence)

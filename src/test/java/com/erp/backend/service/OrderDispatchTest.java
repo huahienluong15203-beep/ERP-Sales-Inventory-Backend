@@ -445,4 +445,28 @@ class OrderDispatchTest {
         assertThat(pepsiLine.getLotChangeReason()).isEqualTo("Khách yêu cầu lấy lô mới hơn");
         verify(productLotService).deductLotStock(eq(11L), eq(1L), eq("LOT-PEP-02"), eq(new BigDecimal("50")), anyString(), anyLong(), anyString(), any());
     }
+
+    @Test
+    @DisplayName("S6-04 (TC601-24): Xuất kho khi tất cả lô đều hết hạn (không có lô hợp lệ) -> Bị từ chối lỗi 400 Bad Request")
+    void dispatch_withBatchManagement_allLotsExpired_throwsBadRequest() {
+        pepsi.setHasBatchManagement(true);
+        stubOrder();
+
+        // Tất cả lô hết hạn nên FEFO không gợi ý được lô nào (null)
+        FefoLotSuggestionResponse fefoEmpty = FefoLotSuggestionResponse.builder()
+                .suggestedBatchNumber(null)
+                .suggestedLot(null)
+                .build();
+
+        when(productLotService.getFefoLotSuggestion(eq(11L), eq(1L), any(BigDecimal.class), any()))
+                .thenReturn(fefoEmpty);
+
+        OrderDispatchRequest req = OrderDispatchRequest.builder()
+                .lines(List.of(lineReq(1L, "10", null), lineReq(2L, "50", null)))
+                .build();
+
+        assertThatThrownBy(() -> service.dispatch(100L, req, whManager))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "NO_VALID_LOT_AVAILABLE");
+    }
 }

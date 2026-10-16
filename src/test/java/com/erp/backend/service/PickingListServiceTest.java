@@ -114,7 +114,6 @@ class PickingListServiceTest {
 
         when(warehouseRepository.findById(1L)).thenReturn(Optional.of(whHn));
         when(salesOrderRepository.findAllById(List.of(301L, 302L))).thenReturn(List.of(order1, order2));
-        when(locationRepository.findByWarehouse_IdOrderByCodeAsc(1L)).thenReturn(List.of(locA1, locB1));
 
         PickingListPreviewResponse preview = service.previewPickingList(req, manager);
 
@@ -147,7 +146,6 @@ class PickingListServiceTest {
         when(warehouseRepository.findById(1L)).thenReturn(Optional.of(whHn));
         when(salesOrderRepository.findAllById(List.of(301L, 302L))).thenReturn(List.of(order1, order2));
         when(pickingListRepository.findOrderIdsInActivePickingList(any(), any())).thenReturn(Collections.emptyList());
-        when(locationRepository.findByWarehouse_IdOrderByCodeAsc(1L)).thenReturn(List.of(locA1, locB1));
 
         PickingListResponse res = service.createPickingList(req, manager);
 
@@ -287,5 +285,194 @@ class PickingListServiceTest {
         assertThat(res.getStatus()).isEqualTo(PickingList.STATUS_CANCELLED);
         assertThat(res.getCancelReason()).isEqualTo("Khách hàng đổi địa chỉ giao hàng");
         assertThat(order1.getStatus()).isEqualTo(SalesOrder.STATUS_APPROVED);
+    }
+
+    @Test
+    @DisplayName("S6-03 (TC603-06): SP không đặt vị trí mặc định không bị gán vị trí đầu kho và xếp cuối tuyến soạn")
+    void previewPickingList_productWithoutLocation_assignsToNullLocationSortedLast() {
+        // Product X (pepsi) có vị trí Kệ B-02 (locB1)
+        pepsi.setDefaultLocation(locB1);
+        // Product Y (coca) KHÔNG có vị trí mặc định
+        coca.setDefaultLocation(null);
+
+        PickingListPreviewRequest req = PickingListPreviewRequest.builder()
+                .warehouseId(1L)
+                .orderIds(List.of(301L))
+                .build();
+
+        when(warehouseRepository.findById(1L)).thenReturn(Optional.of(whHn));
+        when(salesOrderRepository.findAllById(List.of(301L))).thenReturn(List.of(order1));
+
+        PickingListPreviewResponse preview = service.previewPickingList(req, manager);
+
+        assertThat(preview.getItems()).hasSize(2);
+        // SP X (Pepsi - BIN-B1-01) phải xếp trước (routeSequence = 1)
+        assertThat(preview.getItems().get(0).getProductSku()).isEqualTo("SP-PEPSI");
+        assertThat(preview.getItems().get(0).getRouteSequence()).isEqualTo(1);
+        assertThat(preview.getItems().get(0).getLocationCode()).isEqualTo("BIN-B1-01");
+
+        // SP Y (Coca - không vị trí) phải xếp sau (routeSequence = 2), hiển thị "Chưa xác định vị trí"
+        assertThat(preview.getItems().get(1).getProductSku()).isEqualTo("SP-COCA");
+        assertThat(preview.getItems().get(1).getRouteSequence()).isEqualTo(2);
+        assertThat(preview.getItems().get(1).getLocationCode()).isNull();
+        assertThat(preview.getItems().get(1).getLocationName()).isEqualTo("Chưa xác định vị trí");
+    }
+
+    @Test
+    @DisplayName("S6-03 (TC603-12): Soạn dư so với yêu cầu -> Bị chặn với lỗi 400 Bad Request")
+    void updateItemProgress_pickedExceedsRequested_throwsBadRequest() {
+        PickingListItem item = PickingListItem.builder().id(10L).product(pepsi).productSku("SP-PEPSI")
+                .productName("Pepsi").requestedQuantity(new BigDecimal("30")).pickedQuantity(BigDecimal.ZERO).build();
+
+        PickingList pl = PickingList.builder().id(1L).warehouse(whHn).status(PickingList.STATUS_ASSIGNED)
+                .items(new ArrayList<>(List.of(item))).build();
+        item.setPickingList(pl);
+
+        when(pickingListRepository.findById(1L)).thenReturn(Optional.of(pl));
+
+        PickingItemUpdateRequest req = PickingItemUpdateRequest.builder()
+                .pickedQuantity(new BigDecimal("40")) // Vượt quá 30
+                .isPicked(true)
+                .build();
+
+        assertThatThrownBy(() -> service.updateItemProgress(1L, 10L, req, staff))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("không được vượt quá số lượng yêu cầu");
+    }
+
+    @Test
+    @DisplayName("S6-03 (TC603-13): Cập nhật hàng loạt số lượng âm -> Bị chặn với lỗi 400 Bad Request")
+    void updateProgress_negativePicked_throwsBadRequest() {
+        PickingListItem item = PickingListItem.builder().id(10L).product(pepsi).productSku("SP-PEPSI")
+                .productName("Pepsi").requestedQuantity(new BigDecimal("30")).pickedQuantity(BigDecimal.ZERO).build();
+
+        PickingList pl = PickingList.builder().id(1L).warehouse(whHn).status(PickingList.STATUS_IN_PROGRESS)
+                .items(new ArrayList<>(List.of(item))).build();
+        item.setPickingList(pl);
+
+        when(pickingListRepository.findById(1L)).thenReturn(Optional.of(pl));
+
+        PickingProgressUpdateRequest req = PickingProgressUpdateRequest.builder()
+                .items(List.of(
+                        PickingProgressUpdateRequest.ItemProgress.builder()
+                                .itemId(10L)
+                                .pickedQuantity(new BigDecimal("-5"))
+                                .build()
+                ))
+                .build();
+
+        assertThatThrownBy(() -> service.updateProgress(1L, req, staff))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("không được âm");
+    }
+
+    @Test
+    @DisplayName("S6-03 (TC603-14): Cập nhật hàng loạt có itemId không tồn tại -> Báo lỗi 404 Not Found")
+    void updateProgress_itemNotFound_throwsNotFound() {
+        PickingListItem item = PickingListItem.builder().id(10L).product(pepsi).productSku("SP-PEPSI")
+                .productName("Pepsi").requestedQuantity(new BigDecimal("30")).pickedQuantity(BigDecimal.ZERO).build();
+
+        PickingList pl = PickingList.builder().id(1L).warehouse(whHn).status(PickingList.STATUS_IN_PROGRESS)
+                .items(new ArrayList<>(List.of(item))).build();
+        item.setPickingList(pl);
+
+        when(pickingListRepository.findById(1L)).thenReturn(Optional.of(pl));
+
+        PickingProgressUpdateRequest req = PickingProgressUpdateRequest.builder()
+                .items(List.of(
+                        PickingProgressUpdateRequest.ItemProgress.builder()
+                                .itemId(999999L)
+                                .pickedQuantity(new BigDecimal("10"))
+                                .build()
+                ))
+                .build();
+
+        assertThatThrownBy(() -> service.updateProgress(1L, req, staff))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Không tìm thấy dòng hàng với ID 999999");
+    }
+
+    @Test
+    @DisplayName("S6-03 (TC603-18): Hoàn tất phiếu khi đổi lô mới -> Ghi đúng HSD thực tế của lô mới vào đơn hàng")
+    void completePickingList_withChangedLot_setsActualLotExpirationDate() {
+        pepsi.setHasBatchManagement(true);
+
+        PickingListItem item = PickingListItem.builder().id(10L).product(pepsi).productSku("SP-PEPSI")
+                .productName("Pepsi").requestedQuantity(new BigDecimal("10")).pickedQuantity(new BigDecimal("10"))
+                .suggestedBatchNumber("L15-OLD").suggestedExpiredDate(java.time.LocalDate.of(2026, 12, 31))
+                .actualBatchNumber("L15-NEW")
+                .isPicked(true).build();
+
+        PickingListItemAllocation alloc = PickingListItemAllocation.builder()
+                .order(order1).orderCode("SO-001").requestedQuantity(new BigDecimal("10")).pickedQuantity(new BigDecimal("10")).build();
+        item.addAllocation(alloc);
+
+        PickingList pl = PickingList.builder().id(1L).warehouse(whHn).status(PickingList.STATUS_IN_PROGRESS)
+                .totalRequestedQuantity(new BigDecimal("10")).totalPickedQuantity(new BigDecimal("10"))
+                .items(new ArrayList<>(List.of(item))).build();
+
+        when(pickingListRepository.findById(1L)).thenReturn(Optional.of(pl));
+
+        // Lô mới L15-NEW có HSD là 2027-12-31
+        ProductLot newLot = ProductLot.builder().id(501L).product(pepsi).warehouse(whHn)
+                .batchNumber("L15-NEW").expiredDate(java.time.LocalDate.of(2027, 12, 31)).build();
+        when(productLotRepository.findByProduct_IdAndWarehouse_IdAndBatchNumber(21L, 1L, "L15-NEW"))
+                .thenReturn(Optional.of(newLot));
+
+        PickingListResponse res = service.completePickingList(1L, staff);
+
+        assertThat(res.getStatus()).isEqualTo(PickingList.STATUS_COMPLETED);
+
+        // SalesOrderLine của order1 phải được cập nhật số lô L15-NEW và HSD 2027-12-31
+        SalesOrderLine line1 = order1.getLines().get(0);
+        assertThat(line1.getBatchNumber()).isEqualTo("L15-NEW");
+        assertThat(line1.getLotExpiredDate()).isEqualTo(java.time.LocalDate.of(2027, 12, 31));
+    }
+
+    @Test
+    @DisplayName("S6-03 (TC603-19): Tự hoàn tất qua updateProgress (completeIfAllPicked) -> Đồng bộ số lô về đơn và ghi audit log")
+    void updateProgress_completeIfAllPicked_syncsLotsToOrdersAndAudits() {
+        pepsi.setHasBatchManagement(true);
+
+        PickingListItem item = PickingListItem.builder().id(10L).product(pepsi).productSku("SP-PEPSI")
+                .productName("Pepsi").requestedQuantity(new BigDecimal("10")).pickedQuantity(BigDecimal.ZERO)
+                .suggestedBatchNumber("LOT-PEP-01").suggestedExpiredDate(java.time.LocalDate.of(2027, 6, 30))
+                .isPicked(false).allocations(new ArrayList<>()).build();
+
+        PickingListItemAllocation alloc = PickingListItemAllocation.builder()
+                .order(order1).orderCode("SO-001").requestedQuantity(new BigDecimal("10")).pickedQuantity(BigDecimal.ZERO).build();
+        item.addAllocation(alloc);
+
+        PickingList pl = PickingList.builder().id(1L).code("PKL-261016-ABCD").warehouse(whHn).status(PickingList.STATUS_ASSIGNED)
+                .totalRequestedQuantity(new BigDecimal("10")).totalPickedQuantity(BigDecimal.ZERO)
+                .items(new ArrayList<>(List.of(item))).build();
+        item.setPickingList(pl);
+
+        when(pickingListRepository.findById(1L)).thenReturn(Optional.of(pl));
+
+        PickingProgressUpdateRequest req = PickingProgressUpdateRequest.builder()
+                .items(List.of(
+                        PickingProgressUpdateRequest.ItemProgress.builder()
+                                .itemId(10L)
+                                .pickedQuantity(new BigDecimal("10"))
+                                .isPicked(true)
+                                .build()
+                ))
+                .completeIfAllPicked(true)
+                .build();
+
+        PickingListResponse res = service.updateProgress(1L, req, staff);
+
+        assertThat(res.getStatus()).isEqualTo(PickingList.STATUS_COMPLETED);
+        assertThat(pl.getCompletedAt()).isNotNull();
+
+        // Đồng bộ số lô về dòng đơn
+        SalesOrderLine line1 = order1.getLines().get(0);
+        assertThat(line1.getBatchNumber()).isEqualTo("LOT-PEP-01");
+        assertThat(line1.getLotExpiredDate()).isEqualTo(java.time.LocalDate.of(2027, 6, 30));
+
+        // Kiểm tra audit log đã được ghi
+        verify(auditLogService).record(eq(AuditModule.INVENTORY), eq("COMPLETE_PICKING_LIST"), eq("PICKING_LIST"),
+                eq(1L), eq("PKL-261016-ABCD"), anyString(), eq("COMPLETED"), anyString(), eq(staff));
     }
 }
