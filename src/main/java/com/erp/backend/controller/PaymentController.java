@@ -5,16 +5,19 @@ import com.erp.backend.dto.payment.PaymentReceiptCreateRequest;
 import com.erp.backend.dto.payment.PaymentReceiptResponse;
 import com.erp.backend.dto.user.PageResponse;
 import com.erp.backend.security.UserDetailsImpl;
+import com.erp.backend.service.PaymentReceiptPrintService;
 import com.erp.backend.service.PaymentService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -23,6 +26,7 @@ import java.util.List;
  * - POST /api/payments: Ghi nhận thanh toán và cấn trừ công nợ (Kế toán, Quản trị, Nhân viên kinh doanh).
  * - GET /api/payments: Tra cứu danh sách phiếu thu.
  * - GET /api/payments/{id}: Xem chi tiết phiếu thu và phân bổ cấn trừ.
+ * - GET /api/payments/{id}/print: In phiếu thu (S7-09).
  * - GET /api/payments/customers/{customerId}/invoices: Danh sách hoá đơn nợ để đối trừ.
  */
 @RestController
@@ -32,6 +36,7 @@ import java.util.List;
 public class PaymentController {
 
     private final PaymentService paymentService;
+    private final PaymentReceiptPrintService paymentReceiptPrintService;
 
     /**
      * Ghi nhận thanh toán và cấn trừ vào công nợ.
@@ -74,6 +79,20 @@ public class PaymentController {
             @AuthenticationPrincipal UserDetailsImpl actor) {
         PaymentReceiptResponse response = paymentService.getReceipt(id, actor);
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * S7-09: Mẫu in phiếu thu (HTML, 2 liên); in hoặc "Lưu dưới dạng PDF" từ trình duyệt.
+     * ?autoprint=true tự mở hộp thoại in. Quyền như xem phiếu thu.
+     */
+    @GetMapping("/{id}/print")
+    public ResponseEntity<String> printReceipt(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "false") boolean autoprint,
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        return ResponseEntity.ok()
+                .contentType(new MediaType(MediaType.TEXT_HTML, StandardCharsets.UTF_8))
+                .body(paymentReceiptPrintService.printHtml(id, autoprint, actor));
     }
 
     /**
