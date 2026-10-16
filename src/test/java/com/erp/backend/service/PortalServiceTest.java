@@ -42,6 +42,7 @@ class PortalServiceTest {
     @Mock private OrderQueryService orderQueryService;
     @Mock private CustomerCreditService creditService;
     @Mock private CustomerDeliveryAddressService deliveryAddressService;
+    @Mock private OrderDeliveryService orderDeliveryService;
 
     @InjectMocks private PortalService service;
 
@@ -203,5 +204,55 @@ class PortalServiceTest {
         assertThat(c.getValue().fromDate()).isEqualTo(from);
         assertThat(c.getValue().toDate()).isEqualTo(to);
         assertThat(c.getValue().keyword()).isEqualTo("DH2610");
+    }
+
+    // ======================= S6-09: TIMELINE GIAO HÀNG PORTAL =======================
+
+    @Test
+    @DisplayName("S6-09: Đại lý xem timeline giao hàng của đơn thuộc về mình thành công")
+    void deliveryTimeline_ownOrder_success() {
+        SalesOrder order = SalesOrder.builder().id(100L).code("DH261015-AB12").customer(customer).build();
+        when(orderRepository.findById(100L)).thenReturn(Optional.of(order));
+
+        OrderDeliveryTimelineResponse mockTimeline = mock(OrderDeliveryTimelineResponse.class);
+        when(orderDeliveryService.getDeliveryTimeline(100L, agent)).thenReturn(mockTimeline);
+
+        OrderDeliveryTimelineResponse result = service.deliveryTimeline(100L, agent);
+
+        assertThat(result).isSameAs(mockTimeline);
+        verify(orderDeliveryService).getDeliveryTimeline(100L, agent);
+    }
+
+    @Test
+    @DisplayName("SCRUM-233 / S6-09: Chặn user lạ - đại lý xem đơn của đại lý khác bị trả 404 NOT_FOUND")
+    void deliveryTimeline_otherCustomerOrder_throwsNotFound() {
+        Customer otherCustomer = customer(99L, salesRep(7L));
+        SalesOrder order = SalesOrder.builder().id(200L).code("DH261015-XYZ9").customer(otherCustomer).build();
+        when(orderRepository.findById(200L)).thenReturn(Optional.of(order));
+
+        assertThatThrownBy(() -> service.deliveryTimeline(200L, agent))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> {
+                    BusinessException be = (BusinessException) e;
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
+                    assertThat(be.getMessage()).contains("Không tìm thấy");
+                });
+
+        verifyNoInteractions(orderDeliveryService);
+    }
+
+    @Test
+    @DisplayName("S6-09: Tài khoản chưa liên kết đại lý gọi timeline bị ném 409 CONFLICT")
+    void deliveryTimeline_unlinkedUser_throwsConflict() {
+        UserDetailsImpl unlinkedActor = actor(999L, "ROLE_CUSTOMER");
+        when(customerRepository.findByPortalUser_Id(999L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.deliveryTimeline(100L, unlinkedActor))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> {
+                    BusinessException be = (BusinessException) e;
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(be.getMessage()).contains("Tài khoản chưa được");
+                });
     }
 }

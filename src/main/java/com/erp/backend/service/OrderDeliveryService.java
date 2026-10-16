@@ -458,7 +458,8 @@ public class OrderDeliveryService {
         int shortageCount = 0;
         if (order.getLines() != null) {
             for (SalesOrderLine l : order.getLines()) {
-                BigDecimal orderedQty = l.getQuantity() != null ? l.getQuantity() : BigDecimal.ZERO;
+                BigDecimal orderedQty = l.getOrderedQuantity() != null ? l.getOrderedQuantity()
+                        : (l.getQuantity() != null ? l.getQuantity() : BigDecimal.ZERO);
                 BigDecimal dispatchedQty = l.getQuantity() != null ? l.getQuantity() : BigDecimal.ZERO;
                 BigDecimal deliveredQty = l.getDeliveredQuantity();
                 if (deliveredQty == null && currentStep == 5 && !SalesOrder.STATUS_DELIVERY_FAILED.equals(st)) {
