@@ -23,4 +23,9 @@ public interface InvoiceRepository extends JpaRepository<Invoice, Long>, JpaSpec
     @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
     @Query("select i from Invoice i where i.id in :ids")
     java.util.List<Invoice> findAllByIdForUpdate(@Param("ids") java.util.Collection<Long> ids);
+
+    /** S7-08: Lấy tất cả hoá đơn còn nợ cần quét nhắc hạn thanh toán (Eager fetch customer để tránh N+1). */
+    @Query("select i from Invoice i join fetch i.customer c left join fetch c.user u left join fetch c.portalUser pu "
+            + "where i.status = 'ISSUED' and (i.paymentStatus is null or i.paymentStatus <> 'PAID') and i.remainingAmount > 0")
+    java.util.List<Invoice> findUnpaidIssuedInvoicesWithCustomer();
 }

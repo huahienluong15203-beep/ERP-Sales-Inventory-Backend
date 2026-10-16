@@ -163,6 +163,15 @@ public class Invoice {
         }
     }
 
+    /**
+     * S7-08: Hạn thanh toán hoá đơn = Ngày phát hành + Số ngày nợ tối đa của đại lý (mặc định 30 ngày).
+     */
+    public LocalDate calculateDueDate() {
+        Integer maxDebt = customer != null ? customer.getMaxDebtDays() : null;
+        int days = (maxDebt != null && maxDebt > 0) ? maxDebt : 30;
+        return invoiceDate != null ? invoiceDate.plusDays(days) : LocalDate.now();
+    }
+
     /** Quy tắc 7: chứng từ đã phát hành không được xoá. */
     @PreRemove
     void preventDelete() {
