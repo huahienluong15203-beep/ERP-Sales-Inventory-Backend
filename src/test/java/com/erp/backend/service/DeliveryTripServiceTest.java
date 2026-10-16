@@ -107,6 +107,11 @@ class DeliveryTripServiceTest {
         assertThat(res.trip().overdue()).isFalse();
         assertThat(a.getDeliveryTrip()).isNotNull();
         assertThat(b.getDeliveryTrip().getCode()).isEqualTo(res.trip().code());
+        assertThat(b.getDeliveryStopSequence()).isEqualTo(1);
+        assertThat(a.getDeliveryStopSequence()).isEqualTo(2);
+        assertThat(res.stops()).hasSize(2);
+        assertThat(res.stops().get(0).orderId()).isEqualTo(102L);
+        assertThat(res.stops().get(1).orderId()).isEqualTo(101L);
         verify(orderRepository).saveAll(anyList());
     }
 
@@ -309,5 +314,154 @@ class DeliveryTripServiceTest {
         assertThat(DeliveryTripService.onActiveTrip(o)).isTrue();
         t.setStatus(DeliveryTrip.STATUS_COMPLETED);
         assertThat(DeliveryTripService.onActiveTrip(o)).isFalse();
+    }
+
+    // ======================= S6-06: PHÂN TUYẾN & BẢNG KÊ =======================
+
+    @Test
+    @DisplayName("S6-06 AC1: Lấy danh sách phiếu xuất DISPATCHED chưa xếp chuyến, lọc theo kho, khu vực và từ khóa")
+    void getCandidateOrders_success_filtersAndExtractsDetails() {
+        SalesOrder o1 = order(201, SalesOrder.STATUS_DISPATCHED, hn);
+        Customer c1 = customer(6L, salesRep(7L));
+        c1.setName("Đại lý Cầu Giấy");
+        c1.setPhone("0988111222");
+        c1.setRegion(Region.builder().id(10L).code("KV-HN-CG").name("Khu vực Cầu Giấy").build());
+        o1.setCustomer(c1);
+        o1.setDeliveryAddress(CustomerDeliveryAddress.builder()
+                .address("Số 15 đường Duy Tân, Quận Cầu Giấy, Hà Nội")
+                .receiverName("Nguyễn Văn A")
+                .receiverPhone("0988111222")
+                .build());
+
+        SalesOrder o2 = order(202, SalesOrder.STATUS_DISPATCHED, hn);
+        Customer c2 = customer(7L, salesRep(7L));
+        c2.setName("Đại lý Đống Đa");
+        c2.setRegion(Region.builder().id(20L).code("KV-HN-DD").name("Khu vực Đống Đa").build());
+        o2.setCustomer(c2);
+        o2.setDeliveryAddress(CustomerDeliveryAddress.builder()
+                .address("Số 88 đường Láng, Quận Đống Đa, Hà Nội")
+                .receiverName("Trần Thị B")
+                .receiverPhone("0977333444")
+                .build());
+
+        when(orderRepository.findCandidateOrdersWithDetails(SalesOrder.STATUS_DISPATCHED))
+                .thenReturn(List.of(o1, o2));
+        when(stockLedgerService.allowedWarehouseIds(whManager)).thenReturn(null);
+
+        // 1. Lọc theo khu vực 10 (Cầu Giấy)
+        List<DeliveryTripCandidateOrderResponse> resRegion10 =
+                service.getCandidateOrders(null, 10L, null, whManager);
+        assertThat(resRegion10).hasSize(1);
+        DeliveryTripCandidateOrderResponse item = resRegion10.get(0);
+        assertThat(item.orderId()).isEqualTo(201L);
+        assertThat(item.customerName()).isEqualTo("Đại lý Cầu Giấy");
+        assertThat(item.receiverPhone()).isEqualTo("0988111222");
+        assertThat(item.district()).isEqualTo("Quận Cầu Giấy");
+        assertThat(item.province()).isEqualTo("Hà Nội");
+
+        // 2. Tìm kiếm theo từ khóa "Láng"
+        List<DeliveryTripCandidateOrderResponse> resSearch =
+                service.getCandidateOrders(null, null, "Láng", whManager);
+        assertThat(resSearch).hasSize(1);
+        assertThat(resSearch.get(0).orderId()).isEqualTo(202L);
+        assertThat(resSearch.get(0).district()).isEqualTo("Quận Đống Đa");
+    }
+
+    @Test
+    @DisplayName("S6-06 AC1: Nhân viên kho chỉ thấy ứng viên thuộc kho mình phụ trách")
+    void getCandidateOrders_warehouseIsolation() {
+        SalesOrder oHn = order(201, SalesOrder.STATUS_DISPATCHED, hn);
+        SalesOrder oHcm = order(202, SalesOrder.STATUS_DISPATCHED, hcm);
+        when(orderRepository.findCandidateOrdersWithDetails(SalesOrder.STATUS_DISPATCHED))
+                .thenReturn(List.of(oHn, oHcm));
+        UserDetailsImpl staffHn = actor(20, "ROLE_WAREHOUSE");
+        when(stockLedgerService.allowedWarehouseIds(staffHn)).thenReturn(Set.of(1L));
+
+        List<DeliveryTripCandidateOrderResponse> res = service.getCandidateOrders(null, null, null, staffHn);
+
+        assertThat(res).hasSize(1);
+        assertThat(res.get(0).orderId()).isEqualTo(201L);
+        assertThat(res.get(0).warehouseId()).isEqualTo(1L);
+    }
+
+    @Test
+    @DisplayName("S6-06 AC3: In bảng kê điểm giao (Delivery Manifest) kèm địa chỉ, SĐT người nhận và tiền hàng")
+    void getManifest_success() {
+        DeliveryTrip t = trip(NOW.plusHours(2));
+        t.setDriverPhone("0912345678");
+        t.setVehiclePlate("29B-99999");
+        t.setNote("Giao trong buổi chiều");
+
+        SalesOrder a = order(101, SalesOrder.STATUS_DISPATCHED, hn);
+        a.setDeliveryTrip(t);
+        a.setDeliveryStopSequence(2);
+        a.setDeliveryAddress(CustomerDeliveryAddress.builder()
+                .address("Tòa nhà Landmark 72, Quận Nam Từ Liêm, Hà Nội")
+                .receiverName("Người nhận A")
+                .receiverPhone("0909111222")
+                .build());
+
+        SalesOrder b = order(102, SalesOrder.STATUS_DISPATCHED, hn);
+        b.setDeliveryTrip(t);
+        b.setDeliveryStopSequence(1);
+        b.setDeliveryAddress(CustomerDeliveryAddress.builder()
+                .address("Số 20 Hồ Tùng Mậu, Quận Cầu Giấy, Hà Nội")
+                .receiverName("Người nhận B")
+                .receiverPhone("0909333444")
+                .build());
+
+        when(tripRepository.findById(500L)).thenReturn(Optional.of(t));
+        when(stockLedgerService.allowedWarehouseIds(whManager)).thenReturn(null);
+        when(orderRepository.findByDeliveryTripIds(List.of(500L))).thenReturn(List.of(a, b));
+
+        DeliveryTripManifestResponse manifest = service.getManifest(500L, whManager);
+
+        assertThat(manifest.tripId()).isEqualTo(500L);
+        assertThat(manifest.tripCode()).isEqualTo("CG261015-AAAA");
+        assertThat(manifest.vehiclePlate()).isEqualTo("29B-99999");
+        assertThat(manifest.driverName()).isEqualTo("Anh Tuấn");
+        assertThat(manifest.driverPhone()).isEqualTo("0912345678");
+        assertThat(manifest.totalStops()).isEqualTo(2);
+        assertThat(manifest.totalTripAmount()).isEqualByComparingTo("4800000.00");
+        assertThat(manifest.stops()).hasSize(2);
+
+        // Điểm đầu tiên là đơn 102 (seq = 1)
+        DeliveryTripStopResponse stop1 = manifest.stops().get(0);
+        assertThat(stop1.orderId()).isEqualTo(102L);
+        assertThat(stop1.receiverName()).isEqualTo("Người nhận B");
+        assertThat(stop1.receiverPhone()).isEqualTo("0909333444");
+        assertThat(stop1.district()).isEqualTo("Quận Cầu Giấy");
+
+        // Điểm thứ hai là đơn 101 (seq = 2)
+        DeliveryTripStopResponse stop2 = manifest.stops().get(1);
+        assertThat(stop2.orderId()).isEqualTo(101L);
+        assertThat(stop2.receiverName()).isEqualTo("Người nhận A");
+        assertThat(stop2.receiverPhone()).isEqualTo("0909111222");
+        assertThat(stop2.district()).isEqualTo("Quận Nam Từ Liêm");
+    }
+
+    @Test
+    @DisplayName("S6-06 AC3: Manifest báo lỗi khi chuyến không tồn tại hoặc ngoài quyền kho")
+    void getManifest_notFound() {
+        when(tripRepository.findById(999L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.getManifest(999L, whManager))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "NOT_FOUND");
+    }
+
+    @Test
+    @DisplayName("S6-06: Hàm trích xuất quận/huyện và tỉnh/thành phố hoạt động chuẩn xác")
+    void extractDistrict_and_extractProvince() {
+        String addr1 = "Số 123 đường Xuân Thủy, Quận Cầu Giấy, Hà Nội";
+        assertThat(DeliveryTripService.extractDistrict(addr1, "Miền Bắc")).isEqualTo("Quận Cầu Giấy");
+        assertThat(DeliveryTripService.extractProvince(addr1, "Miền Bắc")).isEqualTo("Hà Nội");
+
+        String addr2 = "Thôn 2, Huyện Gia Lâm, TP Hà Nội";
+        assertThat(DeliveryTripService.extractDistrict(addr2, "Miền Bắc")).isEqualTo("Huyện Gia Lâm");
+        assertThat(DeliveryTripService.extractProvince(addr2, "Miền Bắc")).isEqualTo("Hà Nội");
+
+        String addr3 = "Đường số 7, Phường Linh Trung, Thành phố Thủ Đức, TP. Hồ Chí Minh";
+        assertThat(DeliveryTripService.extractProvince(addr3, "Miền Nam")).contains("Hồ Chí Minh");
     }
 }

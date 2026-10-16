@@ -296,6 +296,15 @@ public class OrderController {
     }
 
     /**
+     * S6-09 / SCRUM-258: API cung cấp dữ liệu timeline trạng thái giao hàng và số lượng thực giao từng mặt hàng.
+     */
+    @GetMapping("/{id}/delivery-timeline")
+    public OrderDeliveryTimelineResponse deliveryTimeline(@PathVariable Long id,
+                                                          @AuthenticationPrincipal UserDetailsImpl actor) {
+        return orderDeliveryService.getDeliveryTimeline(id, actor);
+    }
+
+    /**
      * S6-08: Xác nhận giao thành công (Đã xuất -> Đã giao): người nhận, thời điểm giao, số thực giao.
      * Bắt buộc đã tải ảnh biên bản. Phần giao thiếu nhập lại kho; sau đó khoá số thực giao để lập hoá đơn.
      */
