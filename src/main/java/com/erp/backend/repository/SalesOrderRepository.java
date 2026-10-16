@@ -183,4 +183,22 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, Long>, J
     /** S6-05: mã các đơn nợ hàng tách ra từ đơn :parentId (theo thứ tự tạo). */
     @Query("select o.code from SalesOrder o where o.parentOrder.id = :parentId order by o.id")
     List<String> findBackorderCodes(@Param("parentId") Long parentId);
+
+    /** S8-05: Đếm số lượng đơn theo trạng thái đơn hàng. */
+    long countByStatus(String status);
+
+    /** S8-05: Đếm số lượng đơn theo danh sách trạng thái. */
+    long countByStatusIn(Collection<String> statuses);
+
+    /** S8-05: Lấy dữ liệu bán hàng theo khoảng thời gian để thống kê doanh số theo ngày và khu vực. */
+    @Query("select coalesce(o.dispatchedAt, coalesce(o.deliveredAt, coalesce(o.approvedAt, coalesce(o.updatedAt, o.createdAt)))), "
+            + "o.totalAmount, o.id, r.id, r.code, r.name "
+            + "from SalesOrder o left join o.customer c left join c.region r "
+            + "where o.status in :statuses "
+            + "and coalesce(o.dispatchedAt, coalesce(o.deliveredAt, coalesce(o.approvedAt, coalesce(o.updatedAt, o.createdAt)))) >= :from "
+            + "and coalesce(o.dispatchedAt, coalesce(o.deliveredAt, coalesce(o.approvedAt, coalesce(o.updatedAt, o.createdAt)))) < :to")
+    List<Object[]> findSalesDataForPeriod(@Param("statuses") Collection<String> statuses,
+                                          @Param("from") LocalDateTime from,
+                                          @Param("to") LocalDateTime to);
 }
+
