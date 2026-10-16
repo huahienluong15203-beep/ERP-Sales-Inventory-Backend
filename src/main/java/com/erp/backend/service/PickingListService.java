@@ -62,10 +62,10 @@ public class PickingListService {
         Warehouse warehouse = warehouseRepository.findById(warehouseId)
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy kho với ID: " + warehouseId));
 
-        // Lấy các đơn hàng có trạng thái APPROVED (chờ soạn hàng) thuộc kho này
+        // Lấy các đơn hàng có trạng thái APPROVED hoặc PICKING (chờ soạn hàng) thuộc kho này
         List<SalesOrder> candidateOrders = salesOrderRepository.findAll((root, query, cb) -> cb.and(
                 cb.equal(root.get("reservedWarehouse").get("id"), warehouseId),
-                cb.equal(root.get("status"), SalesOrder.STATUS_APPROVED)
+                root.get("status").in(SalesOrder.STATUS_APPROVED, SalesOrder.STATUS_PICKING)
         ), Sort.by(Sort.Direction.ASC, "approvedAt"));
 
         if (candidateOrders.isEmpty()) {
