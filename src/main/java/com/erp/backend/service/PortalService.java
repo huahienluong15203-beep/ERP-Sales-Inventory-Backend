@@ -59,6 +59,7 @@ public class PortalService {
     private final OrderQueryService orderQueryService;
     private final CustomerCreditService creditService;
     private final CustomerDeliveryAddressService deliveryAddressService;
+    private final OrderDeliveryService orderDeliveryService;
 
     @Transactional(readOnly = true)
     public PortalMeResponse me(UserDetailsImpl actor) {
@@ -256,11 +257,22 @@ public class PortalService {
         return r;
     }
 
+    /** S6-09 / SCRUM-258: Cung cấp timeline trạng thái giao hàng và chi tiết số lượng thực giao cho đại lý */
+    @Transactional(readOnly = true)
+    public OrderDeliveryTimelineResponse deliveryTimeline(Long id, UserDetailsImpl actor) {
+        Customer c = myCustomer(actor);
+        SalesOrder order = orderRepository.findById(id)
+                .filter(o -> o.getCustomer() != null && c.getId().equals(o.getCustomer().getId()))
+                .orElseThrow(() -> BusinessException.notFound("Không tìm thấy đơn hàng"));
+        return orderDeliveryService.getDeliveryTimeline(order.getId(), actor);
+    }
+
     static PortalOrderResponse toPortal(OrderResponse o) {
         List<PortalOrderResponse.Line> lines = o.lines() == null ? List.of() : o.lines().stream()
                 .map(l -> new PortalOrderResponse.Line(l.lineNo(), l.productId(), l.productSku(), l.productName(),
                         l.unitName(), l.conversionFactor(), l.quantity(), l.pricePerUnit(), l.grossAmount(),
-                        l.discountAmount(), l.netAmount(), l.availableStock(), l.isOverStock(), l.maxAllowedQuantity()))
+                        l.discountAmount(), l.netAmount(), l.availableStock(), l.isOverStock(), l.maxAllowedQuantity(),
+                        l.deliveredQuantity(), l.shortageQuantity(), l.isShortage(), l.shortageReason()))
                 .toList();
         // Đơn xem trước (chưa lưu) có thể chưa có trạng thái -> không tra nhãn (Map.of không nhận khoá null)
         String statusLabel = o.status() == null ? null : STATUS_LABELS.getOrDefault(o.status(), o.status());
@@ -270,6 +282,8 @@ public class PortalService {
                 o.cancelReason(),
                 // Không cho đại lý thấy cảnh báo nội bộ về giá sàn
                 o.warnings() == null ? List.of() : o.warnings().stream().filter(w -> !w.contains("giá sàn")).toList(),
-                o.credit());
+                o.credit(),
+                o.hasShortage(),
+                o.fulfillment());
     }
 }
