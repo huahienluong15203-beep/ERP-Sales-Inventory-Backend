@@ -498,6 +498,7 @@ public class WarehouseService {
                 .address(w.getAddress())
                 .status(w.getStatus())
                 .manager(mgrRef)
+                .managerName(mgr != null ? mgr.getFullName() : null)
                 .managerPhone(mgrPhone)
                 .managerEmail(mgrEmail)
                 .locationCount(locCount)
