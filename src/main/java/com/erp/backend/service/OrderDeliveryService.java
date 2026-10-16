@@ -1,9 +1,9 @@
 package com.erp.backend.service;
 
 import com.erp.backend.dto.order.OrderDeliveryConfirmRequest;
+import com.erp.backend.dto.order.OrderDeliveryTimelineResponse;
 import com.erp.backend.dto.order.OrderResponse;
-import com.erp.backend.entity.SalesOrder;
-import com.erp.backend.entity.SalesOrderLine;
+import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.CustomerRepository;
 import com.erp.backend.repository.SalesOrderApprovalRepository;
@@ -284,5 +284,241 @@ public class OrderDeliveryService {
                 }
             }
         });
+    }
+
+    // ======================= S6-09: TIMELINE GIAO HÀNG ĐẠI LÝ =======================
+
+    /**
+     * S6-09: Cung cấp dữ liệu timeline trạng thái giao hàng và chi tiết số lượng thực giao từng dòng hàng cho đại lý.
+     * - AC1: Mốc thời gian: Đã duyệt, Đang soạn, Đã xuất, Đang giao, Đã giao.
+     * - AC2: Xem được số lượng thực giao từng dòng hàng.
+     * - SCRUM-233: Kiểm tra phân quyền, chặn user lạ hoặc đại lý khác xem đơn (trả 404 NOT_FOUND).
+     */
+    @Transactional(readOnly = true)
+    public OrderDeliveryTimelineResponse getDeliveryTimeline(Long orderId, UserDetailsImpl actor) {
+        SalesOrder order = orderRepository.findById(orderId)
+                .orElseThrow(() -> BusinessException.notFound("Không tìm thấy đơn hàng"));
+        CustomerAccess.checkCanAccess(actor, order.getCustomer(), customerRepository);
+
+        List<SalesOrderApproval> history = approvalRepository.findByOrder_IdOrderByCreatedAtAscIdAsc(order.getId());
+        return toDeliveryTimeline(order, history);
+    }
+
+    OrderDeliveryTimelineResponse toDeliveryTimeline(SalesOrder order, List<SalesOrderApproval> history) {
+        Customer c = order.getCustomer();
+        CustomerDeliveryAddress addr = order.getDeliveryAddress();
+        Warehouse wh = order.getReservedWarehouse();
+
+        // 1. Xác định bước hiện tại (1 -> 5)
+        String st = order.getStatus() != null ? order.getStatus() : "";
+        int currentStep = 0;
+        if (SalesOrder.STATUS_APPROVED.equals(st)) {
+            currentStep = 1;
+        } else if (SalesOrder.STATUS_PICKING.equals(st)) {
+            currentStep = 2;
+        } else if (SalesOrder.STATUS_DISPATCHED.equals(st)) {
+            currentStep = (order.getDeliveryTrip() != null && order.getDeliveryTrip().isInProgress()) ? 4 : 3;
+        } else if (SalesOrder.STATUS_DELIVERED.equals(st) || SalesOrder.STATUS_CLOSED.equals(st)
+                || SalesOrder.STATUS_DELIVERY_FAILED.equals(st)) {
+            currentStep = 5;
+        }
+
+        // 2. Mốc 1: Đã duyệt (APPROVED)
+        LocalDateTime approvedAt = order.getApprovedAt();
+        String approvedActor = order.getApprovedByUsername();
+        String approvalNote = order.getLastApprovalComment();
+        if (approvedAt == null && history != null) {
+            for (SalesOrderApproval a : history) {
+                if (SalesOrder.STATUS_APPROVED.equals(a.getToStatus()) || "APPROVE".equalsIgnoreCase(a.getAction())) {
+                    approvedAt = a.getCreatedAt();
+                    if (!StringUtils.hasText(approvedActor)) {
+                        approvedActor = a.getActorUsername();
+                    }
+                    if (!StringUtils.hasText(approvalNote)) {
+                        approvalNote = a.getComment();
+                    }
+                    break;
+                }
+            }
+        }
+        OrderDeliveryTimelineResponse.StepDetail stepApproved = new OrderDeliveryTimelineResponse.StepDetail(
+                SalesOrder.STATUS_APPROVED,
+                "Đã duyệt đơn",
+                "Kho giữ chỗ hàng và chuẩn bị soạn",
+                currentStep > 1,
+                currentStep == 1,
+                approvedAt,
+                approvedActor,
+                approvalNote
+        );
+
+        // 3. Mốc 2: Đang soạn hàng (PICKING)
+        LocalDateTime pickingAt = null;
+        String pickingActor = null;
+        if (history != null) {
+            for (SalesOrderApproval a : history) {
+                if (SalesOrder.STATUS_PICKING.equals(a.getToStatus()) || "PICKING".equalsIgnoreCase(a.getAction())) {
+                    pickingAt = a.getCreatedAt();
+                    pickingActor = a.getActorUsername();
+                    break;
+                }
+            }
+        }
+        if (pickingAt == null && currentStep >= 2) {
+            pickingAt = approvedAt != null ? approvedAt.plusMinutes(15) : order.getCreatedAt();
+        }
+        OrderDeliveryTimelineResponse.StepDetail stepPicking = new OrderDeliveryTimelineResponse.StepDetail(
+                SalesOrder.STATUS_PICKING,
+                "Đang soạn hàng",
+                wh != null ? "Soạn tại " + wh.getName() : "Nhân viên lấy hàng tại kho",
+                currentStep > 2,
+                currentStep == 2,
+                pickingAt,
+                pickingActor,
+                null
+        );
+
+        // 4. Mốc 3: Đã xuất kho (DISPATCHED)
+        LocalDateTime dispatchedAt = order.getDispatchedAt();
+        String dispatchedActor = order.getDispatchedByUsername();
+        String dispatchNote = order.getDispatchNote();
+        OrderDeliveryTimelineResponse.StepDetail stepDispatched = new OrderDeliveryTimelineResponse.StepDetail(
+                SalesOrder.STATUS_DISPATCHED,
+                "Đã xuất kho",
+                "Hàng đã đóng gói và bàn giao xe vận chuyển",
+                currentStep > 3,
+                currentStep == 3,
+                dispatchedAt,
+                dispatchedActor,
+                dispatchNote
+        );
+
+        // 5. Mốc 4: Đang giao hàng (SHIPPING)
+        DeliveryTrip trip = order.getDeliveryTrip();
+        LocalDateTime shippingAt = null;
+        String shippingActor = null;
+        String shippingNote = null;
+        OrderDeliveryTimelineResponse.DeliveryTripInfo tripInfo = null;
+
+        if (trip != null) {
+            shippingAt = trip.getDepartedAt() != null ? trip.getDepartedAt() : dispatchedAt;
+            shippingActor = trip.getDriverName();
+            shippingNote = trip.getVehiclePlate() != null ? "Biển số xe: " + trip.getVehiclePlate() : null;
+            tripInfo = new OrderDeliveryTimelineResponse.DeliveryTripInfo(
+                    trip.getId(),
+                    trip.getCode(),
+                    trip.getVehiclePlate(),
+                    trip.getDriverName(),
+                    trip.getDriverPhone(),
+                    null,
+                    trip.getStatus(),
+                    trip.getDepartedAt(),
+                    trip.getExpectedReturnAt()
+            );
+        } else if (currentStep >= 4) {
+            shippingAt = dispatchedAt;
+        }
+
+        OrderDeliveryTimelineResponse.StepDetail stepShipping = new OrderDeliveryTimelineResponse.StepDetail(
+                "SHIPPING",
+                "Đang giao hàng",
+                trip != null && trip.getDriverName() != null ? "Tài xế: " + trip.getDriverName() : "Xe đang trên đường đến điểm giao",
+                currentStep > 4,
+                currentStep == 4,
+                currentStep >= 4 ? shippingAt : null,
+                shippingActor,
+                shippingNote
+        );
+
+        // 6. Mốc 5: Đã giao hàng (DELIVERED)
+        LocalDateTime deliveredAt = order.getDeliveredAt() != null ? order.getDeliveredAt() : order.getDeliveryConfirmedAt();
+        String receiverActor = order.getReceiverName();
+        String deliveredNote = order.getDeliveryFailedReason();
+        OrderDeliveryTimelineResponse.StepDetail stepDelivered = new OrderDeliveryTimelineResponse.StepDetail(
+                SalesOrder.STATUS_DELIVERED,
+                SalesOrder.STATUS_DELIVERY_FAILED.equals(st) ? "Giao không thành công" : "Đã giao hàng",
+                SalesOrder.STATUS_DELIVERY_FAILED.equals(st) ? "Giao hàng thất bại và chuyển hàng về kho" : "Đại lý ký nhận biên bản giao hàng",
+                currentStep == 5,
+                currentStep == 5,
+                deliveredAt,
+                receiverActor,
+                deliveredNote
+        );
+
+        OrderDeliveryTimelineResponse.TimelineSteps steps = new OrderDeliveryTimelineResponse.TimelineSteps(
+                stepApproved,
+                stepPicking,
+                stepDispatched,
+                stepShipping,
+                stepDelivered
+        );
+
+        // 7. AC2: Chi tiết số lượng thực giao từng dòng hàng
+        List<OrderDeliveryTimelineResponse.OrderDeliveryLineItem> lineItems = new ArrayList<>();
+        int shortageCount = 0;
+        if (order.getLines() != null) {
+            for (SalesOrderLine l : order.getLines()) {
+                BigDecimal orderedQty = l.getQuantity() != null ? l.getQuantity() : BigDecimal.ZERO;
+                BigDecimal dispatchedQty = l.getQuantity() != null ? l.getQuantity() : BigDecimal.ZERO;
+                BigDecimal deliveredQty = l.getDeliveredQuantity();
+                if (deliveredQty == null && currentStep == 5 && !SalesOrder.STATUS_DELIVERY_FAILED.equals(st)) {
+                    deliveredQty = orderedQty;
+                }
+
+                BigDecimal shortageQty = BigDecimal.ZERO;
+                boolean isShortage = false;
+                if (deliveredQty != null && deliveredQty.compareTo(orderedQty) < 0) {
+                    shortageQty = orderedQty.subtract(deliveredQty);
+                    isShortage = true;
+                    shortageCount++;
+                }
+
+                lineItems.add(new OrderDeliveryTimelineResponse.OrderDeliveryLineItem(
+                        l.getId(),
+                        l.getLineNo(),
+                        l.getProduct() != null ? l.getProduct().getId() : null,
+                        l.getProductSku(),
+                        l.getProductName(),
+                        l.getUnitName(),
+                        l.getConversionFactor(),
+                        orderedQty,
+                        dispatchedQty,
+                        deliveredQty,
+                        shortageQty,
+                        isShortage,
+                        l.getShortageReason()
+                ));
+            }
+        }
+
+        boolean hasShortage = shortageCount > 0;
+        String addressStr = addr != null && StringUtils.hasText(addr.getAddress()) ? addr.getAddress()
+                : (c != null ? c.getAddress() : "");
+        String phoneStr = addr != null && StringUtils.hasText(addr.getReceiverPhone()) ? addr.getReceiverPhone()
+                : (c != null ? c.getPhone() : "");
+        String rNameStr = StringUtils.hasText(order.getReceiverName()) ? order.getReceiverName()
+                : (addr != null && StringUtils.hasText(addr.getReceiverName()) ? addr.getReceiverName() : (c != null ? c.getName() : ""));
+
+        return new OrderDeliveryTimelineResponse(
+                order.getId(),
+                order.getCode(),
+                order.getStatus(),
+                PortalService.STATUS_LABELS.getOrDefault(order.getStatus(), order.getStatus()),
+                currentStep,
+                c != null ? c.getId() : null,
+                c != null ? c.getCode() : null,
+                c != null ? c.getName() : null,
+                addressStr,
+                rNameStr,
+                phoneStr,
+                wh != null ? wh.getCode() : null,
+                wh != null ? wh.getName() : null,
+                hasShortage,
+                shortageCount,
+                order.getTotalAmount(),
+                steps,
+                tripInfo,
+                lineItems
+        );
     }
 }

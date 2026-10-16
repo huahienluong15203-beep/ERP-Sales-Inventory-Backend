@@ -2,6 +2,7 @@ package com.erp.backend.controller;
 
 import com.erp.backend.dto.customer.CreditStatusResponse;
 import com.erp.backend.dto.customer.DeliveryAddressResponse;
+import com.erp.backend.dto.order.OrderDeliveryTimelineResponse;
 import com.erp.backend.dto.order.OrderSummaryResponse;
 import com.erp.backend.dto.portal.*;
 import com.erp.backend.dto.user.PageResponse;
@@ -97,5 +98,14 @@ public class PortalController {
     @GetMapping("/orders/{id}")
     public PortalOrderResponse order(@PathVariable Long id, @AuthenticationPrincipal UserDetailsImpl actor) {
         return portalService.order(id, actor);
+    }
+
+    /**
+     * S6-09 / SCRUM-258: Cổng đại lý theo dõi trạng thái giao hàng của đơn (Timeline & số lượng thực giao).
+     */
+    @GetMapping("/orders/{id}/delivery-timeline")
+    public OrderDeliveryTimelineResponse deliveryTimeline(@PathVariable Long id,
+                                                          @AuthenticationPrincipal UserDetailsImpl actor) {
+        return portalService.deliveryTimeline(id, actor);
     }
 }
