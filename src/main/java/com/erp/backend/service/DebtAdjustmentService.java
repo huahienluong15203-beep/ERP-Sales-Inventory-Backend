@@ -261,7 +261,8 @@ public class DebtAdjustmentService {
         boolean ok = actor != null && actor.getAuthorities() != null && actor.getAuthorities().stream()
                 .anyMatch(a -> "ROLE_ACCOUNTANT".equals(a.getAuthority()) || "ROLE_ADMIN".equals(a.getAuthority()));
         if (!ok) {
-            throw new BusinessException(HttpStatus.FORBIDDEN, "DEBT_ADJUSTMENT_FORBIDDEN",
+            // 409 (không dùng 403) vì FE tự đăng xuất khi gặp 403, mà QL kinh doanh vẫn được mở màn hình này để xem
+            throw BusinessException.conflict("DEBT_ADJUSTMENT_ACCOUNTANT_ONLY",
                     "Chỉ kế toán công nợ / admin được duyệt hoặc từ chối chứng từ giảm trừ", null);
         }
     }

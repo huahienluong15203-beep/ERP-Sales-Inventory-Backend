@@ -223,8 +223,12 @@ class DebtAdjustmentServiceTest {
         when(rejectionRepository.findReceivedReturns()).thenReturn(List.of());
         assertThat(service.list(null, null, null, manager)).isEmpty();
 
+        // 409 chứ không 403 để FE không tự đăng xuất QL kinh doanh
         assertThatThrownBy(() -> service.approve(1L, null, manager))
-                .hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
+                .hasFieldOrPropertyWithValue("code", "DEBT_ADJUSTMENT_ACCOUNTANT_ONLY")
+                .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT);
+        assertThatThrownBy(() -> service.reject(1L, "Lý do hợp lệ", manager))
+                .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT);
         assertThatThrownBy(() -> service.list(null, null, null, actor(7, "ROLE_SALES_REP")))
                 .isInstanceOf(BusinessException.class)
                 .hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);

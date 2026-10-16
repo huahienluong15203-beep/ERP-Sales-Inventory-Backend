@@ -41,7 +41,7 @@ public class DebtAdjustmentController {
     }
 
     @PostMapping("/{id}/approve")
-    @PreAuthorize("hasAnyRole('ACCOUNTANT', 'ADMIN')")
+    // QL kinh doanh vào được màn hình; service trả 409 nếu không phải kế toán / admin (tránh 403 làm FE đăng xuất)
     public DebtAdjustmentResponse approve(@PathVariable Long id,
                                           @Valid @RequestBody(required = false) DebtAdjustmentDecisionRequest body,
                                           @AuthenticationPrincipal UserDetailsImpl actor) {
@@ -49,7 +49,7 @@ public class DebtAdjustmentController {
     }
 
     @PostMapping("/{id}/reject")
-    @PreAuthorize("hasAnyRole('ACCOUNTANT', 'ADMIN')")
+    // QL kinh doanh vào được màn hình; service trả 409 nếu không phải kế toán / admin (tránh 403 làm FE đăng xuất)
     public DebtAdjustmentResponse reject(@PathVariable Long id,
                                          @Valid @RequestBody(required = false) DebtAdjustmentDecisionRequest body,
                                          @AuthenticationPrincipal UserDetailsImpl actor) {
