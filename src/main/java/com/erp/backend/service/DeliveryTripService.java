@@ -121,8 +121,18 @@ public class DeliveryTripService {
                 .note(note)
                 .createdByUsername(actor != null ? actor.getUsername() : null)
                 .build());
+        Map<Long, Integer> sequenceMap = new HashMap<>();
+        if (req.getOrderIds() != null) {
+            for (int i = 0; i < req.getOrderIds().size(); i++) {
+                Long orderId = req.getOrderIds().get(i);
+                if (orderId != null) {
+                    sequenceMap.putIfAbsent(orderId, i + 1);
+                }
+            }
+        }
         for (SalesOrder o : orders) {
             o.setDeliveryTrip(trip);
+            o.setDeliveryStopSequence(sequenceMap.getOrDefault(o.getId(), 1));
         }
         orderRepository.saveAll(orders);
         auditLogService.record(AuditModule.ORDER, "CREATE_DELIVERY_TRIP", "DELIVERY_TRIP", trip.getId(), trip.getCode(),
@@ -332,21 +342,205 @@ public class DeliveryTripService {
                 orders.size(), delivered, failed, remaining, money(value), overdue, overdueMinutes, t.getNote());
     }
 
-    private DeliveryTripDetailResponse toDetail(DeliveryTrip t, List<SalesOrder> orders, LocalDateTime now) {
-        List<DeliveryTripStopResponse> stops = orders.stream()
-                .sorted(Comparator.comparing(SalesOrder::getId))
-                .map(o -> {
-                    Customer c = o.getCustomer();
-                    CustomerDeliveryAddress a = o.getDeliveryAddress();
-                    return new DeliveryTripStopResponse(o.getId(), o.getCode(), c != null ? c.getId() : null,
-                            c != null ? c.getCode() : null, c != null ? c.getName() : null,
-                            a != null ? a.getAddress() : (c != null ? c.getAddress() : null), o.getStatus(),
-                            o.getTotalAmount(), money(t.isInProgress() ? valueOnRoad(o) : BigDecimal.ZERO),
-                            o.getReceiverName(), o.getDeliveredAt(), o.getDeliveryFailedReason(),
-                            o.getStockReturnedAt() != null);
-                })
+    /**
+     * S6-06 AC1: Lấy danh sách các đơn đã xuất kho (DISPATCHED) sẵn sàng gom chuyến theo khu vực.
+     */
+    @Transactional(readOnly = true)
+    public List<DeliveryTripCandidateOrderResponse> getCandidateOrders(Long warehouseId, Long regionId, String search, UserDetailsImpl actor) {
+        Set<Long> allowed = stockLedgerService.allowedWarehouseIds(actor);
+        if (warehouseId != null && allowed != null && !allowed.contains(warehouseId)) {
+            throw new BusinessException(HttpStatus.FORBIDDEN, "TRIP_WAREHOUSE_NOT_ASSIGNED",
+                    "Bạn không được phân công kho chỉ định", null);
+        }
+
+        List<SalesOrder> candidates = orderRepository.findCandidateOrdersWithDetails(SalesOrder.STATUS_DISPATCHED);
+
+        // Lọc theo kho và quyền kho
+        candidates = candidates.stream()
+                .filter(o -> o.getReservedWarehouse() != null)
+                .filter(o -> warehouseId == null || Objects.equals(o.getReservedWarehouse().getId(), warehouseId))
+                .filter(o -> allowed == null || allowed.contains(o.getReservedWarehouse().getId()))
                 .toList();
+
+        // Lọc theo khu vực bán hàng (AC1: gom theo khu vực)
+        if (regionId != null) {
+            candidates = candidates.stream()
+                    .filter(o -> o.getCustomer() != null && o.getCustomer().getRegion() != null
+                            && Objects.equals(o.getCustomer().getRegion().getId(), regionId))
+                    .toList();
+        }
+
+        // Lọc theo từ khóa tìm kiếm (mã đơn, khách hàng, địa chỉ, người nhận, số điện thoại)
+        if (StringUtils.hasText(search)) {
+            String kw = search.trim().toLowerCase(Locale.ROOT);
+            candidates = candidates.stream().filter(o -> {
+                String code = o.getCode() != null ? o.getCode().toLowerCase(Locale.ROOT) : "";
+                Customer c = o.getCustomer();
+                String cCode = c != null && c.getCode() != null ? c.getCode().toLowerCase(Locale.ROOT) : "";
+                String cName = c != null && c.getName() != null ? c.getName().toLowerCase(Locale.ROOT) : "";
+                CustomerDeliveryAddress a = o.getDeliveryAddress();
+                String addr = a != null && a.getAddress() != null ? a.getAddress().toLowerCase(Locale.ROOT)
+                        : (c != null && c.getAddress() != null ? c.getAddress().toLowerCase(Locale.ROOT) : "");
+                String phone = a != null && a.getReceiverPhone() != null ? a.getReceiverPhone().toLowerCase(Locale.ROOT)
+                        : (c != null && c.getPhone() != null ? c.getPhone().toLowerCase(Locale.ROOT) : "");
+                String rName = a != null && a.getReceiverName() != null ? a.getReceiverName().toLowerCase(Locale.ROOT) : "";
+                return code.contains(kw) || cCode.contains(kw) || cName.contains(kw) || addr.contains(kw) || phone.contains(kw) || rName.contains(kw);
+            }).toList();
+        }
+
+        List<DeliveryTripCandidateOrderResponse> result = new ArrayList<>();
+        for (SalesOrder o : candidates) {
+            Customer c = o.getCustomer();
+            CustomerDeliveryAddress a = o.getDeliveryAddress();
+            Warehouse w = o.getReservedWarehouse();
+            Region r = c != null ? c.getRegion() : null;
+
+            String addr = a != null && StringUtils.hasText(a.getAddress()) ? a.getAddress() : (c != null ? c.getAddress() : "");
+            String rName = StringUtils.hasText(o.getReceiverName()) ? o.getReceiverName()
+                    : (a != null && StringUtils.hasText(a.getReceiverName()) ? a.getReceiverName() : (c != null ? c.getName() : ""));
+            String rPhone = a != null && StringUtils.hasText(a.getReceiverPhone()) ? a.getReceiverPhone()
+                    : (c != null && StringUtils.hasText(c.getPhone()) ? c.getPhone() : "");
+
+            String district = extractDistrict(addr, r != null ? r.getName() : null);
+            String province = extractProvince(addr, r != null ? r.getName() : null);
+
+            result.add(new DeliveryTripCandidateOrderResponse(
+                    o.getId(),
+                    o.getCode(),
+                    c != null ? c.getId() : null,
+                    c != null ? c.getCode() : null,
+                    c != null ? c.getName() : null,
+                    r != null ? r.getId() : null,
+                    r != null ? r.getName() : null,
+                    district,
+                    province,
+                    addr,
+                    rName,
+                    rPhone,
+                    money(o.getTotalAmount()),
+                    o.getStatus(),
+                    w != null ? w.getId() : null,
+                    w != null ? w.getCode() : null,
+                    w != null ? w.getName() : null,
+                    o.getDesiredDeliveryDate(),
+                    o.getDispatchedAt(),
+                    o.getDispatchedByUsername()
+            ));
+        }
+        return result;
+    }
+
+    /**
+     * S6-06 AC3: In danh sách điểm giao của chuyến kèm địa chỉ và số điện thoại người nhận (Bảng kê giao hàng / Delivery Manifest).
+     */
+    @Transactional(readOnly = true)
+    public DeliveryTripManifestResponse getManifest(Long id, UserDetailsImpl actor) {
+        DeliveryTrip trip = tripRepository.findById(id)
+                .orElseThrow(() -> BusinessException.notFound("Không tìm thấy chuyến giao"));
+        Set<Long> allowed = stockLedgerService.allowedWarehouseIds(actor);
+        if (allowed != null && !allowed.contains(trip.getWarehouse().getId())) {
+            throw BusinessException.notFound("Không tìm thấy chuyến giao");
+        }
+        LocalDateTime now = LocalDateTime.now(clock);
+        List<SalesOrder> orders = orderRepository.findByDeliveryTripIds(List.of(trip.getId()));
+        DeliveryTripDetailResponse detail = toDetail(trip, orders, now);
+
+        BigDecimal totalAmount = BigDecimal.ZERO;
+        for (DeliveryTripStopResponse stop : detail.stops()) {
+            totalAmount = totalAmount.add(stop.totalAmount() != null ? stop.totalAmount() : BigDecimal.ZERO);
+        }
+
+        Warehouse w = trip.getWarehouse();
+        String printActor = actor != null ? actor.getUsername() : "Hệ thống";
+
+        return new DeliveryTripManifestResponse(
+                trip.getId(),
+                trip.getCode(),
+                w != null ? w.getId() : null,
+                w != null ? w.getCode() : null,
+                w != null ? w.getName() : null,
+                trip.getVehiclePlate(),
+                trip.getDriverName(),
+                trip.getDriverPhone(),
+                trip.getStatus(),
+                trip.getDepartedAt(),
+                trip.getExpectedReturnAt(),
+                detail.stops().size(),
+                money(totalAmount),
+                trip.getNote(),
+                detail.stops(),
+                now,
+                printActor
+        );
+    }
+
+    private DeliveryTripDetailResponse toDetail(DeliveryTrip t, List<SalesOrder> orders, LocalDateTime now) {
+        List<SalesOrder> sortedOrders = orders.stream()
+                .sorted(Comparator.comparing(
+                        (SalesOrder o) -> o.getDeliveryStopSequence() != null ? o.getDeliveryStopSequence() : Integer.MAX_VALUE)
+                        .thenComparing(SalesOrder::getId))
+                .toList();
+
+        List<DeliveryTripStopResponse> stops = new ArrayList<>();
+        for (int idx = 0; idx < sortedOrders.size(); idx++) {
+            SalesOrder o = sortedOrders.get(idx);
+            Customer c = o.getCustomer();
+            CustomerDeliveryAddress a = o.getDeliveryAddress();
+            Region r = c != null ? c.getRegion() : null;
+
+            String addr = a != null && StringUtils.hasText(a.getAddress()) ? a.getAddress() : (c != null ? c.getAddress() : null);
+            String rName = StringUtils.hasText(o.getReceiverName()) ? o.getReceiverName()
+                    : (a != null && StringUtils.hasText(a.getReceiverName()) ? a.getReceiverName() : (c != null ? c.getName() : null));
+            String rPhone = a != null && StringUtils.hasText(a.getReceiverPhone()) ? a.getReceiverPhone()
+                    : (c != null && StringUtils.hasText(c.getPhone()) ? c.getPhone() : null);
+
+            int seq = o.getDeliveryStopSequence() != null ? o.getDeliveryStopSequence() : (idx + 1);
+            String district = extractDistrict(addr, r != null ? r.getName() : null);
+            String province = extractProvince(addr, r != null ? r.getName() : null);
+
+            stops.add(new DeliveryTripStopResponse(
+                    o.getId(),
+                    o.getCode(),
+                    c != null ? c.getId() : null,
+                    c != null ? c.getCode() : null,
+                    c != null ? c.getName() : null,
+                    addr,
+                    rName,
+                    rPhone,
+                    district,
+                    province,
+                    seq,
+                    o.getStatus(),
+                    o.getTotalAmount(),
+                    money(t.isInProgress() ? valueOnRoad(o) : BigDecimal.ZERO),
+                    o.getDeliveredAt(),
+                    o.getDeliveryFailedReason(),
+                    o.getStockReturnedAt() != null
+            ));
+        }
         return new DeliveryTripDetailResponse(toSummary(t, orders, now), stops);
+    }
+
+    static String extractDistrict(String addr, String fallbackRegion) {
+        if (StringUtils.hasText(addr)) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(Quận|Huyện|Thị xã)\\s+([^,]+)", java.util.regex.Pattern.CASE_INSENSITIVE)
+                    .matcher(addr);
+            if (m.find()) {
+                return m.group(0).trim();
+            }
+        }
+        return StringUtils.hasText(fallbackRegion) ? fallbackRegion.trim() : "Nội thành";
+    }
+
+    static String extractProvince(String addr, String fallbackRegion) {
+        if (StringUtils.hasText(addr)) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(Hà Nội|TP\\.?\\s*Hồ Chí Minh|Hồ Chí Minh|Sài Gòn|Đà Nẵng|Hải Phòng|Cần Thơ|Bình Dương|Đồng Nai)", java.util.regex.Pattern.CASE_INSENSITIVE)
+                    .matcher(addr);
+            if (m.find()) {
+                return m.group(0).trim();
+            }
+        }
+        return "Hà Nội";
     }
 
     private void assertWarehouseAllowed(UserDetailsImpl actor, Warehouse warehouse) {
