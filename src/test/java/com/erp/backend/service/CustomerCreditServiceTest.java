@@ -5,6 +5,7 @@ import com.erp.backend.entity.Customer;
 import com.erp.backend.entity.SalesOrder;
 import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.CustomerRepository;
+import com.erp.backend.repository.InvoiceRepository;
 import com.erp.backend.repository.SalesOrderRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -32,6 +33,8 @@ class CustomerCreditServiceTest {
 
     @Mock private SalesOrderRepository orderRepository;
     @Mock private CustomerRepository customerRepository;
+    @Mock private InvoiceRepository invoiceRepository;
+    @Mock private com.erp.backend.repository.CreditNoteRepository creditNoteRepository;
 
     @InjectMocks private CustomerCreditService service;
 
@@ -53,7 +56,7 @@ class CustomerCreditServiceTest {
     }
 
     private void noOverdue() {
-        when(orderRepository.countByCustomer_IdAndStatusInAndApprovedAtBefore(eq(6L), any(), any())).thenReturn(0L);
+        when(orderRepository.countByCustomer_IdAndStatusInAndApprovedAtBeforeAndInvoiceIdIsNull(eq(6L), any(), any())).thenReturn(0L);
     }
 
     @Test
@@ -114,13 +117,13 @@ class CustomerCreditServiceTest {
     void overdueDebt_blocked() {
         debt("3000000");
         LocalDateTime dueBefore = TODAY.minusDays(30).atStartOfDay();
-        when(orderRepository.countByCustomer_IdAndStatusInAndApprovedAtBefore(6L, SalesOrder.OUTSTANDING_DEBT_STATUSES, dueBefore))
+        when(orderRepository.countByCustomer_IdAndStatusInAndApprovedAtBeforeAndInvoiceIdIsNull(6L, SalesOrder.OUTSTANDING_DEBT_STATUSES, dueBefore))
                 .thenReturn(2L);
         when(orderRepository.sumOverdueAmount(6L, SalesOrder.OUTSTANDING_DEBT_STATUSES, dueBefore))
                 .thenReturn(new BigDecimal("2500000"));
         // duyệt 28/08 + 30 ngày = hạn 27/09 -> đến 08/10 quá hạn 11 ngày
         SalesOrder oldest = SalesOrder.builder().id(1L).approvedAt(LocalDateTime.of(2026, 8, 28, 15, 0)).build();
-        when(orderRepository.findFirstByCustomer_IdAndStatusInAndApprovedAtBeforeOrderByApprovedAtAsc(
+        when(orderRepository.findFirstByCustomer_IdAndStatusInAndApprovedAtBeforeAndInvoiceIdIsNullOrderByApprovedAtAsc(
                 6L, SalesOrder.OUTSTANDING_DEBT_STATUSES, dueBefore)).thenReturn(Optional.of(oldest));
 
         CreditStatusResponse res = service.evaluate(customer, new BigDecimal("100000"));
@@ -134,12 +137,71 @@ class CustomerCreditServiceTest {
     }
 
     @Test
+    @DisplayName("S7-07: Công nợ = đơn chưa xuất hoá đơn + còn nợ trên hoá đơn; tiền đã thu làm tăng hạn mức còn lại")
+    void debtIncludesInvoiceRemainingAfterPayments() {
+        debt("1000000");                       // đơn đã duyệt chưa xuất hoá đơn
+        when(invoiceRepository.sumOpenRemainingByCustomer(6L))
+                .thenReturn(new BigDecimal("2000000")); // hoá đơn 5tr đã thu 3tr
+        noOverdue();
+
+        CreditStatusResponse res = service.evaluate(customer, new BigDecimal("6500000"));
+
+        assertThat(res.currentDebt()).isEqualByComparingTo("3000000");
+        assertThat(res.availableCredit()).isEqualByComparingTo("7000000");
+        assertThat(res.exceedsLimit()).isFalse();
+    }
+
+    @Test
+    @DisplayName("S8-02: Số dư có do giảm trừ trả hàng chưa đối trừ được -> trừ vào công nợ, tăng hạn mức còn lại")
+    void unappliedCreditNote_reducesDebt() {
+        debt("1000000");
+        when(invoiceRepository.sumOpenRemainingByCustomer(6L)).thenReturn(new BigDecimal("2000000"));
+        when(creditNoteRepository.sumUnappliedByCustomer(6L)).thenReturn(new BigDecimal("500000"));
+        noOverdue();
+
+        CreditStatusResponse res = service.evaluate(customer, BigDecimal.ZERO);
+
+        assertThat(res.currentDebt()).isEqualByComparingTo("2500000");
+        assertThat(res.availableCredit()).isEqualByComparingTo("7500000");
+    }
+
+    @Test
+    @DisplayName("S7-07: Hoá đơn còn nợ quá hạn (tính từ ngày hoá đơn) -> chặn; số ngày lấy khoản lâu nhất")
+    void overdueInvoice_blocked() {
+        debt("0");
+        noOverdue();
+        LocalDate issuedBefore = TODAY.minusDays(30);
+        when(invoiceRepository.countOverdue(6L, issuedBefore)).thenReturn(1L);
+        when(invoiceRepository.sumOverdueRemaining(6L, issuedBefore)).thenReturn(new BigDecimal("1200000"));
+        // hoá đơn 01/09 + 30 ngày = hạn 01/10 -> đến 08/10 quá hạn 7 ngày
+        when(invoiceRepository.oldestOverdueInvoiceDate(6L, issuedBefore)).thenReturn(LocalDate.of(2026, 9, 1));
+
+        CreditStatusResponse res = service.evaluate(customer, BigDecimal.ZERO);
+
+        assertThat(res.overdue()).isTrue();
+        assertThat(res.overdueOrderCount()).isEqualTo(1);
+        assertThat(res.overdueAmount()).isEqualByComparingTo("1200000");
+        assertThat(res.overdueDays()).isEqualTo(7);
+    }
+
+    @Test
+    @DisplayName("S7-07: Hoá đơn quá hạn đã thu đủ -> không còn trong truy vấn quá hạn -> hết chặn")
+    void overdueInvoicePaid_notBlocked() {
+        debt("0");
+        noOverdue();
+        when(invoiceRepository.countOverdue(eq(6L), any())).thenReturn(0L);
+
+        assertThat(service.evaluate(customer, BigDecimal.ONE).overdue()).isFalse();
+        verify(invoiceRepository, never()).sumOverdueRemaining(any(), any());
+    }
+
+    @Test
     @DisplayName("S4-02: assertNoOverdueDebt ném 409 CUSTOMER_DEBT_OVERDUE khi có nợ quá hạn")
     void assertNoOverdueDebt_throwsConflict() {
         debt("3000000");
-        when(orderRepository.countByCustomer_IdAndStatusInAndApprovedAtBefore(eq(6L), any(), any())).thenReturn(1L);
+        when(orderRepository.countByCustomer_IdAndStatusInAndApprovedAtBeforeAndInvoiceIdIsNull(eq(6L), any(), any())).thenReturn(1L);
         when(orderRepository.sumOverdueAmount(eq(6L), any(), any())).thenReturn(new BigDecimal("3000000"));
-        when(orderRepository.findFirstByCustomer_IdAndStatusInAndApprovedAtBeforeOrderByApprovedAtAsc(eq(6L), any(), any()))
+        when(orderRepository.findFirstByCustomer_IdAndStatusInAndApprovedAtBeforeAndInvoiceIdIsNullOrderByApprovedAtAsc(eq(6L), any(), any()))
                 .thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.assertNoOverdueDebt(customer))
@@ -164,7 +226,7 @@ class CustomerCreditServiceTest {
         debt("0");
 
         assertThat(service.evaluate(customer, BigDecimal.ONE).overdue()).isFalse();
-        verify(orderRepository, never()).countByCustomer_IdAndStatusInAndApprovedAtBefore(any(), any(), any());
+        verify(orderRepository, never()).countByCustomer_IdAndStatusInAndApprovedAtBeforeAndInvoiceIdIsNull(any(), any(), any());
     }
 
     @Test

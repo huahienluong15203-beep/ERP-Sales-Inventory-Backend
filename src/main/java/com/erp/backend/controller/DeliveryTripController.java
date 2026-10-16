@@ -40,9 +40,26 @@ public class DeliveryTripController {
         return deliveryTripService.summary(actor);
     }
 
+    /** S6-06: Gom các phiếu xuất kho vào chuyến giao theo kho và khu vực */
+    @GetMapping("/candidate-orders")
+    public List<DeliveryTripCandidateOrderResponse> getCandidateOrders(
+            @RequestParam(required = false) Long warehouseId,
+            @RequestParam(required = false) Long regionId,
+            @RequestParam(required = false) String search,
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        return deliveryTripService.getCandidateOrders(warehouseId, regionId, search, actor);
+    }
+
     @GetMapping("/{id}")
     public DeliveryTripDetailResponse get(@PathVariable Long id, @AuthenticationPrincipal UserDetailsImpl actor) {
         return deliveryTripService.get(id, actor);
+    }
+
+    /** S6-06: Bảng kê chi tiết chuyến giao hàng kèm địa chỉ và số điện thoại người nhận để in ấn */
+    @GetMapping("/{id}/manifest")
+    public DeliveryTripManifestResponse getManifest(@PathVariable Long id,
+                                                    @AuthenticationPrincipal UserDetailsImpl actor) {
+        return deliveryTripService.getManifest(id, actor);
     }
 
     /** Body: {"orderIds":[101,102],"vehiclePlate":"29H-12345","driverName":"Anh Tuấn","expectedReturnAt":"2026-10-15T18:00:00"} */

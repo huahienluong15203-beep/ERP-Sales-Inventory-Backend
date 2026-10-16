@@ -79,7 +79,8 @@ public final class CustomerAccess {
         if (actor == null || customerRepository == null) {
             return null;
         }
-        return customerRepository.findByUser_Id(actor.getId())
+        return customerRepository.findByPortalUser_Id(actor.getId())
+                .or(() -> customerRepository.findByUser_Id(actor.getId()))
                 .or(() -> {
                     if (actor.getEmail() != null) {
                         return customerRepository.findByEmailIgnoreCase(actor.getEmail());
@@ -97,7 +98,7 @@ public final class CustomerAccess {
 
     /**
      * Chặn nhân viên kinh doanh xem / sửa đại lý không do mình phụ trách,
-     * và chặn đại lý xem đơn / thông tin của đại lý khác (S5-01).
+     * và chặn đại lý xem đơn / thông tin của đại lý khác (S5-01 / S6-09).
      * Trả 404 (thay vì 403) để không lộ thông tin đại lý của người khác.
      */
     public static void checkCanAccess(UserDetailsImpl actor, Customer customer) {
@@ -105,7 +106,8 @@ public final class CustomerAccess {
             return;
         }
         if (isCustomer(actor)) {
-            boolean isSelf = (customer.getUser() != null && actor.getId().equals(customer.getUser().getId()))
+            boolean isSelf = (customer.getPortalUser() != null && actor.getId().equals(customer.getPortalUser().getId()))
+                    || (customer.getUser() != null && actor.getId().equals(customer.getUser().getId()))
                     || (customer.getEmail() != null && customer.getEmail().equalsIgnoreCase(actor.getEmail()))
                     || (customer.getCode() != null && customer.getCode().equalsIgnoreCase(actor.getUsername()));
             if (!isSelf) {

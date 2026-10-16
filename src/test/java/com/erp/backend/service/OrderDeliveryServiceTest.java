@@ -1,10 +1,12 @@
 package com.erp.backend.service;
 
 import com.erp.backend.dto.order.OrderDeliveryConfirmRequest;
+import com.erp.backend.dto.order.OrderDeliveryTimelineResponse;
 import com.erp.backend.dto.order.OrderLineDeliveryRequest;
 import com.erp.backend.dto.order.OrderResponse;
 import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
+import org.springframework.http.HttpStatus;
 import com.erp.backend.repository.SalesOrderApprovalRepository;
 import com.erp.backend.repository.SalesOrderRepository;
 import com.erp.backend.security.UserDetailsImpl;
@@ -380,5 +382,198 @@ class OrderDeliveryServiceTest {
 
         assertThat(capturedReturns()).hasSize(2);
         assertThat(order.getStockReturnedAt()).isEqualTo(NOW);
+    }
+
+    // ======================= S6-09: TIMELINE & THỰC GIAO =======================
+
+    @Test
+    @DisplayName("S6-09 / SCRUM-258: Lấy delivery timeline thành công đủ 5 mốc & chi tiết số lượng thực giao từng dòng")
+    void getDeliveryTimeline_success_allFiveMilestones() {
+        order.setStatus(SalesOrder.STATUS_DELIVERED);
+        order.setApprovedAt(LocalDateTime.of(2026, 10, 15, 8, 30));
+        order.setApprovedByUsername("approver_user");
+        order.setDispatchedAt(LocalDateTime.of(2026, 10, 15, 10, 0));
+        order.setDispatchedByUsername("dispatcher_user");
+        order.setDispatchNote("Giao trước 17h");
+        order.setReceiverName("Đại diện nhận hàng");
+        order.setDeliveredAt(LocalDateTime.of(2026, 10, 15, 14, 30));
+        order.setDeliveryConfirmedAt(LocalDateTime.of(2026, 10, 15, 14, 35));
+        order.setDeliveryConfirmedByUsername("confirmer_user");
+
+        DeliveryTrip trip = DeliveryTrip.builder()
+                .id(55L)
+                .code("CH-001")
+                .vehiclePlate("29C-12345")
+                .driverName("Tài xế giao nhận")
+                .driverPhone("0912345678")
+                .status(DeliveryTrip.STATUS_COMPLETED)
+                .departedAt(LocalDateTime.of(2026, 10, 15, 10, 30))
+                .completedAt(LocalDateTime.of(2026, 10, 15, 15, 0))
+                .build();
+        order.setDeliveryTrip(trip);
+
+        // cocaLine: ordered 10, delivered 8 (thiếu 2)
+        cocaLine.setQuantity(new BigDecimal("10"));
+        cocaLine.setDeliveredQuantity(new BigDecimal("8"));
+        cocaLine.setShortageReason("Hỏng vỡ khi bốc dỡ");
+
+        // pepsiLine: ordered 50, delivered 50 (đủ)
+        pepsiLine.setQuantity(new BigDecimal("50"));
+        pepsiLine.setDeliveredQuantity(new BigDecimal("50"));
+
+        SalesOrderApproval approvalPicking = SalesOrderApproval.builder()
+                .id(1L)
+                .order(order)
+                .fromStatus(SalesOrder.STATUS_APPROVED)
+                .toStatus(SalesOrder.STATUS_PICKING)
+                .createdAt(LocalDateTime.of(2026, 10, 15, 9, 0))
+                .comment("Bắt đầu soạn hàng")
+                .build();
+
+        when(orderRepository.findById(100L)).thenReturn(Optional.of(order));
+        when(approvalRepository.findByOrder_IdOrderByCreatedAtAscIdAsc(100L)).thenReturn(List.of(approvalPicking));
+
+        OrderDeliveryTimelineResponse timeline = service.getDeliveryTimeline(100L, whManager);
+
+        assertThat(timeline).isNotNull();
+        assertThat(timeline.orderId()).isEqualTo(100L);
+        assertThat(timeline.orderCode()).isEqualTo("DH261015-AB12");
+        assertThat(timeline.status()).isEqualTo(SalesOrder.STATUS_DELIVERED);
+        assertThat(timeline.currentStep()).isEqualTo(5);
+
+        // Kiểm tra 5 mốc thời gian (AC1)
+        OrderDeliveryTimelineResponse.TimelineSteps steps = timeline.steps();
+        assertThat(steps).isNotNull();
+
+        // Mốc 1: ĐÃ DUYỆT
+        assertThat(steps.approved().statusKey()).isEqualTo("APPROVED");
+        assertThat(steps.approved().time()).isEqualTo(LocalDateTime.of(2026, 10, 15, 8, 30));
+        assertThat(steps.approved().completed()).isTrue();
+
+        // Mốc 2: ĐANG SOẠN
+        assertThat(steps.picking().statusKey()).isEqualTo("PICKING");
+        assertThat(steps.picking().time()).isEqualTo(LocalDateTime.of(2026, 10, 15, 9, 0));
+        assertThat(steps.picking().completed()).isTrue();
+
+        // Mốc 3: ĐÃ XUẤT
+        assertThat(steps.dispatched().statusKey()).isEqualTo("DISPATCHED");
+        assertThat(steps.dispatched().time()).isEqualTo(LocalDateTime.of(2026, 10, 15, 10, 0));
+        assertThat(steps.dispatched().completed()).isTrue();
+
+        // Mốc 4: ĐANG GIAO
+        assertThat(steps.shipping().statusKey()).isEqualTo("SHIPPING");
+        assertThat(steps.shipping().completed()).isTrue();
+
+        // Mốc 5: ĐÃ GIAO
+        assertThat(steps.delivered().statusKey()).isEqualTo("DELIVERED");
+        assertThat(steps.delivered().time()).isEqualTo(LocalDateTime.of(2026, 10, 15, 14, 30));
+        assertThat(steps.delivered().completed()).isTrue();
+        assertThat(steps.delivered().current()).isTrue();
+
+        // Kiểm tra thông tin chuyến xe
+        assertThat(timeline.tripInfo()).isNotNull();
+        assertThat(timeline.tripInfo().tripCode()).isEqualTo("CH-001");
+        assertThat(timeline.tripInfo().vehiclePlate()).isEqualTo("29C-12345");
+        assertThat(timeline.tripInfo().driverName()).isEqualTo("Tài xế giao nhận");
+        assertThat(timeline.tripInfo().driverPhone()).isEqualTo("0912345678");
+
+        // Kiểm tra số lượng thực giao từng dòng hàng (AC2)
+        List<OrderDeliveryTimelineResponse.OrderDeliveryLineItem> lines = timeline.lines();
+        assertThat(lines).hasSize(2);
+
+        OrderDeliveryTimelineResponse.OrderDeliveryLineItem l1 = lines.get(0);
+        assertThat(l1.productSku()).isEqualTo("SP-COCA");
+        assertThat(l1.orderedQuantity()).isEqualByComparingTo("10");
+        assertThat(l1.deliveredQuantity()).isEqualByComparingTo("8");
+        assertThat(l1.shortageQuantity()).isEqualByComparingTo("2");
+        assertThat(l1.isShortage()).isTrue();
+        assertThat(l1.shortageReason()).isEqualTo("Hỏng vỡ khi bốc dỡ");
+
+        OrderDeliveryTimelineResponse.OrderDeliveryLineItem l2 = lines.get(1);
+        assertThat(l2.productSku()).isEqualTo("SP-PEPSI");
+        assertThat(l2.orderedQuantity()).isEqualByComparingTo("50");
+        assertThat(l2.deliveredQuantity()).isEqualByComparingTo("50");
+        assertThat(l2.shortageQuantity()).isEqualByComparingTo("0");
+        assertThat(l2.isShortage()).isFalse();
+    }
+
+    @Test
+    @DisplayName("SCRUM-233 / S6-09: Chặn user lạ xem đơn (Customer B xem đơn của Customer A -> ném 404 NOT_FOUND)")
+    void getDeliveryTimeline_accessDenied_strangerCustomer_throwsNotFound() {
+        // Customer A là chủ sở hữu của order (id 6L)
+        // Actor là Customer B (khách lạ, userId 99L, customerId 999L)
+        UserDetailsImpl strangerCustomer = actor(99L, "ROLE_CUSTOMER");
+        Customer customerB = Customer.builder().id(999L).code("DL-999").name("Đại lý 999").build();
+
+        when(orderRepository.findById(100L)).thenReturn(Optional.of(order));
+        when(customerRepository.findByPortalUser_Id(99L)).thenReturn(Optional.of(customerB));
+
+        assertThatThrownBy(() -> service.getDeliveryTimeline(100L, strangerCustomer))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> {
+                    BusinessException be = (BusinessException) e;
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
+                    assertThat(be.getMessage()).contains("Không tìm thấy");
+                });
+    }
+
+    @Test
+    @DisplayName("SCRUM-233 / S6-09: Chặn nhân viên kinh doanh không phụ trách xem đơn -> ném 404 NOT_FOUND")
+    void getDeliveryTimeline_accessDenied_unassignedSalesRep_throwsNotFound() {
+        // Sales Rep phụ trách order là ID 7, actor là Sales Rep ID 88
+        UserDetailsImpl unassignedSales = actor(88L, "ROLE_SALES_REP");
+
+        when(orderRepository.findById(100L)).thenReturn(Optional.of(order));
+
+        assertThatThrownBy(() -> service.getDeliveryTimeline(100L, unassignedSales))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> {
+                    BusinessException be = (BusinessException) e;
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
+                    assertThat(be.getMessage()).contains("Không tìm thấy");
+                });
+    }
+
+    @Test
+    @DisplayName("SCRUM-233 / S6-09: Nhân viên kinh doanh được phân công phụ trách được phép xem timeline")
+    void getDeliveryTimeline_accessAllowed_assignedSalesRep() {
+        // Sales Rep phụ trách order là ID 7
+        UserDetailsImpl assignedSales = actor(7L, "ROLE_SALES_REP");
+
+        when(orderRepository.findById(100L)).thenReturn(Optional.of(order));
+        when(approvalRepository.findByOrder_IdOrderByCreatedAtAscIdAsc(100L)).thenReturn(List.of());
+
+        OrderDeliveryTimelineResponse timeline = service.getDeliveryTimeline(100L, assignedSales);
+        assertThat(timeline).isNotNull();
+        assertThat(timeline.orderId()).isEqualTo(100L);
+    }
+
+    @Test
+    @DisplayName("SCRUM-258 / S6-09: Đại lý chính chủ xem đơn qua tài khoản portal thành công")
+    void getDeliveryTimeline_accessAllowed_portalCustomerOwner() {
+        UserDetailsImpl dealerActor = actor(50L, "ROLE_CUSTOMER");
+        Customer customerA = order.getCustomer();
+        customerA.setPortalUser(User.builder().id(50L).build());
+
+        when(orderRepository.findById(100L)).thenReturn(Optional.of(order));
+        when(customerRepository.findByPortalUser_Id(50L)).thenReturn(Optional.of(customerA));
+        when(approvalRepository.findByOrder_IdOrderByCreatedAtAscIdAsc(100L)).thenReturn(List.of());
+
+        OrderDeliveryTimelineResponse timeline = service.getDeliveryTimeline(100L, dealerActor);
+        assertThat(timeline).isNotNull();
+        assertThat(timeline.orderId()).isEqualTo(100L);
+    }
+
+    @Test
+    @DisplayName("S6-09: Đơn hàng không tồn tại -> ném 404 NOT_FOUND")
+    void getDeliveryTimeline_orderNotFound_throwsNotFound() {
+        when(orderRepository.findById(9999L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.getDeliveryTimeline(9999L, whManager))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> {
+                    BusinessException be = (BusinessException) e;
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
+                });
     }
 }

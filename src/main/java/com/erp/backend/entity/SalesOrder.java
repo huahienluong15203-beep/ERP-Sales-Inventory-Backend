@@ -201,6 +201,10 @@ public class SalesOrder {
     @JoinColumn(name = "delivery_trip_id")
     private DeliveryTrip deliveryTrip;
 
+    // S6-06: Thứ tự điểm giao trên chuyến (1, 2, 3...)
+    @Column(name = "delivery_stop_sequence")
+    private Integer deliveryStopSequence;
+
     // S6-07: thời điểm phần hàng giao không được đã nhập lại kho (null = chưa nhập lại / chưa phát sinh)
     @Column(name = "stock_returned_at")
     private LocalDateTime stockReturnedAt;

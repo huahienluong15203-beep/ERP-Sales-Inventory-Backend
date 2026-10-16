@@ -31,30 +31,34 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, Long>, J
     /** Đại lý đã có đơn hàng (kể cả đơn nháp) thì không được xoá hồ sơ. */
     boolean existsByCustomer_Id(Long customerId);
 
-    /** S4-02: Tổng tiền các đơn đang tính vào công nợ của đại lý. */
+    /**
+     * S4-02 / S7-07: Tổng tiền các đơn đang tính vào công nợ nhưng CHƯA xuất hoá đơn.
+     * Đơn đã có hoá đơn thì công nợ tính theo số còn nợ của hoá đơn (đã trừ tiền thu), xem InvoiceRepository.
+     */
     @Query("select coalesce(sum(o.totalAmount), 0) from SalesOrder o "
-            + "where o.customer.id = :customerId and o.status in :statuses")
+            + "where o.customer.id = :customerId and o.status in :statuses and o.invoiceId is null")
     BigDecimal sumTotalAmountByCustomerAndStatuses(@Param("customerId") Long customerId,
                                                    @Param("statuses") Collection<String> statuses);
 
-    /** S4-02: Tổng tiền các đơn đang tính vào công nợ theo danh sách đại lý (dùng để nạp công nợ hàng loạt cho danh sách). */
+    /** S4-02 / S7-07: Như trên (đơn chưa xuất hoá đơn) theo danh sách đại lý (nạp công nợ hàng loạt cho danh sách). */
     @Query("select o.customer.id, coalesce(sum(o.totalAmount), 0) from SalesOrder o "
-            + "where o.customer.id in :customerIds and o.status in :statuses group by o.customer.id")
+            + "where o.customer.id in :customerIds and o.status in :statuses and o.invoiceId is null group by o.customer.id")
     List<Object[]> sumTotalAmountByCustomerIdsAndStatuses(@Param("customerIds") Collection<Long> customerIds,
                                                            @Param("statuses") Collection<String> statuses);
 
-    /** S4-02: Tổng tiền các đơn nợ đã quá hạn (duyệt trước mốc dueBefore). */
+    /** S4-02 / S7-07: Tổng tiền các đơn nợ CHƯA xuất hoá đơn đã quá hạn (duyệt trước mốc dueBefore). */
     @Query("select coalesce(sum(o.totalAmount), 0) from SalesOrder o "
-            + "where o.customer.id = :customerId and o.status in :statuses and o.approvedAt < :dueBefore")
+            + "where o.customer.id = :customerId and o.status in :statuses and o.approvedAt < :dueBefore "
+            + "and o.invoiceId is null")
     BigDecimal sumOverdueAmount(@Param("customerId") Long customerId,
                                 @Param("statuses") Collection<String> statuses,
                                 @Param("dueBefore") LocalDateTime dueBefore);
 
-    long countByCustomer_IdAndStatusInAndApprovedAtBefore(Long customerId, Collection<String> statuses,
-                                                          LocalDateTime dueBefore);
+    long countByCustomer_IdAndStatusInAndApprovedAtBeforeAndInvoiceIdIsNull(Long customerId, Collection<String> statuses,
+                                                                            LocalDateTime dueBefore);
 
-    /** S4-02: Đơn nợ quá hạn lâu nhất (để báo số ngày quá hạn). */
-    Optional<SalesOrder> findFirstByCustomer_IdAndStatusInAndApprovedAtBeforeOrderByApprovedAtAsc(
+    /** S4-02: Đơn nợ (chưa xuất hoá đơn) quá hạn lâu nhất (để báo số ngày quá hạn). */
+    Optional<SalesOrder> findFirstByCustomer_IdAndStatusInAndApprovedAtBeforeAndInvoiceIdIsNullOrderByApprovedAtAsc(
             Long customerId, Collection<String> statuses, LocalDateTime dueBefore);
 
     /** S5-06: Đơn đang giữ chỗ tồn đã quá hạn (đơn quá hạn lâu nhất lên trước). */
@@ -156,17 +160,25 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, Long>, J
     @Query("select o from SalesOrder o where o.id in :ids order by o.id asc")
     List<SalesOrder> findAllByIdForUpdate(@Param("ids") Collection<Long> ids);
 
-    /** S6-07: các đơn (điểm giao) của những chuyến giao. */
-    @Query("select o from SalesOrder o join fetch o.customer where o.deliveryTrip.id in :tripIds order by o.id asc")
+    /** S6-06 & S6-07: các đơn (điểm giao) của những chuyến giao, kèm thông tin người nhận & địa chỉ. */
+    @Query("select o from SalesOrder o join fetch o.customer c left join fetch o.deliveryAddress a "
+            + "left join fetch c.region r "
+            + "where o.deliveryTrip.id in :tripIds order by coalesce(o.deliveryStopSequence, o.id) asc, o.id asc")
     List<SalesOrder> findByDeliveryTripIds(@Param("tripIds") Collection<Long> tripIds);
 
     /** S6-07: id các đơn của 1 chuyến (không nạp đơn trước khi khoá). */
-    @Query("select o.id from SalesOrder o where o.deliveryTrip.id = :tripId order by o.id asc")
+    @Query("select o.id from SalesOrder o where o.deliveryTrip.id = :tripId order by coalesce(o.deliveryStopSequence, o.id) asc, o.id asc")
     List<Long> findIdsByDeliveryTripId(@Param("tripId") Long tripId);
 
     /** S6-07: đơn đã xuất kho chưa xếp vào chuyến giao nào. */
     @Query("select o from SalesOrder o where o.status = :status and o.deliveryTrip is null")
     List<SalesOrder> findByStatusWithoutTrip(@Param("status") String status);
+
+    /** S6-06: Đơn đã xuất kho chưa xếp chuyến kèm chi tiết địa chỉ, người nhận, khu vực để gom chuyến theo khu vực. */
+    @Query("select o from SalesOrder o join fetch o.customer c left join fetch o.deliveryAddress a "
+            + "left join fetch c.region r left join fetch o.reservedWarehouse w "
+            + "where o.status = :status and o.deliveryTrip is null order by o.id asc")
+    List<SalesOrder> findCandidateOrdersWithDetails(@Param("status") String status);
 
     /** S6-05: mã các đơn nợ hàng tách ra từ đơn :parentId (theo thứ tự tạo). */
     @Query("select o.code from SalesOrder o where o.parentOrder.id = :parentId order by o.id")

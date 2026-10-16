@@ -82,9 +82,28 @@ public class Invoice {
     @Column(name = "total_amount", nullable = false, precision = 18, scale = 2, updatable = false)
     private BigDecimal totalAmount;
 
+    public static final String PAYMENT_STATUS_UNPAID = "UNPAID";
+    public static final String PAYMENT_STATUS_PARTIALLY_PAID = "PARTIALLY_PAID";
+    public static final String PAYMENT_STATUS_PAID = "PAID";
+
     @Column(nullable = false, length = 20)
     @Builder.Default
     private String status = STATUS_ISSUED;
+
+    /** S7-02: Số tiền đã thanh toán cho hoá đơn này */
+    @Column(name = "paid_amount", nullable = false, precision = 18, scale = 2)
+    @Builder.Default
+    private BigDecimal paidAmount = BigDecimal.ZERO;
+
+    /** S7-02: Số tiền còn nợ của hoá đơn này */
+    @Column(name = "remaining_amount", nullable = false, precision = 18, scale = 2)
+    @Builder.Default
+    private BigDecimal remainingAmount = BigDecimal.ZERO;
+
+    /** S7-02: Trạng thái thanh toán công nợ: UNPAID, PARTIALLY_PAID, PAID */
+    @Column(name = "payment_status", nullable = false, length = 30)
+    @Builder.Default
+    private String paymentStatus = PAYMENT_STATUS_UNPAID;
 
     @Column(length = 500, updatable = false)
     private String note;
@@ -106,6 +125,51 @@ public class Invoice {
     public void addLine(InvoiceLine line) {
         line.setInvoice(this);
         lines.add(line);
+    }
+
+    @PrePersist
+    void prePersist() {
+        if (paidAmount == null) {
+            paidAmount = BigDecimal.ZERO;
+        }
+        if (remainingAmount == null) {
+            remainingAmount = totalAmount != null ? totalAmount : BigDecimal.ZERO;
+        }
+        if (paymentStatus == null) {
+            paymentStatus = PAYMENT_STATUS_UNPAID;
+        }
+    }
+
+    /**
+     * S7-02: Cập nhật cấn trừ thanh toán vào hoá đơn.
+     */
+    public void applyPayment(BigDecimal amount) {
+        if (amount == null || amount.signum() <= 0) {
+            return;
+        }
+        if (this.paidAmount == null) {
+            this.paidAmount = BigDecimal.ZERO;
+        }
+        if (this.remainingAmount == null) {
+            this.remainingAmount = this.totalAmount != null ? this.totalAmount : BigDecimal.ZERO;
+        }
+        this.paidAmount = this.paidAmount.add(amount);
+        this.remainingAmount = this.remainingAmount.subtract(amount);
+        if (this.remainingAmount.compareTo(BigDecimal.ZERO) <= 0) {
+            this.remainingAmount = BigDecimal.ZERO;
+            this.paymentStatus = PAYMENT_STATUS_PAID;
+        } else {
+            this.paymentStatus = PAYMENT_STATUS_PARTIALLY_PAID;
+        }
+    }
+
+    /**
+     * S7-08: Hạn thanh toán hoá đơn = Ngày phát hành + Số ngày nợ tối đa của đại lý (mặc định 30 ngày).
+     */
+    public LocalDate calculateDueDate() {
+        Integer maxDebt = customer != null ? customer.getMaxDebtDays() : null;
+        int days = (maxDebt != null && maxDebt > 0) ? maxDebt : 30;
+        return invoiceDate != null ? invoiceDate.plusDays(days) : LocalDate.now();
     }
 
     /** Quy tắc 7: chứng từ đã phát hành không được xoá. */

@@ -66,11 +66,15 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
     @Query("SELECT p FROM Product p WHERE " +
             "(:keyword IS NULL OR :keyword = '' OR LOWER(p.name) LIKE LOWER(CONCAT('%', :keyword, '%')) OR LOWER(p.sku) LIKE LOWER(CONCAT('%', :keyword, '%'))) " +
             "AND (:hasCategories = false OR p.category IN :categoryNames OR (p.productCategory IS NOT NULL AND p.productCategory.id IN :categoryIds)) " +
+            "AND (:hasExcludeCategories = false OR ((p.productCategory IS NOT NULL AND p.productCategory.id NOT IN :excludeCategoryIds) OR (p.productCategory IS NULL AND (p.category IS NULL OR p.category NOT IN :excludeCategoryNames)))) " +
             "AND (:status IS NULL OR :status = '' OR p.status = :status)")
     Page<Product> searchProductsHierarchical(@Param("keyword") String keyword,
                                              @Param("hasCategories") boolean hasCategories,
                                              @Param("categoryNames") java.util.Collection<String> categoryNames,
                                              @Param("categoryIds") java.util.Collection<Long> categoryIds,
+                                             @Param("hasExcludeCategories") boolean hasExcludeCategories,
+                                             @Param("excludeCategoryNames") java.util.Collection<String> excludeCategoryNames,
+                                             @Param("excludeCategoryIds") java.util.Collection<Long> excludeCategoryIds,
                                              @Param("status") String status,
                                              Pageable pageable);
 }

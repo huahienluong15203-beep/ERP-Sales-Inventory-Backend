@@ -10,4 +10,6 @@ public interface InvoiceLineRepository extends JpaRepository<InvoiceLine, Long> 
 
     /** Có dòng đơn nào trong danh sách đã được lập hoá đơn chưa. */
     boolean existsByOrderLineIdIn(Collection<Long> orderLineIds);
+
+    java.util.List<InvoiceLine> findByInvoice_IdOrderByLineNoAsc(Long invoiceId);
 }

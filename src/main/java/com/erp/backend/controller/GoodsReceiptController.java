@@ -78,4 +78,17 @@ public class GoodsReceiptController {
         GoodsReceiptResponse response = goodsReceiptService.confirmReceipt(id, actor);
         return ResponseEntity.ok(response);
     }
+
+    /**
+     * Xóa phiếu nhập kho nháp (DRAFT).
+     */
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasAnyRole('WAREHOUSE', 'WH_MANAGER', 'ADMIN')")
+    public ResponseEntity<Void> deleteReceipt(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserDetailsImpl actor
+    ) {
+        goodsReceiptService.deleteReceipt(id, actor);
+        return ResponseEntity.noContent().build();
+    }
 }
