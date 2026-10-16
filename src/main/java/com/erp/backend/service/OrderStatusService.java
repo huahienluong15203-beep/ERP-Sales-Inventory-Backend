@@ -408,6 +408,11 @@ public class OrderStatusService {
                         ? r.getBatchNumber().trim()
                         : (StringUtils.hasText(line.getBatchNumber()) ? line.getBatchNumber().trim() : suggestedBatch);
 
+                if (!StringUtils.hasText(chosenBatch)) {
+                    throw BusinessException.badRequest("NO_VALID_LOT_AVAILABLE",
+                            "Sản phẩm '" + line.getProductSku() + "' quản lý theo lô nhưng không có lô hàng hợp lệ (còn hạn và khả dụng) để xuất kho.");
+                }
+
                 String changeReason = (r != null && StringUtils.hasText(r.getLotChangeReason()))
                         ? r.getLotChangeReason().trim()
                         : line.getLotChangeReason();

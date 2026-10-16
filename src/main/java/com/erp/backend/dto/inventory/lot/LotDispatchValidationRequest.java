@@ -30,6 +30,9 @@ public class LotDispatchValidationRequest {
     @DecimalMin(value = "0.0001", message = "Số lượng xuất phải lớn hơn 0")
     private BigDecimal quantity;
 
+    @Schema(description = "Ngưỡng cảnh báo cận hạn (ngày, mặc định 30)")
+    private Integer nearExpiryDays;
+
     @Schema(description = "Xác nhận ghi đè xuất kho dù lô đã quá hạn (chỉ Quản lý kho / Admin)")
     private Boolean overrideExpired;
 

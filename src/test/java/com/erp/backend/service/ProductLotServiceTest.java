@@ -61,8 +61,32 @@ class ProductLotServiceTest {
     }
 
     @Test
-    @DisplayName("S6-01: Khai báo lô hàng mới hợp lệ & tự động bật hasBatchManagement cho SKU")
-    void createLot_success_autoEnablesBatchManagement() {
+    @DisplayName("S6-01 (TC601-08): Khai báo lô khi SKU chưa bật quản lý lô -> lỗi 400 Bad Request")
+    void createLot_whenHasBatchManagementFalse_throwsBadRequest() {
+        ProductLotCreateRequest req = ProductLotCreateRequest.builder()
+                .productId(20L)
+                .warehouseId(10L)
+                .batchNumber("LOT-202610-01")
+                .manufactureDate(LocalDate.now().minusMonths(1))
+                .expiredDate(LocalDate.now().plusMonths(5))
+                .initialQuantity(new BigDecimal("100"))
+                .supplierId(30L)
+                .notes("Lô hàng nhập mới")
+                .build();
+
+        when(productRepository.findById(20L)).thenReturn(Optional.of(productPepsi));
+        when(warehouseRepository.findById(10L)).thenReturn(Optional.of(whHn));
+        when(supplierRepository.findById(30L)).thenReturn(Optional.of(supplierVnm));
+
+        assertThatThrownBy(() -> service.createLot(req, manager))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("chưa được bật quản lý theo lô hàng");
+    }
+
+    @Test
+    @DisplayName("S6-01: Khai báo lô hàng mới hợp lệ cho SKU đã bật quản lý lô -> Thành công")
+    void createLot_success_whenBatchManagementEnabled() {
+        productPepsi.setHasBatchManagement(true);
         ProductLotCreateRequest req = ProductLotCreateRequest.builder()
                 .productId(20L)
                 .warehouseId(10L)
@@ -86,7 +110,6 @@ class ProductLotServiceTest {
         assertThat(res.getQuantity()).isEqualByComparingTo("100");
         assertThat(res.getExpiryStatus()).isEqualTo("SAFE");
         assertThat(res.getProductSku()).isEqualTo("SP-PEPSI-330");
-        assertThat(productPepsi.getHasBatchManagement()).isTrue();
     }
 
     @Test
@@ -172,6 +195,21 @@ class ProductLotServiceTest {
         assertThatThrownBy(() -> service.toggleBatchManagement(20L, true, staff))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("Chỉ Quản lý kho, Quản lý bán hàng hoặc Quản trị viên");
+    }
+
+    @Test
+    @DisplayName("S6-01 (TC601-09): Tắt quản lý lô khi vẫn còn hàng trong các lô -> lỗi 400 Bad Request")
+    void toggleBatchManagement_disableWhenStockRemaining_throwsBadRequest() {
+        productPepsi.setHasBatchManagement(true);
+        when(productRepository.findById(20L)).thenReturn(Optional.of(productPepsi));
+
+        ProductLot lotWithStock = ProductLot.builder().id(101L).product(productPepsi).warehouse(whHn)
+                .batchNumber("LOT-01").quantity(new BigDecimal("100")).status("ACTIVE").build();
+        when(productLotRepository.findByProduct_Id(20L)).thenReturn(List.of(lotWithStock));
+
+        assertThatThrownBy(() -> service.toggleBatchManagement(20L, false, manager))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("vẫn còn 100 đơn vị tồn kho trong các lô hàng");
     }
 
     @Test
@@ -340,5 +378,60 @@ class ProductLotServiceTest {
         assertThat(summary.getSafeQuantity()).isEqualByComparingTo("30");
         assertThat(summary.getOutOfStockLots()).isEqualTo(1);
         assertThat(summary.getOutOfStockQuantity()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    @DisplayName("S6-01 (TC601-23): deductLotStock - Lô đã hết hạn -> Bị từ chối lỗi 400 Bad Request")
+    void deductLotStock_expiredLot_throwsBadRequest() {
+        ProductLot expiredLot = ProductLot.builder().id(101L).product(productPepsi).warehouse(whHn)
+                .batchNumber("LOT-EXP-01").quantity(new BigDecimal("50")).status("ACTIVE")
+                .expiredDate(LocalDate.now().minusDays(3)).build();
+
+        when(productLotRepository.findByProductAndWarehouseAndBatchNumberForUpdate(20L, 10L, "LOT-EXP-01"))
+                .thenReturn(Optional.of(expiredLot));
+
+        assertThatThrownBy(() -> service.deductLotStock(20L, 10L, "LOT-EXP-01", new BigDecimal("10"), "SO", 1L, "SO-01", manager))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("đã hết hạn sử dụng");
+    }
+
+    @Test
+    @DisplayName("S6-01 (TC601-25): deductLotStock - Lô đang khóa (LOCKED) -> Bị từ chối lỗi 400 Bad Request")
+    void deductLotStock_lockedLot_throwsBadRequest() {
+        ProductLot lockedLot = ProductLot.builder().id(102L).product(productPepsi).warehouse(whHn)
+                .batchNumber("LOT-LCK-01").quantity(new BigDecimal("50")).status("LOCKED")
+                .expiredDate(LocalDate.now().plusMonths(3)).build();
+
+        when(productLotRepository.findByProductAndWarehouseAndBatchNumberForUpdate(20L, 10L, "LOT-LCK-01"))
+                .thenReturn(Optional.of(lockedLot));
+
+        assertThatThrownBy(() -> service.deductLotStock(20L, 10L, "LOT-LCK-01", new BigDecimal("10"), "SO", 1L, "SO-01", manager))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("đang bị khóa (LOCKED)");
+    }
+
+    @Test
+    @DisplayName("S6-01 (TC601-28): validateLotForDispatch - Hỗ trợ tùy chỉnh ngưỡng cảnh báo cận hạn (VD: 45 ngày)")
+    void validateLotForDispatch_withCustomNearExpiryDays_evaluatesCorrectly() {
+        // Lô còn 40 ngày HSD: với ngưỡng mặc định 30 ngày -> false; với ngưỡng tùy chỉnh 45 ngày -> true
+        ProductLot lot40Days = ProductLot.builder().id(103L).product(productPepsi).warehouse(whHn)
+                .batchNumber("LOT-40D").quantity(new BigDecimal("50")).status("ACTIVE")
+                .expiredDate(LocalDate.now().plusDays(40)).build();
+
+        when(productLotRepository.findByProduct_IdAndWarehouse_IdAndBatchNumber(20L, 10L, "LOT-40D"))
+                .thenReturn(Optional.of(lot40Days));
+
+        // 1. Không truyền ngưỡng (mặc định 30) -> nearExpiry = false
+        LotDispatchValidationRequest reqDef = LotDispatchValidationRequest.builder()
+                .productId(20L).warehouseId(10L).batchNumber("LOT-40D").quantity(new BigDecimal("10")).build();
+        LotDispatchValidationResponse resDef = service.validateLotForDispatch(reqDef, staff);
+        assertThat(resDef.isNearExpiry()).isFalse();
+
+        // 2. Truyền ngưỡng 45 ngày -> nearExpiry = true
+        LotDispatchValidationRequest req45 = LotDispatchValidationRequest.builder()
+                .productId(20L).warehouseId(10L).batchNumber("LOT-40D").quantity(new BigDecimal("10"))
+                .nearExpiryDays(45).build();
+        LotDispatchValidationResponse res45 = service.validateLotForDispatch(req45, staff);
+        assertThat(res45.isNearExpiry()).isTrue();
     }
 }

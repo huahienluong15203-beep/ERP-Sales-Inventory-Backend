@@ -136,11 +136,10 @@ public class ProductLotService {
                     "Số lô '" + cleanBatchNumber + "' đã tồn tại cho sản phẩm này tại kho " + warehouse.getName(), "batchNumber");
         }
 
-        // Tự động bật quản lý lô cho sản phẩm nếu sản phẩm chưa được bật
+        // S6-01: Kiểm tra sản phẩm đã được kích hoạt quản lý lô hay chưa
         if (!Boolean.TRUE.equals(product.getHasBatchManagement())) {
-            product.setHasBatchManagement(true);
-            productRepository.save(product);
-            log.info("Automatically enabled batch management for product SKU={}", product.getSku());
+            throw BusinessException.badRequest("BATCH_MANAGEMENT_NOT_ENABLED",
+                    "Sản phẩm '" + product.getSku() + "' chưa được bật quản lý theo lô hàng. Vui lòng bật quản lý lô trước khi tạo lô.");
         }
 
         BigDecimal qty = request.getInitialQuantity() != null ? request.getInitialQuantity() : BigDecimal.ZERO;
@@ -231,6 +230,17 @@ public class ProductLotService {
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy sản phẩm với ID: " + productId));
 
         boolean oldValue = Boolean.TRUE.equals(product.getHasBatchManagement());
+        if (!enabled) {
+            List<ProductLot> existingLots = productLotRepository.findByProduct_Id(productId);
+            BigDecimal totalLotQuantity = existingLots.stream()
+                    .map(lot -> lot.getQuantity() != null ? lot.getQuantity() : BigDecimal.ZERO)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            if (totalLotQuantity.compareTo(BigDecimal.ZERO) > 0) {
+                throw BusinessException.badRequest("PRODUCT_HAS_LOT_STOCK",
+                        "Không thể tắt quản lý lô cho sản phẩm '" + product.getSku()
+                                + "' vì vẫn còn " + totalLotQuantity + " đơn vị tồn kho trong các lô hàng. Vui lòng xuất hết tồn lô trước khi tắt.");
+            }
+        }
         product.setHasBatchManagement(enabled);
         Product saved = productRepository.save(product);
 
@@ -366,9 +376,13 @@ public class ProductLotService {
         BigDecimal availableQty = lot.getQuantity() != null ? lot.getQuantity() : BigDecimal.ZERO;
         BigDecimal reqQty = request.getQuantity();
 
+        int threshold = (request.getNearExpiryDays() != null && request.getNearExpiryDays() > 0)
+                ? request.getNearExpiryDays()
+                : 30;
+
         boolean isLocked = "LOCKED".equalsIgnoreCase(lot.getStatus());
         boolean isExpired = expDate != null && expDate.isBefore(today);
-        boolean isNearExpiry = expDate != null && !isExpired && !expDate.isAfter(today.plusDays(30));
+        boolean isNearExpiry = expDate != null && !isExpired && !expDate.isAfter(today.plusDays(threshold));
         boolean isInsufficient = availableQty.compareTo(reqQty) < 0;
 
         // 1. Kiểm tra trạng thái khóa
@@ -773,9 +787,13 @@ public class ProductLotService {
         BigDecimal availableQty = lot.getQuantity() != null ? lot.getQuantity() : BigDecimal.ZERO;
         BigDecimal reqQty = request.getRequestedQuantity();
 
+        int threshold = (request.getNearExpiryDays() != null && request.getNearExpiryDays() > 0)
+                ? request.getNearExpiryDays()
+                : 30;
+
         boolean isLocked = "LOCKED".equalsIgnoreCase(lot.getStatus());
         boolean isExpired = expDate != null && expDate.isBefore(today);
-        boolean isNearExpiry = expDate != null && !isExpired && !expDate.isAfter(today.plusDays(30));
+        boolean isNearExpiry = expDate != null && !isExpired && !expDate.isAfter(today.plusDays(threshold));
         boolean isInsufficient = availableQty.compareTo(reqQty) < 0;
 
         // 1. Kiểm tra trạng thái khóa
@@ -938,6 +956,16 @@ public class ProductLotService {
                 .findByProductAndWarehouseAndBatchNumberForUpdate(productId, warehouseId, batchNumber.trim())
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy lô '" + batchNumber.trim()
                         + "' của sản phẩm tại kho chỉ định để trừ tồn"));
+
+        if ("LOCKED".equalsIgnoreCase(lot.getStatus())) {
+            throw BusinessException.badRequest("LOT_LOCKED",
+                    "Lô hàng '" + lot.getBatchNumber() + "' đang bị khóa (LOCKED), không được phép xuất kho.");
+        }
+
+        if (lot.getExpiredDate() != null && lot.getExpiredDate().isBefore(LocalDate.now())) {
+            throw BusinessException.badRequest("LOT_EXPIRED",
+                    "Lô hàng '" + lot.getBatchNumber() + "' đã hết hạn sử dụng (" + lot.getExpiredDate() + "), không được phép xuất kho.");
+        }
 
         BigDecimal currentQty = lot.getQuantity() != null ? lot.getQuantity() : BigDecimal.ZERO;
         if (currentQty.compareTo(quantity) < 0) {
