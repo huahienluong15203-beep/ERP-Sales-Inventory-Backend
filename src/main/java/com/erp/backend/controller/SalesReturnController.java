@@ -36,7 +36,7 @@ public class SalesReturnController {
      * NVKD, QLKD, Admin.
      */
     @PostMapping
-    @PreAuthorize("hasAnyRole('SALES_REP', 'SALES_MANAGER', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('SALES_REP', 'SALES_MANAGER', 'ADMIN', 'WH_MANAGER', 'WAREHOUSE')")
     public ResponseEntity<SalesReturnResponse> createSalesReturn(
             @Valid @RequestBody SalesReturnCreateRequest request,
             @AuthenticationPrincipal UserDetailsImpl actor) {
@@ -63,7 +63,7 @@ public class SalesReturnController {
      * Huỷ phiếu trả hàng (khi còn ở trạng thái PENDING_RECEIPT).
      */
     @PostMapping("/{id}/cancel")
-    @PreAuthorize("hasAnyRole('SALES_REP', 'SALES_MANAGER', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('SALES_REP', 'SALES_MANAGER', 'ADMIN', 'WH_MANAGER', 'WAREHOUSE')")
     public ResponseEntity<SalesReturnResponse> cancelSalesReturn(
             @PathVariable Long id,
             @RequestBody(required = false) Map<String, String> body,
