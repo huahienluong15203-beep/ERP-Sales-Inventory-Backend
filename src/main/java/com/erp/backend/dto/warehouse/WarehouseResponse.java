@@ -24,6 +24,7 @@ public class WarehouseResponse {
     private String address;
     private String status;
     private RefItem manager;
+    private String managerName;
     private String managerPhone;
     private String managerEmail;
     private long locationCount;
