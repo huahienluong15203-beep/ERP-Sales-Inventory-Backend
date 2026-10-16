@@ -377,6 +377,273 @@ public class PaymentService {
         return toReceiptResponse(receipt);
     }
 
+    /**
+     * S7-05: NVKD ghi nhận thu tiền tại tuyến kèm ảnh biên lai (trạng thái Chờ nộp).
+     */
+    @Transactional
+    public PaymentReceiptResponse submitRouteCash(RouteCashCollectionRequest request, UserDetailsImpl actor) {
+        if (request == null) {
+            throw BusinessException.badRequest("INVALID_REQUEST", "Dữ liệu thu tiền theo tuyến không hợp lệ");
+        }
+        if (request.getCustomerId() == null) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "CUSTOMER_REQUIRED", "Vui lòng chọn đại lý", "customerId");
+        }
+        if (request.getAmount() == null || request.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_AMOUNT", "Số tiền thu phải lớn hơn 0", "amount");
+        }
+
+        LocalDate today = LocalDate.now(clock);
+        LocalDate paymentDate = request.getPaymentDate() != null ? request.getPaymentDate() : today;
+        if (paymentDate.isAfter(today)) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "PAYMENT_DATE_FUTURE", "Ngày thu tiền không được ở tương lai", "paymentDate");
+        }
+
+        Customer customer = customerRepository.findById(request.getCustomerId())
+                .orElseThrow(() -> BusinessException.notFound("Không tìm thấy đại lý"));
+        CustomerAccess.checkCanAccess(actor, customer, customerRepository);
+
+        BigDecimal amount = request.getAmount().setScale(2, RoundingMode.HALF_UP);
+
+        int year = paymentDate.getYear();
+        sequenceRepository.ensureYear(year);
+        PaymentSequence seq = sequenceRepository.findForUpdate(year)
+                .orElseThrow(() -> new IllegalStateException("Không khởi tạo được bộ đếm số phiếu thu năm " + year));
+        long nextSeq = (seq.getLastNumber() != null ? seq.getLastNumber() : 0L) + 1;
+        seq.setLastNumber(nextSeq);
+        sequenceRepository.save(seq);
+        String receiptCode = formatReceiptCode(year, nextSeq);
+
+        LocalDateTime now = LocalDateTime.now(clock);
+        String collectorName = actor != null && StringUtils.hasText(actor.getFullName()) ? actor.getFullName() : "Nhân viên kinh doanh";
+        String imageUrl = StringUtils.hasText(request.getReceiptImageUrl()) ? request.getReceiptImageUrl()
+                : (StringUtils.hasText(request.getReceiptImageBase64()) ? request.getReceiptImageBase64() : null);
+
+        PaymentReceipt receipt = PaymentReceipt.builder()
+                .code(receiptCode)
+                .customer(customer)
+                .customerCode(customer.getCode())
+                .customerName(customer.getName())
+                .customerAddress(customer.getAddress())
+                .customerPhone(customer.getPhone())
+                .amount(amount)
+                .paymentMethod(StringUtils.hasText(request.getPaymentMethod()) ? request.getPaymentMethod() : PaymentReceipt.METHOD_CASH)
+                .paymentDate(paymentDate)
+                .collectorName(collectorName)
+                .collectorUsername(actor != null ? actor.getUsername() : null)
+                .collectorId(actor != null ? actor.getId() : null)
+                .note(StringUtils.hasText(request.getNotes()) ? request.getNotes().trim() : null)
+                .status(PaymentReceipt.STATUS_PENDING_SUBMISSION)
+                .allocationType(PaymentReceipt.ALLOCATION_FIFO)
+                .receiptImageUrl(imageUrl)
+                .createdAt(now)
+                .createdByUsername(actor != null ? actor.getUsername() : null)
+                .build();
+
+        PaymentReceipt saved = paymentReceiptRepository.save(receipt);
+
+        auditLogService.record(
+                AuditModule.INVOICE,
+                "SUBMIT_ROUTE_CASH",
+                "PAYMENT_RECEIPT",
+                saved.getId(),
+                saved.getCode(),
+                null,
+                "Thu tiền tại tuyến=" + vnd(saved.getAmount()) + "; HT=" + saved.getPaymentMethod() + "; Trạng thái=PENDING_SUBMISSION",
+                "NVKD ghi nhận thu tiền tại tuyến cho đại lý " + customer.getCode(),
+                actor
+        );
+
+        return toReceiptResponse(saved);
+    }
+
+    /**
+     * S7-05: Kế toán xác nhận đã nhận tiền nộp quỹ từ NVKD (chuyển sang CONFIRMED và cấn trừ hoá đơn).
+     */
+    @Transactional
+    public PaymentReceiptResponse confirmRouteCash(Long receiptId, UserDetailsImpl actor) {
+        PaymentReceipt receipt = paymentReceiptRepository.findById(receiptId)
+                .orElseThrow(() -> BusinessException.notFound("Không tìm thấy khoản thu"));
+
+        if (!PaymentReceipt.STATUS_PENDING_SUBMISSION.equals(receipt.getStatus())) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_STATUS",
+                    "Khoản thu này không ở trạng thái Chờ nộp (trạng thái hiện tại: " + receipt.getStatus() + ")");
+        }
+
+        LocalDateTime now = LocalDateTime.now(clock);
+        receipt.setStatus(PaymentReceipt.STATUS_CONFIRMED);
+        receipt.setConfirmedAt(now);
+        receipt.setConfirmedByUsername(actor != null ? actor.getUsername() : null);
+        receipt.setConfirmedById(actor != null ? actor.getId() : null);
+
+        // Kế toán xác nhận nhận tiền -> thực hiện cấn trừ nợ theo FIFO
+        applyFifoAllocation(receipt, receipt.getAmount(), receipt.getCustomer());
+
+        PaymentReceipt saved = paymentReceiptRepository.save(receipt);
+
+        try {
+            creditFlagService.reevaluate(receipt.getCustomer().getId(), "PAYMENT");
+        } catch (Exception e) {
+            log.warn("Lỗi khi đánh giá lại cờ công nợ sau khi duyệt nộp quỹ: {}", e.getMessage());
+        }
+
+        auditLogService.record(
+                AuditModule.INVOICE,
+                "CONFIRM_ROUTE_CASH",
+                "PAYMENT_RECEIPT",
+                saved.getId(),
+                saved.getCode(),
+                "PENDING_SUBMISSION",
+                "CONFIRMED",
+                "Kế toán xác nhận đã nhận tiền nộp quỹ và cấn trừ công nợ cho đại lý " + receipt.getCustomerCode(),
+                actor
+        );
+
+        return toReceiptResponse(saved);
+    }
+
+    /**
+     * S7-05: Kế toán từ chối nhận tiền nộp quỹ.
+     */
+    @Transactional
+    public PaymentReceiptResponse rejectRouteCash(Long receiptId, PaymentRejectRequest request, UserDetailsImpl actor) {
+        PaymentReceipt receipt = paymentReceiptRepository.findById(receiptId)
+                .orElseThrow(() -> BusinessException.notFound("Không tìm thấy khoản thu"));
+
+        if (!PaymentReceipt.STATUS_PENDING_SUBMISSION.equals(receipt.getStatus())) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_STATUS",
+                    "Khoản thu này không ở trạng thái Chờ nộp (trạng thái hiện tại: " + receipt.getStatus() + ")");
+        }
+
+        String reason = (request != null && StringUtils.hasText(request.getReason()))
+                ? request.getReason().trim()
+                : "Kế toán từ chối nhận tiền";
+
+        LocalDateTime now = LocalDateTime.now(clock);
+        receipt.setStatus(PaymentReceipt.STATUS_REJECTED);
+        receipt.setRejectedAt(now);
+        receipt.setRejectedByUsername(actor != null ? actor.getUsername() : null);
+        receipt.setRejectedById(actor != null ? actor.getId() : null);
+        receipt.setRejectionReason(reason);
+
+        PaymentReceipt saved = paymentReceiptRepository.save(receipt);
+
+        auditLogService.record(
+                AuditModule.INVOICE,
+                "REJECT_ROUTE_CASH",
+                "PAYMENT_RECEIPT",
+                saved.getId(),
+                saved.getCode(),
+                "PENDING_SUBMISSION",
+                "REJECTED",
+                "Kế toán từ chối nhận tiền nộp quỹ: " + reason,
+                actor
+        );
+
+        return toReceiptResponse(saved);
+    }
+
+    /**
+     * S7-05: Bảng đối chiếu tiền thu theo từng nhân viên và từng ngày (hoặc kỳ).
+     */
+    @Transactional(readOnly = true)
+    public PaymentReconciliationResponse getReconciliation(LocalDate fromDate, LocalDate toDate,
+                                                           Long collectorId, UserDetailsImpl actor) {
+        LocalDate today = LocalDate.now(clock);
+        LocalDate from = fromDate != null ? fromDate : today;
+        LocalDate to = toDate != null ? toDate : today;
+
+        if (from.isAfter(to)) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_DATE_RANGE",
+                    "Ngày bắt đầu không được sau ngày kết thúc", "fromDate");
+        }
+
+        Long targetCollectorId = collectorId;
+        boolean isOnlySalesRep = actor != null && actor.getAuthorities() != null &&
+                actor.getAuthorities().stream().anyMatch(a -> "ROLE_SALES_REP".equals(a.getAuthority())) &&
+                actor.getAuthorities().stream().noneMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()) || "ROLE_ACCOUNTANT".equals(a.getAuthority()));
+        if (isOnlySalesRep) {
+            targetCollectorId = actor.getId();
+        }
+
+        List<PaymentReceipt> receipts = paymentReceiptRepository.findForReconciliation(targetCollectorId, from, to);
+
+        BigDecimal totalCollected = BigDecimal.ZERO;
+        BigDecimal pendingAmount = BigDecimal.ZERO;
+        BigDecimal confirmedAmount = BigDecimal.ZERO;
+        BigDecimal rejectedAmount = BigDecimal.ZERO;
+
+        int pendingCount = 0;
+        int confirmedCount = 0;
+        int rejectedCount = 0;
+
+        List<PaymentReconciliationItemResponse> items = new ArrayList<>();
+        String colName = null;
+        String colUsername = null;
+
+        for (PaymentReceipt r : receipts) {
+            BigDecimal amt = r.getAmount() != null ? r.getAmount() : BigDecimal.ZERO;
+            totalCollected = totalCollected.add(amt);
+
+            if (PaymentReceipt.STATUS_PENDING_SUBMISSION.equals(r.getStatus())) {
+                pendingAmount = pendingAmount.add(amt);
+                pendingCount++;
+            } else if (PaymentReceipt.STATUS_CONFIRMED.equals(r.getStatus())) {
+                confirmedAmount = confirmedAmount.add(amt);
+                confirmedCount++;
+            } else if (PaymentReceipt.STATUS_REJECTED.equals(r.getStatus())) {
+                rejectedAmount = rejectedAmount.add(amt);
+                rejectedCount++;
+            }
+
+            if (colName == null && r.getCollectorName() != null) {
+                colName = r.getCollectorName();
+                colUsername = r.getCollectorUsername();
+            }
+
+            items.add(new PaymentReconciliationItemResponse(
+                    r.getId(),
+                    r.getCode(),
+                    r.getCustomer() != null ? r.getCustomer().getId() : null,
+                    r.getCustomerCode(),
+                    r.getCustomerName(),
+                    r.getAmount(),
+                    r.getPaymentMethod(),
+                    r.getPaymentDate(),
+                    r.getNote(),
+                    r.getReceiptImageUrl(),
+                    r.getStatus(),
+                    r.getCreatedAt(),
+                    r.getConfirmedAt(),
+                    r.getConfirmedByUsername(),
+                    r.getRejectedAt(),
+                    r.getRejectedByUsername(),
+                    r.getRejectionReason()
+            ));
+        }
+
+        if (colName == null && targetCollectorId != null && actor != null && targetCollectorId.equals(actor.getId())) {
+            colName = actor.getFullName();
+            colUsername = actor.getUsername();
+        }
+
+        return new PaymentReconciliationResponse(
+                from,
+                to,
+                targetCollectorId,
+                colName,
+                colUsername,
+                totalCollected,
+                pendingAmount,
+                confirmedAmount,
+                rejectedAmount,
+                receipts.size(),
+                pendingCount,
+                confirmedCount,
+                rejectedCount,
+                items
+        );
+    }
+
     // ================== HELPER METHODS ==================
 
     private PaymentReceiptResponse toReceiptResponse(PaymentReceipt r) {
@@ -411,6 +678,9 @@ public class PaymentService {
                 r.getReceiptImageUrl(),
                 r.getConfirmedAt(),
                 r.getConfirmedByUsername(),
+                r.getRejectedAt(),
+                r.getRejectedByUsername(),
+                r.getRejectionReason(),
                 r.getAllocationType(),
                 allocResponses,
                 r.getCreatedAt(),

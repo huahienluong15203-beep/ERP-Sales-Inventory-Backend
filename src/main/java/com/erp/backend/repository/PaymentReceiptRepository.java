@@ -17,4 +17,12 @@ public interface PaymentReceiptRepository extends JpaRepository<PaymentReceipt, 
 
     @Query("select count(p) from PaymentReceipt p where p.customer.id = :customerId")
     long countByCustomerId(@Param("customerId") Long customerId);
+
+    /** S7-05: Lấy danh sách phiếu thu phục vụ bảng đối chiếu theo nhân viên và khoảng ngày. */
+    @Query("select p from PaymentReceipt p where (:collectorId is null or p.collectorId = :collectorId) "
+            + "and p.paymentDate between :fromDate and :toDate order by p.paymentDate desc, p.createdAt desc, p.id desc")
+    java.util.List<PaymentReceipt> findForReconciliation(
+            @Param("collectorId") Long collectorId,
+            @Param("fromDate") java.time.LocalDate fromDate,
+            @Param("toDate") java.time.LocalDate toDate);
 }
