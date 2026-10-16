@@ -137,7 +137,8 @@ public class DebtLedgerService {
             if (c == null) {
                 continue;
             }
-            if (f.salesRepId() != null && (c.getSalesRep() == null || !f.salesRepId().equals(c.getSalesRep().getId()))) {
+            // Lọc theo phạm vi đã xác định ở scopeSalesRep (NV kinh doanh luôn là chính mình, không dùng salesRepId gửi lên)
+            if (repScope != null && (c.getSalesRep() == null || !repScope.equals(c.getSalesRep().getId()))) {
                 continue;
             }
             if (kw != null && !contains(c.getCode(), kw) && !contains(c.getName(), kw) && !contains(c.getPhone(), kw)) {
