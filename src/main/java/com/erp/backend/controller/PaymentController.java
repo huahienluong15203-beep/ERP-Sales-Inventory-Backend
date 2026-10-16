@@ -86,4 +86,56 @@ public class PaymentController {
         List<CustomerInvoiceDebtResponse> invoices = paymentService.getCustomerInvoicesForDebt(customerId, actor);
         return ResponseEntity.ok(invoices);
     }
+
+    /**
+     * S7-05: NVKD ghi nhận thu tiền tại tuyến kèm ảnh biên lai (trạng thái Chờ nộp).
+     */
+    @PostMapping("/route-collection")
+    @PreAuthorize("hasAnyRole('SALES_REP', 'ADMIN')")
+    public ResponseEntity<PaymentReceiptResponse> submitRouteCash(
+            @Valid @RequestBody com.erp.backend.dto.payment.RouteCashCollectionRequest request,
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        PaymentReceiptResponse response = paymentService.submitRouteCash(request, actor);
+        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    /**
+     * S7-05: Kế toán xác nhận đã nhận tiền nộp quỹ (cấn trừ hoá đơn nợ).
+     */
+    @PostMapping("/{id}/confirm")
+    @PreAuthorize("hasAnyRole('ACCOUNTANT', 'ADMIN')")
+    public ResponseEntity<PaymentReceiptResponse> confirmRouteCash(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        PaymentReceiptResponse response = paymentService.confirmRouteCash(id, actor);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * S7-05: Kế toán từ chối nhận tiền nộp quỹ.
+     */
+    @PostMapping("/{id}/reject")
+    @PreAuthorize("hasAnyRole('ACCOUNTANT', 'ADMIN')")
+    public ResponseEntity<PaymentReceiptResponse> rejectRouteCash(
+            @PathVariable Long id,
+            @Valid @RequestBody(required = false) com.erp.backend.dto.payment.PaymentRejectRequest request,
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        PaymentReceiptResponse response = paymentService.rejectRouteCash(id, request, actor);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * S7-05: Bảng đối chiếu tiền thu theo từng nhân viên và từng ngày.
+     */
+    @GetMapping("/reconciliation")
+    @PreAuthorize("hasAnyRole('ACCOUNTANT', 'ADMIN', 'SALES_MANAGER', 'SALES_REP')")
+    public ResponseEntity<com.erp.backend.dto.payment.PaymentReconciliationResponse> getReconciliation(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate,
+            @RequestParam(required = false) Long collectorId,
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        com.erp.backend.dto.payment.PaymentReconciliationResponse response =
+                paymentService.getReconciliation(fromDate, toDate, collectorId, actor);
+        return ResponseEntity.ok(response);
+    }
 }

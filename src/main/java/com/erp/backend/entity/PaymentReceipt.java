@@ -31,7 +31,9 @@ import java.util.List;
 @EqualsAndHashCode(of = "id")
 public class PaymentReceipt {
 
+    public static final String STATUS_PENDING_SUBMISSION = "PENDING_SUBMISSION";
     public static final String STATUS_CONFIRMED = "CONFIRMED";
+    public static final String STATUS_REJECTED = "REJECTED";
     public static final String STATUS_VOIDED = "VOIDED";
 
     public static final String METHOD_CASH = "CASH";
@@ -101,6 +103,21 @@ public class PaymentReceipt {
 
     @Column(name = "confirmed_by_username", length = 50)
     private String confirmedByUsername;
+
+    @Column(name = "confirmed_by_id")
+    private Long confirmedById;
+
+    @Column(name = "rejected_at")
+    private LocalDateTime rejectedAt;
+
+    @Column(name = "rejected_by_username", length = 50)
+    private String rejectedByUsername;
+
+    @Column(name = "rejected_by_id")
+    private Long rejectedById;
+
+    @Column(name = "rejection_reason", length = 500)
+    private String rejectionReason;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
