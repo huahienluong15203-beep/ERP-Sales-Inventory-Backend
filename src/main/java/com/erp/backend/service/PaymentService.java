@@ -9,6 +9,7 @@ import com.erp.backend.security.UserDetailsImpl;
 import jakarta.persistence.criteria.Predicate;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
@@ -329,10 +330,28 @@ public class PaymentService {
         int safePage = Math.max(0, page);
         int safeSize = size > 0 && size <= 100 ? size : 20;
 
+        // S7-07: phạm vi xem như xem 1 phiếu: đại lý chỉ thấy phiếu của mình, NV kinh doanh chỉ đại lý mình phụ trách
+        Long scopedCustomerId = customerId;
+        Long salesRepId = null;
+        if (!CustomerAccess.hasFullAccess(actor) && CustomerAccess.isCustomer(actor)) {
+            Customer own = CustomerAccess.resolveCustomerForActor(actor, customerRepository);
+            if (own == null) {
+                return PageResponse.of(Page.<PaymentReceiptResponse>empty(PageRequest.of(safePage, safeSize)));
+            }
+            scopedCustomerId = own.getId();
+        } else {
+            salesRepId = CustomerAccess.restrictedSalesRepId(actor);
+        }
+        final Long filterCustomerId = scopedCustomerId;
+        final Long filterSalesRepId = salesRepId;
+
         Specification<PaymentReceipt> spec = (root, query, cb) -> {
             List<Predicate> ps = new ArrayList<>();
-            if (customerId != null) {
-                ps.add(cb.equal(root.get("customer").get("id"), customerId));
+            if (filterCustomerId != null) {
+                ps.add(cb.equal(root.get("customer").get("id"), filterCustomerId));
+            }
+            if (filterSalesRepId != null) {
+                ps.add(cb.equal(root.get("customer").get("salesRep").get("id"), filterSalesRepId));
             }
             if (StringUtils.hasText(paymentMethod) && !"ALL".equalsIgnoreCase(paymentMethod)) {
                 ps.add(cb.equal(root.get("paymentMethod"), paymentMethod.trim()));

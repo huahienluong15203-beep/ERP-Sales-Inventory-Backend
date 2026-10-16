@@ -31,30 +31,34 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, Long>, J
     /** Đại lý đã có đơn hàng (kể cả đơn nháp) thì không được xoá hồ sơ. */
     boolean existsByCustomer_Id(Long customerId);
 
-    /** S4-02: Tổng tiền các đơn đang tính vào công nợ của đại lý. */
+    /**
+     * S4-02 / S7-07: Tổng tiền các đơn đang tính vào công nợ nhưng CHƯA xuất hoá đơn.
+     * Đơn đã có hoá đơn thì công nợ tính theo số còn nợ của hoá đơn (đã trừ tiền thu), xem InvoiceRepository.
+     */
     @Query("select coalesce(sum(o.totalAmount), 0) from SalesOrder o "
-            + "where o.customer.id = :customerId and o.status in :statuses")
+            + "where o.customer.id = :customerId and o.status in :statuses and o.invoiceId is null")
     BigDecimal sumTotalAmountByCustomerAndStatuses(@Param("customerId") Long customerId,
                                                    @Param("statuses") Collection<String> statuses);
 
-    /** S4-02: Tổng tiền các đơn đang tính vào công nợ theo danh sách đại lý (dùng để nạp công nợ hàng loạt cho danh sách). */
+    /** S4-02 / S7-07: Như trên (đơn chưa xuất hoá đơn) theo danh sách đại lý (nạp công nợ hàng loạt cho danh sách). */
     @Query("select o.customer.id, coalesce(sum(o.totalAmount), 0) from SalesOrder o "
-            + "where o.customer.id in :customerIds and o.status in :statuses group by o.customer.id")
+            + "where o.customer.id in :customerIds and o.status in :statuses and o.invoiceId is null group by o.customer.id")
     List<Object[]> sumTotalAmountByCustomerIdsAndStatuses(@Param("customerIds") Collection<Long> customerIds,
                                                            @Param("statuses") Collection<String> statuses);
 
-    /** S4-02: Tổng tiền các đơn nợ đã quá hạn (duyệt trước mốc dueBefore). */
+    /** S4-02 / S7-07: Tổng tiền các đơn nợ CHƯA xuất hoá đơn đã quá hạn (duyệt trước mốc dueBefore). */
     @Query("select coalesce(sum(o.totalAmount), 0) from SalesOrder o "
-            + "where o.customer.id = :customerId and o.status in :statuses and o.approvedAt < :dueBefore")
+            + "where o.customer.id = :customerId and o.status in :statuses and o.approvedAt < :dueBefore "
+            + "and o.invoiceId is null")
     BigDecimal sumOverdueAmount(@Param("customerId") Long customerId,
                                 @Param("statuses") Collection<String> statuses,
                                 @Param("dueBefore") LocalDateTime dueBefore);
 
-    long countByCustomer_IdAndStatusInAndApprovedAtBefore(Long customerId, Collection<String> statuses,
-                                                          LocalDateTime dueBefore);
+    long countByCustomer_IdAndStatusInAndApprovedAtBeforeAndInvoiceIdIsNull(Long customerId, Collection<String> statuses,
+                                                                            LocalDateTime dueBefore);
 
-    /** S4-02: Đơn nợ quá hạn lâu nhất (để báo số ngày quá hạn). */
-    Optional<SalesOrder> findFirstByCustomer_IdAndStatusInAndApprovedAtBeforeOrderByApprovedAtAsc(
+    /** S4-02: Đơn nợ (chưa xuất hoá đơn) quá hạn lâu nhất (để báo số ngày quá hạn). */
+    Optional<SalesOrder> findFirstByCustomer_IdAndStatusInAndApprovedAtBeforeAndInvoiceIdIsNullOrderByApprovedAtAsc(
             Long customerId, Collection<String> statuses, LocalDateTime dueBefore);
 
     /** S5-06: Đơn đang giữ chỗ tồn đã quá hạn (đơn quá hạn lâu nhất lên trước). */

@@ -5,6 +5,7 @@ import com.erp.backend.entity.Customer;
 import com.erp.backend.entity.SalesOrder;
 import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.CustomerRepository;
+import com.erp.backend.repository.InvoiceRepository;
 import com.erp.backend.repository.SalesOrderRepository;
 import com.erp.backend.security.UserDetailsImpl;
 import lombok.RequiredArgsConstructor;
@@ -25,7 +26,9 @@ import java.util.Locale;
 
 /**
  * S4-02: Kiểm tra công nợ khi tạo đơn.
- * - Công nợ hiện tại = tổng tiền các đơn đang nợ (SalesOrder.OUTSTANDING_DEBT_STATUSES).
+ * - Công nợ hiện tại (S7-07) = tiền các đơn đang nợ CHƯA xuất hoá đơn (SalesOrder.OUTSTANDING_DEBT_STATUSES)
+ *   + số còn nợ trên các hoá đơn (đã trừ tiền thu ở S7-02). Đơn đã xuất hoá đơn không cộng lần 2.
+ * - Quá hạn: đơn chưa xuất hoá đơn tính hạn từ ngày duyệt; hoá đơn tính hạn từ ngày hoá đơn (giống màn thu tiền S7-02).
  * - Tiền đơn + công nợ hiện tại > hạn mức -> đơn "cần duyệt" (không chặn, chuyển duyệt ở S4-05).
  * - Có khoản nợ quá số ngày nợ tối đa (maxDebtDays) -> chặn tạo đơn mới hoàn toàn.
  */
@@ -37,6 +40,7 @@ public class CustomerCreditService {
 
     private final SalesOrderRepository orderRepository;
     private final CustomerRepository customerRepository;
+    private final InvoiceRepository invoiceRepository;
 
     // Cho phép test cố định "hôm nay"
     Clock clock = Clock.system(VN_ZONE);
@@ -60,7 +64,8 @@ public class CustomerCreditService {
         BigDecimal amount = money(orderAmount);
         BigDecimal limit = money(customer.getCreditLimit());
         BigDecimal currentDebt = money(orderRepository.sumTotalAmountByCustomerAndStatuses(
-                customer.getId(), SalesOrder.OUTSTANDING_DEBT_STATUSES));
+                customer.getId(), SalesOrder.OUTSTANDING_DEBT_STATUSES))
+                .add(money(invoiceRepository.sumOpenRemainingByCustomer(customer.getId())));
         BigDecimal available = limit.subtract(currentDebt);
         BigDecimal debtAfter = currentDebt.add(amount);
         boolean exceeds = amount.signum() > 0 && debtAfter.compareTo(limit) > 0;
@@ -72,18 +77,30 @@ public class CustomerCreditService {
         long overdueDays = 0;
         if (maxDays != null && maxDays >= 0) {
             LocalDate today = LocalDate.now(clock);
-            // Đơn duyệt ngày D có hạn trả D + maxDays; quá hạn khi hạn trả < hôm nay
-            LocalDateTime dueBefore = today.minusDays(maxDays).atStartOfDay();
-            overdueCount = orderRepository.countByCustomer_IdAndStatusInAndApprovedAtBefore(
+            // Đơn duyệt ngày D (hoặc hoá đơn ngày D) có hạn trả D + maxDays; quá hạn khi hạn trả < hôm nay
+            LocalDate dueDateBefore = today.minusDays(maxDays);
+            LocalDateTime dueBefore = dueDateBefore.atStartOfDay();
+            long orderCount = orderRepository.countByCustomer_IdAndStatusInAndApprovedAtBeforeAndInvoiceIdIsNull(
                     customer.getId(), SalesOrder.OUTSTANDING_DEBT_STATUSES, dueBefore);
-            if (overdueCount > 0) {
-                overdueAmount = money(orderRepository.sumOverdueAmount(
-                        customer.getId(), SalesOrder.OUTSTANDING_DEBT_STATUSES, dueBefore));
-                overdueDays = orderRepository.findFirstByCustomer_IdAndStatusInAndApprovedAtBeforeOrderByApprovedAtAsc(
+            if (orderCount > 0) {
+                overdueAmount = overdueAmount.add(money(orderRepository.sumOverdueAmount(
+                        customer.getId(), SalesOrder.OUTSTANDING_DEBT_STATUSES, dueBefore)));
+                overdueDays = orderRepository
+                        .findFirstByCustomer_IdAndStatusInAndApprovedAtBeforeAndInvoiceIdIsNullOrderByApprovedAtAsc(
                                 customer.getId(), SalesOrder.OUTSTANDING_DEBT_STATUSES, dueBefore)
                         .map(o -> ChronoUnit.DAYS.between(o.getApprovedAt().toLocalDate().plusDays(maxDays), today))
                         .orElse(0L);
             }
+            long invoiceCount = invoiceRepository.countOverdue(customer.getId(), dueDateBefore);
+            if (invoiceCount > 0) {
+                overdueAmount = overdueAmount.add(money(invoiceRepository.sumOverdueRemaining(
+                        customer.getId(), dueDateBefore)));
+                LocalDate oldest = invoiceRepository.oldestOverdueInvoiceDate(customer.getId(), dueDateBefore);
+                if (oldest != null) {
+                    overdueDays = Math.max(overdueDays, ChronoUnit.DAYS.between(oldest.plusDays(maxDays), today));
+                }
+            }
+            overdueCount = orderCount + invoiceCount;
         }
         boolean overdue = overdueCount > 0;
 
