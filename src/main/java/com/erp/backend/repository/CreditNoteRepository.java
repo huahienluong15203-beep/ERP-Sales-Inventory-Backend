@@ -19,6 +19,8 @@ public interface CreditNoteRepository extends JpaRepository<CreditNote, Long>, J
 
     Optional<CreditNote> findBySalesReturn_Id(Long salesReturnId);
 
+    List<CreditNote> findBySalesReturn_IdIn(Collection<Long> salesReturnIds);
+
     /** Tổng tiền và số lượng đã giảm trừ trên 1 dòng hoá đơn qua các phiếu trả trước (để không giảm trừ vượt dòng gốc). */
     @Query("select coalesce(sum(l.amount), 0) from CreditNoteLine l where l.invoiceLineId = :invoiceLineId")
     BigDecimal sumCreditedAmountByInvoiceLine(@Param("invoiceLineId") Long invoiceLineId);
