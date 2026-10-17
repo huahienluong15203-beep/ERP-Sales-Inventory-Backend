@@ -1,13 +1,17 @@
 package com.erp.backend.service;
 
+import com.erp.backend.dto.payment.PaymentReminderLogResponse;
 import com.erp.backend.dto.payment.PaymentReminderRunResponse;
 import com.erp.backend.entity.Customer;
 import com.erp.backend.entity.Invoice;
 import com.erp.backend.entity.Notification;
 import com.erp.backend.entity.PaymentReminderLog;
+import com.erp.backend.exception.BusinessException;
+import com.erp.backend.repository.CustomerRepository;
 import com.erp.backend.repository.InvoiceRepository;
 import com.erp.backend.repository.NotificationRepository;
 import com.erp.backend.repository.PaymentReminderLogRepository;
+import com.erp.backend.security.UserDetailsImpl;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -42,6 +46,7 @@ public class PaymentReminderService {
     private final PaymentReminderLogRepository reminderLogRepository;
     private final NotificationRepository notificationRepository;
     private final EmailService emailService;
+    private final CustomerRepository customerRepository;
 
     Clock clock = Clock.system(VN_ZONE);
 
@@ -52,6 +57,12 @@ public class PaymentReminderService {
     @Transactional
     public PaymentReminderRunResponse scanAndSendReminders(LocalDate simulatedDate) {
         LocalDate today = simulatedDate != null ? simulatedDate : LocalDate.now(clock);
+        // Chỉ 1 lượt quét chạy tại 1 thời điểm (cronjob và chạy tay cùng lúc) để không gửi trùng email / thông báo
+        if (!reminderLogRepository.tryLockReminderRun()) {
+            log.warn("S7-08: Đang có lượt quét nhắc hạn khác chạy, bỏ qua lượt này");
+            return new PaymentReminderRunResponse(today, 0, 0, 0, 0, 0,
+                    "Đang có lượt quét nhắc hạn khác chạy, lượt này được bỏ qua để không gửi trùng");
+        }
         List<Invoice> unpaidInvoices = invoiceRepository.findUnpaidIssuedInvoicesWithCustomer();
 
         int scanned = unpaidInvoices.size();
@@ -138,8 +149,25 @@ public class PaymentReminderService {
 
                 notificationRepository.save(notification);
 
-                // 2. Gửi Email thông báo (chạy ngầm)
-                boolean emailSent = false;
+                // 2. Ghi nhật ký TRƯỚC khi gửi email để "giữ chỗ" hoá đơn trong ngày (chống gửi trùng)
+                PaymentReminderLog reminderLog = PaymentReminderLog.builder()
+                        .invoiceId(inv.getId())
+                        .invoiceCode(inv.getCode())
+                        .customerId(customerId != null ? customerId : 0L)
+                        .customerCode(customerCode != null ? customerCode : "")
+                        .customerName(customerName)
+                        .reminderType(reminderType)
+                        .reminderDate(today)
+                        .dueDate(dueDate)
+                        .daysDifference(daysDiff)
+                        .emailSent(false)
+                        .inAppSent(true)
+                        .recipientEmail(recipientEmail)
+                        .sentAt(LocalDateTime.now(clock))
+                        .build();
+                reminderLogRepository.save(reminderLog);
+
+                // 3. Gửi Email thông báo; gửi được thì đánh dấu trên nhật ký (bản ghi đang được quản lý trong transaction)
                 if (StringUtils.hasText(recipientEmail)) {
                     try {
                         emailService.sendPaymentDueReminderEmail(
@@ -151,30 +179,11 @@ public class PaymentReminderService {
                                 daysDiff,
                                 isOverdue
                         );
-                        emailSent = true;
+                        reminderLog.setEmailSent(true);
                     } catch (Exception ex) {
                         log.warn("S7-08: Không thể gửi email nhắc nợ tới {}: {}", recipientEmail, ex.getMessage());
                     }
                 }
-
-                // 3. Ghi nhật ký để chặn gửi trùng lặp trong cùng ngày
-                PaymentReminderLog reminderLog = PaymentReminderLog.builder()
-                        .invoiceId(inv.getId())
-                        .invoiceCode(inv.getCode())
-                        .customerId(customerId != null ? customerId : 0L)
-                        .customerCode(customerCode != null ? customerCode : "")
-                        .customerName(customerName)
-                        .reminderType(reminderType)
-                        .reminderDate(today)
-                        .dueDate(dueDate)
-                        .daysDifference(daysDiff)
-                        .emailSent(emailSent)
-                        .inAppSent(true)
-                        .recipientEmail(recipientEmail)
-                        .sentAt(LocalDateTime.now(clock))
-                        .build();
-
-                reminderLogRepository.save(reminderLog);
 
                 if (isOverdue) {
                     sentOverdue++;
@@ -194,15 +203,27 @@ public class PaymentReminderService {
         return new PaymentReminderRunResponse(today, scanned, sentBeforeDue, sentOverdue, skipped, errors, msg);
     }
 
+    /** Lịch sử nhắc nợ của 1 hoá đơn: NV kinh doanh chỉ xem được hoá đơn của đại lý mình phụ trách (khác -> 404). */
     @Transactional(readOnly = true)
-    public List<PaymentReminderLog> getLogsForInvoice(Long invoiceId) {
-        return reminderLogRepository.findByInvoiceIdOrderBySentAtDesc(invoiceId);
+    public List<PaymentReminderLogResponse> getLogsForInvoice(Long invoiceId, UserDetailsImpl actor) {
+        Invoice invoice = invoiceRepository.findById(invoiceId)
+                .orElseThrow(() -> BusinessException.notFound("Không tìm thấy hoá đơn"));
+        CustomerAccess.checkCanAccess(actor, invoice.getCustomer(), customerRepository);
+        return reminderLogRepository.findByInvoiceIdOrderBySentAtDesc(invoiceId).stream()
+                .map(PaymentReminderService::toLogResponse).toList();
     }
 
     @Transactional(readOnly = true)
-    public List<PaymentReminderLog> getLogsByDate(LocalDate date) {
+    public List<PaymentReminderLogResponse> getLogsByDate(LocalDate date) {
         LocalDate target = date != null ? date : LocalDate.now(clock);
-        return reminderLogRepository.findByReminderDateOrderBySentAtDesc(target);
+        return reminderLogRepository.findByReminderDateOrderBySentAtDesc(target).stream()
+                .map(PaymentReminderService::toLogResponse).toList();
+    }
+
+    static PaymentReminderLogResponse toLogResponse(PaymentReminderLog l) {
+        return new PaymentReminderLogResponse(l.getId(), l.getInvoiceId(), l.getInvoiceCode(), l.getCustomerId(),
+                l.getCustomerCode(), l.getCustomerName(), l.getReminderType(), l.getReminderDate(), l.getDueDate(),
+                l.getDaysDifference(), l.isEmailSent(), l.isInAppSent(), l.getRecipientEmail(), l.getSentAt());
     }
 
     private static String formatVnd(BigDecimal amount) {

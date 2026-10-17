@@ -1,12 +1,14 @@
 package com.erp.backend.controller;
 
+import com.erp.backend.dto.payment.PaymentReminderLogResponse;
 import com.erp.backend.dto.payment.PaymentReminderRunResponse;
-import com.erp.backend.entity.PaymentReminderLog;
+import com.erp.backend.security.UserDetailsImpl;
 import com.erp.backend.service.PaymentReminderService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
@@ -38,9 +40,9 @@ public class PaymentReminderController {
      */
     @GetMapping("/logs")
     @PreAuthorize("hasAnyRole('ADMIN', 'ACCOUNTANT', 'SALES_MANAGER')")
-    public ResponseEntity<List<PaymentReminderLog>> getLogs(
+    public ResponseEntity<List<PaymentReminderLogResponse>> getLogs(
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
-        List<PaymentReminderLog> logs = reminderService.getLogsByDate(date);
+        List<PaymentReminderLogResponse> logs = reminderService.getLogsByDate(date);
         return ResponseEntity.ok(logs);
     }
 
@@ -49,8 +51,9 @@ public class PaymentReminderController {
      */
     @GetMapping("/invoices/{invoiceId}/logs")
     @PreAuthorize("hasAnyRole('ADMIN', 'ACCOUNTANT', 'SALES_MANAGER', 'SALES_REP')")
-    public ResponseEntity<List<PaymentReminderLog>> getInvoiceLogs(@PathVariable Long invoiceId) {
-        List<PaymentReminderLog> logs = reminderService.getLogsForInvoice(invoiceId);
+    public ResponseEntity<List<PaymentReminderLogResponse>> getInvoiceLogs(@PathVariable Long invoiceId,
+                                                                           @AuthenticationPrincipal UserDetailsImpl actor) {
+        List<PaymentReminderLogResponse> logs = reminderService.getLogsForInvoice(invoiceId, actor);
         return ResponseEntity.ok(logs);
     }
 }
