@@ -8,10 +8,12 @@ import com.erp.backend.repository.*;
 import com.erp.backend.security.UserDetailsImpl;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -398,8 +400,35 @@ public class SalesReturnService {
         int s = Math.min(100, Math.max(1, size));
         Pageable pageable = PageRequest.of(p, s, Sort.by(Sort.Direction.DESC, "createdAt"));
 
-        Page<SalesReturn> pageResult = salesReturnRepository.searchReturns(
-                customerId, warehouseId, status, fromDate, toDate, keyword, pageable);
+        Specification<SalesReturn> spec = (root, q, cb) -> {
+            List<Predicate> ps = new ArrayList<>();
+            if (customerId != null) {
+                ps.add(cb.equal(root.get("customer").get("id"), customerId));
+            }
+            if (warehouseId != null) {
+                ps.add(cb.equal(root.get("receivingWarehouse").get("id"), warehouseId));
+            }
+            if (StringUtils.hasText(status) && !"ALL".equalsIgnoreCase(status.trim())) {
+                ps.add(cb.equal(root.get("status"), status.trim()));
+            }
+            if (fromDate != null) {
+                ps.add(cb.greaterThanOrEqualTo(root.<LocalDate>get("returnDate"), fromDate));
+            }
+            if (toDate != null) {
+                ps.add(cb.lessThanOrEqualTo(root.<LocalDate>get("returnDate"), toDate));
+            }
+            if (StringUtils.hasText(keyword)) {
+                String kw = "%" + keyword.trim().toLowerCase() + "%";
+                ps.add(cb.or(
+                        cb.like(cb.lower(root.get("code")), kw),
+                        cb.like(cb.lower(root.get("invoiceCode")), kw),
+                        cb.like(cb.lower(root.get("customerName")), kw)
+                ));
+            }
+            return cb.and(ps.toArray(new Predicate[0]));
+        };
+
+        Page<SalesReturn> pageResult = salesReturnRepository.findAll(spec, pageable);
 
         List<SalesReturnResponse> content = pageResult.getContent().stream()
                 .map(this::toResponse)
