@@ -15,7 +15,9 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -110,5 +112,15 @@ public class StockAdjustmentController {
         PageResponse<StockAdjustmentResponse> response = stockAdjustmentService.searchAdjustments(
                 warehouseId, status, reason, fromDate, toDate, keyword, page, size);
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Lấy bảng giá vốn (costPrice) các sản phẩm phục vụ tính giá trị tổn thất khi lập phiếu điều chỉnh.
+     */
+    @GetMapping("/product-costs")
+    @PreAuthorize("hasAnyRole('WH_MANAGER', 'WAREHOUSE', 'ACCOUNTANT', 'ADMIN')")
+    public ResponseEntity<Map<Long, BigDecimal>> getProductCosts(
+            @RequestParam(required = false) List<Long> productIds) {
+        return ResponseEntity.ok(stockAdjustmentService.getProductCosts(productIds));
     }
 }

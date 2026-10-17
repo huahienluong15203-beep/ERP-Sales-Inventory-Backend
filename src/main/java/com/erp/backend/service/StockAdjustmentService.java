@@ -519,6 +519,23 @@ public class StockAdjustmentService {
                 .build();
     }
 
+    @Transactional(readOnly = true)
+    public Map<Long, BigDecimal> getProductCosts(List<Long> productIds) {
+        List<Product> products;
+        if (productIds == null || productIds.isEmpty()) {
+            products = productRepository.findAll();
+        } else {
+            products = productRepository.findAllById(productIds);
+        }
+        Map<Long, BigDecimal> result = new HashMap<>();
+        for (Product p : products) {
+            if (p != null && p.getId() != null) {
+                result.put(p.getId(), p.getCostPrice() != null ? p.getCostPrice() : BigDecimal.ZERO);
+            }
+        }
+        return result;
+    }
+
     private static String formatVnd(BigDecimal amount) {
         if (amount == null) return "0 đ";
         DecimalFormat df = new DecimalFormat("#,### đ", new DecimalFormatSymbols(Locale.GERMANY));
