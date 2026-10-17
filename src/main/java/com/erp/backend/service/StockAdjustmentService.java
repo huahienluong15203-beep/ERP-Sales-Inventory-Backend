@@ -142,19 +142,27 @@ public class StockAdjustmentService {
             Long productLotId = null;
             if (hasBatch) {
                 if (!StringUtils.hasText(itemReq.getBatchNumber())) {
-                    throw BusinessException.badRequest("Mặt hàng " + product.getSku() + " quản lý theo lô, bắt buộc phải chọn số lô sản xuất.");
+                    throw BusinessException.badRequest("Mặt hàng " + product.getSku() + " quản lý theo lô, bắt buộc phải chọn hoặc nhập số lô sản xuất.");
                 }
+                String cleanBatch = itemReq.getBatchNumber().trim();
                 ProductLot lot = productLotRepository.findByProduct_IdAndWarehouse_IdAndBatchNumber(
-                        product.getId(), warehouse.getId(), itemReq.getBatchNumber()).orElse(null);
-                if (lot == null || lot.getQuantity() == null || lot.getQuantity().compareTo(adjQty) < 0) {
-                    BigDecimal lotQty = lot != null && lot.getQuantity() != null ? lot.getQuantity() : BigDecimal.ZERO;
-                    throw BusinessException.badRequest(String.format(
-                            "Số lượng điều chỉnh (%s) vượt quá tồn trong lô %s (%s) của mặt hàng %s.",
-                            adjQty.stripTrailingZeros().toPlainString(),
-                            itemReq.getBatchNumber(),
-                            lotQty.stripTrailingZeros().toPlainString(),
-                            product.getSku()
-                    ));
+                        product.getId(), warehouse.getId(), cleanBatch).orElse(null);
+                if (lot == null) {
+                    // Hỗ trợ nhập số lô thủ công: tự động tạo ProductLot với số lượng bằng số lượng giảm
+                    lot = ProductLot.builder()
+                            .product(product)
+                            .warehouse(warehouse)
+                            .batchNumber(cleanBatch)
+                            .quantity(adjQty)
+                            .status("ACTIVE")
+                            .notes("Lô hàng nhập thủ công qua phiếu điều chỉnh tồn kho")
+                            .build();
+                    lot = productLotRepository.save(lot);
+                } else if (lot.getQuantity() != null && lot.getQuantity().compareTo(adjQty) < 0) {
+                    // Nếu lô tồn tại nhưng số lượng ghi nhận trên hệ thống nhỏ hơn lượng hư hỏng thực tế,
+                    // cập nhật tồn của lô để đáp ứng số lượng điều chỉnh giảm
+                    lot.setQuantity(adjQty);
+                    productLotRepository.save(lot);
                 }
                 productLotId = lot.getId();
             }
@@ -248,19 +256,20 @@ public class StockAdjustmentService {
 
             // 2. Trừ tồn trong lô nếu sản phẩm có quản lý lô
             if (Boolean.TRUE.equals(line.getHasBatchManagement()) && StringUtils.hasText(line.getBatchNumber())) {
+                String cleanBatch = line.getBatchNumber().trim();
                 ProductLot lot = productLotRepository.findByProductAndWarehouseAndBatchNumberForUpdate(
-                        product.getId(), warehouse.getId(), line.getBatchNumber())
-                        .orElseThrow(() -> BusinessException.notFound("Không tìm thấy lô hàng " + line.getBatchNumber()));
+                        product.getId(), warehouse.getId(), cleanBatch)
+                        .orElse(null);
 
-                BigDecimal oldLotQty = lot.getQuantity() != null ? lot.getQuantity() : BigDecimal.ZERO;
-                if (oldLotQty.compareTo(adjQty) < 0) {
-                    throw BusinessException.badRequest(String.format(
-                            "Tồn trong lô %s (%s) không đủ để điều chỉnh giảm (%s).",
-                            line.getBatchNumber(), oldLotQty, adjQty
-                    ));
+                if (lot != null) {
+                    BigDecimal oldLotQty = lot.getQuantity() != null ? lot.getQuantity() : BigDecimal.ZERO;
+                    if (oldLotQty.compareTo(adjQty) < 0) {
+                        lot.setQuantity(BigDecimal.ZERO);
+                    } else {
+                        lot.setQuantity(oldLotQty.subtract(adjQty));
+                    }
+                    productLotRepository.save(lot);
                 }
-                lot.setQuantity(oldLotQty.subtract(adjQty));
-                productLotRepository.save(lot);
             }
 
             // 3. Tiêu chí 4: Mọi phiếu điều chỉnh đều xuất hiện trên thẻ kho (StockMovement)
