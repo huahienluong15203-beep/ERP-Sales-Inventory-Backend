@@ -2,6 +2,7 @@ package com.erp.backend.repository;
 
 import com.erp.backend.entity.PaymentReminderLog;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -19,4 +20,11 @@ public interface PaymentReminderLogRepository extends JpaRepository<PaymentRemin
     List<PaymentReminderLog> findByReminderDateOrderBySentAtDesc(LocalDate reminderDate);
 
     List<PaymentReminderLog> findByCustomerIdOrderBySentAtDesc(Long customerId);
+
+    /**
+     * S7-08: Khoá tư vấn (advisory lock) PostgreSQL theo transaction: chỉ 1 lượt quét nhắc hạn chạy tại 1 thời điểm
+     * (cronjob và nút chạy tay bấm cùng lúc). Trả false nếu lượt khác đang giữ khoá; tự nhả khi transaction kết thúc.
+     */
+    @Query(value = "select pg_try_advisory_xact_lock(7080817)", nativeQuery = true)
+    boolean tryLockReminderRun();
 }

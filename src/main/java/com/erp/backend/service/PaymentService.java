@@ -71,6 +71,15 @@ public class PaymentService {
         if (!StringUtils.hasText(request.getCollectorName())) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "COLLECTOR_REQUIRED", "Vui lòng nhập tên người thu tiền", "collectorName");
         }
+        // S7-02 / S7-05: phiếu thu trừ nợ ngay chỉ do kế toán / admin lập. NV kinh doanh thu tại tuyến phải qua
+        // "Thu tiền theo tuyến" (chờ kế toán xác nhận nộp quỹ). Trả 409 (không 403) để FE không tự đăng xuất.
+        if (!CustomerAccess.hasFullAccess(actor) || isOnlySalesManager(actor)) {
+            throw BusinessException.conflict("PAYMENT_ACCOUNTANT_ONLY",
+                    "Chỉ kế toán công nợ / admin được ghi nhận thanh toán trừ nợ ngay. NV kinh doanh thu tiền tại tuyến "
+                            + "vui lòng dùng chức năng 'Thu tiền theo tuyến' để chờ kế toán xác nhận", null);
+        }
+        String paymentMethod = normalizePaymentMethod(request.getPaymentMethod());
+        String allocationType = normalizeAllocationType(request.getAllocationType());
 
         LocalDate today = LocalDate.now(clock);
         LocalDate paymentDate = request.getPaymentDate() != null ? request.getPaymentDate() : today;
@@ -84,9 +93,7 @@ public class PaymentService {
         CustomerAccess.checkCanAccess(actor, customer, customerRepository);
 
         BigDecimal receiptAmount = request.getAmount().setScale(2, RoundingMode.HALF_UP);
-        String allocationType = StringUtils.hasText(request.getAllocationType())
-                ? request.getAllocationType().trim().toUpperCase()
-                : PaymentReceipt.ALLOCATION_FIFO;
+
 
         // Sinh mã phiếu thu (PT2026-000001)
         int year = paymentDate.getYear();
@@ -108,7 +115,7 @@ public class PaymentService {
                 .customerAddress(customer.getAddress())
                 .customerPhone(customer.getPhone())
                 .amount(receiptAmount)
-                .paymentMethod(StringUtils.hasText(request.getPaymentMethod()) ? request.getPaymentMethod() : PaymentReceipt.METHOD_CASH)
+                .paymentMethod(paymentMethod)
                 .paymentDate(paymentDate)
                 .collectorName(request.getCollectorName().trim())
                 .collectorUsername(actor != null ? actor.getUsername() : null)
@@ -124,8 +131,7 @@ public class PaymentService {
                 .build();
 
         // Thuật toán cấn trừ công nợ (SCRUM-259)
-        if (PaymentReceipt.ALLOCATION_SPECIFIC.equalsIgnoreCase(allocationType)
-                || "MANUAL".equalsIgnoreCase(allocationType)) {
+        if (PaymentReceipt.ALLOCATION_SPECIFIC.equals(allocationType)) {
             applySpecificAllocation(receipt, request.getSpecificAllocations(), receiptAmount, customer);
         } else {
             applyFifoAllocation(receipt, receiptAmount, customer);
@@ -230,6 +236,11 @@ public class PaymentService {
         }
 
         List<Long> invoiceIds = items.stream().map(PaymentAllocationItemRequest::getInvoiceId).distinct().toList();
+        // Mỗi hoá đơn chỉ được chọn 1 lần trong 1 phiếu thu (tránh 2 dòng đối trừ cho cùng 1 hoá đơn)
+        if (invoiceIds.size() != items.size()) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "DUPLICATE_ALLOCATION_INVOICE",
+                    "Mỗi hoá đơn chỉ được chọn một lần trong danh sách đối trừ", "specificAllocations");
+        }
         List<Invoice> invoices = invoiceRepository.findAllByIdForUpdate(invoiceIds);
         Map<Long, Invoice> invoiceMap = new HashMap<>();
         for (Invoice inv : invoices) {
@@ -422,6 +433,7 @@ public class PaymentService {
         CustomerAccess.checkCanAccess(actor, customer, customerRepository);
 
         BigDecimal amount = request.getAmount().setScale(2, RoundingMode.HALF_UP);
+        String paymentMethod = normalizePaymentMethod(request.getPaymentMethod());
 
         int year = paymentDate.getYear();
         sequenceRepository.ensureYear(year);
@@ -445,7 +457,7 @@ public class PaymentService {
                 .customerAddress(customer.getAddress())
                 .customerPhone(customer.getPhone())
                 .amount(amount)
-                .paymentMethod(StringUtils.hasText(request.getPaymentMethod()) ? request.getPaymentMethod() : PaymentReceipt.METHOD_CASH)
+                .paymentMethod(paymentMethod)
                 .paymentDate(paymentDate)
                 .collectorName(collectorName)
                 .collectorUsername(actor != null ? actor.getUsername() : null)
@@ -664,6 +676,45 @@ public class PaymentService {
     }
 
     // ================== HELPER METHODS ==================
+
+    /** S7-02: Hình thức thu hợp lệ: CASH, BANK_TRANSFER, OTHER (không gửi = CASH). */
+    static String normalizePaymentMethod(String method) {
+        if (!StringUtils.hasText(method)) {
+            return PaymentReceipt.METHOD_CASH;
+        }
+        String m = method.trim().toUpperCase(java.util.Locale.ROOT);
+        if (!List.of(PaymentReceipt.METHOD_CASH, PaymentReceipt.METHOD_BANK_TRANSFER, PaymentReceipt.METHOD_OTHER).contains(m)) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_PAYMENT_METHOD",
+                    "Hình thức thu không hợp lệ (CASH, BANK_TRANSFER hoặc OTHER)", "paymentMethod");
+        }
+        return m;
+    }
+
+    /** S7-02: Kiểu đối trừ hợp lệ: FIFO (mặc định) hoặc SPECIFIC (MANUAL coi như SPECIFIC). */
+    static String normalizeAllocationType(String type) {
+        if (!StringUtils.hasText(type)) {
+            return PaymentReceipt.ALLOCATION_FIFO;
+        }
+        String t = type.trim().toUpperCase(java.util.Locale.ROOT);
+        if ("MANUAL".equals(t)) {
+            return PaymentReceipt.ALLOCATION_SPECIFIC;
+        }
+        if (!PaymentReceipt.ALLOCATION_FIFO.equals(t) && !PaymentReceipt.ALLOCATION_SPECIFIC.equals(t)) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_ALLOCATION_TYPE",
+                    "Kiểu đối trừ không hợp lệ (FIFO hoặc SPECIFIC)", "allocationType");
+        }
+        return t;
+    }
+
+    /** QL kinh doanh xem được công nợ nhưng không ghi nhận thu tiền (việc của kế toán). */
+    private static boolean isOnlySalesManager(UserDetailsImpl actor) {
+        if (actor == null || actor.getAuthorities() == null) {
+            return false;
+        }
+        java.util.Set<String> roles = new java.util.HashSet<>();
+        actor.getAuthorities().forEach(a -> roles.add(a.getAuthority()));
+        return roles.contains("ROLE_SALES_MANAGER") && !roles.contains("ROLE_ACCOUNTANT") && !roles.contains("ROLE_ADMIN");
+    }
 
     private PaymentReceiptResponse toReceiptResponse(PaymentReceipt r) {
         List<PaymentAllocationResponse> allocResponses = r.getAllocations().stream()

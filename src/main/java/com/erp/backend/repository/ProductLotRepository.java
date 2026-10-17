@@ -40,6 +40,9 @@ public interface ProductLotRepository extends JpaRepository<ProductLot, Long>, J
 
     List<ProductLot> findByBatchNumber(String batchNumber);
 
+    /** S8-01: Số lô có tồn tại cho SKU (dùng khi dòng đơn cũ chưa lưu lô đã xuất). */
+    boolean existsByProduct_IdAndBatchNumberIgnoreCase(Long productId, String batchNumber);
+
     List<ProductLot> findByExpiredDateBefore(LocalDate date);
 
     List<ProductLot> findByWarehouse_IdAndExpiredDateBefore(Long warehouseId, LocalDate date);

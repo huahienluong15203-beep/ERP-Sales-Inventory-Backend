@@ -45,6 +45,9 @@ public class SalesReturnService {
     private final ProductLotRepository productLotRepository;
     private final StockMovementRepository stockMovementRepository;
     private final AuditLogService auditLogService;
+    private final CustomerRepository customerRepository;
+    private final SalesOrderLineRepository salesOrderLineRepository;
+    private final UserRepository userRepository;
 
     Clock clock = Clock.system(ZoneId.of("Asia/Ho_Chi_Minh"));
 
@@ -55,6 +58,16 @@ public class SalesReturnService {
             SalesReturn.REASON_AGENCY_OVERSTOCK, "Đại lý thừa hàng / giảm quy mô",
             SalesReturn.REASON_CUSTOMER_COMPLAINT, "Khiếu nại chất lượng",
             SalesReturn.REASON_OTHER, "Lý do khác"
+    );
+
+    /** Nhãn lý do mà giao diện đang gửi lên (lưu nguyên văn) -> mã lý do dùng cho xử lý nghiệp vụ. */
+    private static final Map<String, String> UI_REASON_CODES = Map.of(
+            "hàng lỗi do nhà sản xuất", SalesReturn.REASON_CUSTOMER_COMPLAINT,
+            "hàng cận date / hết hạn sử dụng", SalesReturn.REASON_EXPIRED_OR_NEAR,
+            "giao sai quy cách / mã sản phẩm", SalesReturn.REASON_WRONG_SPECIFICATION,
+            "đại lý chậm luân chuyển hàng tồn", SalesReturn.REASON_AGENCY_OVERSTOCK,
+            "bao bì móp méo / hỏng khi vận chuyển", SalesReturn.REASON_DEFECTIVE_TRANSPORT,
+            "lý do khác", SalesReturn.REASON_OTHER
     );
 
     private static final Map<String, String> STATUS_LABELS = Map.of(
@@ -75,9 +88,19 @@ public class SalesReturnService {
         if (!StringUtils.hasText(req.getReturnReason())) {
             throw BusinessException.badRequest("Bắt buộc phải chọn lý do trả hàng (AC1).");
         }
+        // TC801-06: chỉ nhận lý do trong danh mục (mã hoặc đúng nhãn hiển thị)
+        String returnReason = req.getReturnReason().trim();
+        if (reasonCode(returnReason) == null) {
+            throw BusinessException.badRequest("INVALID_RETURN_REASON",
+                    "Lý do trả hàng \"" + returnReason + "\" không có trong danh mục lý do trả hàng.");
+        }
 
         Invoice invoice = invoiceRepository.findById(req.getInvoiceId())
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy hoá đơn gốc ID: " + req.getInvoiceId()));
+        // TC801-17: NV kinh doanh chỉ lập phiếu trả cho đại lý mình phụ trách (khác -> 404 như không thấy hoá đơn)
+        if (invoice.getCustomer() != null) {
+            CustomerAccess.checkCanAccess(actor, invoice.getCustomer(), customerRepository);
+        }
 
         if (!Invoice.STATUS_ISSUED.equals(invoice.getStatus())) {
             throw BusinessException.badRequest("Hoá đơn " + invoice.getCode() + " chưa được phát hành, không thể lập phiếu trả hàng.");
@@ -112,7 +135,7 @@ public class SalesReturnService {
                 .receivingWarehouse(warehouse)
                 .warehouseCode(warehouse.getCode())
                 .warehouseName(warehouse.getName())
-                .returnReason(req.getReturnReason())
+                .returnReason(returnReason)
                 .reasonDescription(req.getReasonDescription())
                 .status(SalesReturn.STATUS_PENDING_RECEIPT)
                 .notes(req.getNotes())
@@ -124,9 +147,25 @@ public class SalesReturnService {
         BigDecimal totalAmt = BigDecimal.ZERO;
         int lineNo = 1;
 
+        // TC801-04 + TC801-05: gộp số lượng các dòng trùng cùng dòng hoá đơn, khoá dòng hoá đơn (theo thứ tự id để tránh deadlock)
+        Map<Long, BigDecimal> requestedByLine = new HashMap<>();
         for (SalesReturnItemRequest itemReq : req.getItems()) {
-            InvoiceLine invLine = invoiceLineRepository.findById(itemReq.getInvoiceLineId())
-                    .orElseThrow(() -> BusinessException.notFound("Không tìm thấy dòng hoá đơn ID: " + itemReq.getInvoiceLineId()));
+            if (itemReq.getInvoiceLineId() == null) {
+                throw BusinessException.badRequest("Dòng trả hàng phải chọn dòng hoá đơn gốc.");
+            }
+            BigDecimal q = itemReq.getReturnQuantity() != null ? itemReq.getReturnQuantity() : BigDecimal.ZERO;
+            requestedByLine.merge(itemReq.getInvoiceLineId(), q, BigDecimal::add);
+        }
+        Map<Long, InvoiceLine> lockedLines = new HashMap<>();
+        Map<Long, BigDecimal> returnedBefore = new HashMap<>();
+        for (Long lineId : new TreeSet<>(requestedByLine.keySet())) {
+            InvoiceLine l = invoiceLineRepository.findByIdForUpdate(lineId)
+                    .orElseThrow(() -> BusinessException.notFound("Không tìm thấy dòng hoá đơn ID: " + lineId));
+            lockedLines.put(lineId, l);
+        }
+
+        for (SalesReturnItemRequest itemReq : req.getItems()) {
+            InvoiceLine invLine = lockedLines.get(itemReq.getInvoiceLineId());
 
             if (!invLine.getInvoice().getId().equals(invoice.getId())) {
                 throw BusinessException.badRequest("Dòng hoá đơn ID " + itemReq.getInvoiceLineId() + " không thuộc hoá đơn " + invoice.getCode());
@@ -138,14 +177,16 @@ public class SalesReturnService {
             }
 
             // AC2: Số lượng trả không vượt số lượng đã giao trừ phần đã trả trước đó
-            BigDecimal previouslyReturned = salesReturnLineRepository.getPreviouslyReturnedQuantity(
-                    invLine.getId(), null, SalesReturn.STATUS_CANCELLED);
+            // Đọc sau khi đã khoá dòng hoá đơn -> thấy cả phiếu vừa được người khác lập xong
+            BigDecimal previouslyReturned = returnedBefore.computeIfAbsent(invLine.getId(),
+                    id -> salesReturnLineRepository.getPreviouslyReturnedQuantity(id, null, SalesReturn.STATUS_CANCELLED));
             BigDecimal remainingReturnable = invLine.getQuantity().subtract(previouslyReturned);
+            BigDecimal requestedTotal = requestedByLine.get(invLine.getId());
 
-            if (returnQty.compareTo(remainingReturnable) > 0) {
+            if (requestedTotal.compareTo(remainingReturnable) > 0) {
                 throw BusinessException.badRequest(String.format(
                         "Số lượng trả (%s) vượt quá số lượng đã giao còn lại (%s) của mặt hàng %s (Đã giao: %s, Đã trả trước đó: %s).",
-                        returnQty.stripTrailingZeros().toPlainString(),
+                        requestedTotal.stripTrailingZeros().toPlainString(),
                         remainingReturnable.stripTrailingZeros().toPlainString(),
                         invLine.getProductSku(),
                         invLine.getQuantity().stripTrailingZeros().toPlainString(),
@@ -158,6 +199,10 @@ public class SalesReturnService {
             boolean hasBatch = Boolean.TRUE.equals(product.getHasBatchManagement());
             if (hasBatch && !StringUtils.hasText(itemReq.getBatchNumber())) {
                 throw BusinessException.badRequest("Mặt hàng " + product.getSku() + " có quản lý theo lô, bắt buộc phải chọn/nhập số lô sản xuất (AC3).");
+            }
+            String batchNumber = StringUtils.hasText(itemReq.getBatchNumber()) ? itemReq.getBatchNumber().trim() : null;
+            if (hasBatch) {
+                batchNumber = checkShippedBatch(invLine, product, batchNumber);
             }
 
             BigDecimal factor = invLine.getConversionFactor() != null ? invLine.getConversionFactor() : BigDecimal.ONE;
@@ -179,7 +224,7 @@ public class SalesReturnService {
                     .pricePerUnit(invLine.getPricePerUnit())
                     .lineAmount(lineAmount)
                     .hasBatchManagement(hasBatch)
-                    .batchNumber(itemReq.getBatchNumber())
+                    .batchNumber(batchNumber)
                     .manufactureDate(itemReq.getManufactureDate())
                     .expiredDate(itemReq.getExpiredDate())
                     .isDamaged(Boolean.TRUE.equals(itemReq.getIsDamaged()))
@@ -217,7 +262,9 @@ public class SalesReturnService {
         }
 
         Warehouse warehouse = salesReturn.getReceivingWarehouse();
+        assertCanReceive(actor, warehouse);
         LocalDateTime now = LocalDateTime.now(clock);
+        boolean damagedByReason = isDamagedReason(salesReturn.getReturnReason());
 
         log.info("S8-01: Quản lý kho bắt đầu xác nhận nhận hàng phiếu {}: kho={}, số dòng={}",
                 salesReturn.getCode(), warehouse.getCode(), salesReturn.getLines().size());
@@ -239,9 +286,21 @@ public class SalesReturnService {
                     });
 
             BigDecimal oldPhysical = inventory.getPhysicalStock() != null ? inventory.getPhysicalStock() : BigDecimal.ZERO;
+            BigDecimal oldDamaged = inventory.getDamagedStock() != null ? inventory.getDamagedStock() : BigDecimal.ZERO;
+            boolean damaged = damagedByReason || Boolean.TRUE.equals(line.getIsDamaged());
+
+            if (damaged) {
+                // TC801-11/12: hàng hỏng nhập vào khu hàng lỗi (cách ly), không cộng tồn bán được, không động vào lô hàng tốt
+                inventory.setDamagedStock(oldDamaged.add(baseQty));
+                inventoryRepository.save(inventory);
+                auditReceive(salesReturn, line, inventory, oldPhysical, oldDamaged, true, actor);
+                continue;
+            }
+
             BigDecimal newPhysical = oldPhysical.add(baseQty);
             inventory.setPhysicalStock(newPhysical);
             inventoryRepository.save(inventory);
+            auditReceive(salesReturn, line, inventory, oldPhysical, oldDamaged, false, actor);
 
             // 2. Nhập lại đúng lô nếu SKU có quản lý lô (AC3)
             if (Boolean.TRUE.equals(line.getHasBatchManagement()) && StringUtils.hasText(line.getBatchNumber())) {
@@ -259,14 +318,6 @@ public class SalesReturnService {
 
                 BigDecimal oldLotQty = lot.getQuantity() != null ? lot.getQuantity() : BigDecimal.ZERO;
                 lot.setQuantity(oldLotQty.add(baseQty));
-
-                // Nếu là hàng lỗi/hỏng (AC3: hàng hỏng nhập vào kho hàng lỗi / khóa lô không cho xuất bán)
-                if (Boolean.TRUE.equals(line.getIsDamaged())
-                        || SalesReturn.REASON_DEFECTIVE_TRANSPORT.equals(salesReturn.getReturnReason())
-                        || SalesReturn.REASON_EXPIRED_OR_NEAR.equals(salesReturn.getReturnReason())) {
-                    lot.setStatus("LOCKED");
-                    lot.setNotes("Hàng trả lỗi từ đại lý " + salesReturn.getCustomerName() + " theo phiếu " + salesReturn.getCode());
-                }
 
                 if (line.getManufactureDate() != null && lot.getManufactureDate() == null) {
                     lot.setManufactureDate(line.getManufactureDate());
@@ -341,6 +392,93 @@ public class SalesReturnService {
         log.info("S8-01: Đã huỷ phiếu trả hàng {}", saved.getCode());
 
         return toResponse(saved);
+    }
+
+    /** Mã lý do (DEFECTIVE_TRANSPORT...) từ giá trị lưu trên phiếu: mã, nhãn backend hoặc nhãn giao diện. Không khớp -> null. */
+    static String reasonCode(String value) {
+        if (!StringUtils.hasText(value)) {
+            return null;
+        }
+        String v = value.trim();
+        for (Map.Entry<String, String> e : REASON_LABELS.entrySet()) {
+            if (e.getKey().equalsIgnoreCase(v) || e.getValue().equalsIgnoreCase(v)) {
+                return e.getKey();
+            }
+        }
+        return UI_REASON_CODES.get(v.toLowerCase(Locale.ROOT));
+    }
+
+    /** Lý do mà toàn bộ hàng trả coi là hàng lỗi (giữ như quy tắc cũ): hỏng do vận chuyển, hết hạn / cận hạn. */
+    static boolean isDamagedReason(String value) {
+        String code = reasonCode(value);
+        return SalesReturn.REASON_DEFECTIVE_TRANSPORT.equals(code) || SalesReturn.REASON_EXPIRED_OR_NEAR.equals(code);
+    }
+
+    /**
+     * TC801-10: Số lô trả phải đúng lô đã xuất cho đại lý trên dòng đơn gốc.
+     * Dòng đơn cũ chưa lưu lô xuất thì ít nhất số lô phải là lô có thật của SKU.
+     */
+    private String checkShippedBatch(InvoiceLine invLine, Product product, String batchNumber) {
+        String shipped = invLine.getOrderLineId() == null ? null
+                : salesOrderLineRepository.findById(invLine.getOrderLineId())
+                        .map(SalesOrderLine::getBatchNumber).orElse(null);
+        if (StringUtils.hasText(shipped)) {
+            if (!shipped.trim().equalsIgnoreCase(batchNumber)) {
+                throw BusinessException.badRequest("RETURN_BATCH_MISMATCH", "Số lô " + batchNumber + " không phải lô đã giao cho đại lý của mặt hàng "
+                        + product.getSku() + " (lô đã giao: " + shipped.trim() + ").");
+            }
+            return shipped.trim();
+        }
+        if (!productLotRepository.existsByProduct_IdAndBatchNumberIgnoreCase(product.getId(), batchNumber)) {
+            throw BusinessException.badRequest("RETURN_BATCH_MISMATCH", "Số lô " + batchNumber + " không tồn tại cho mặt hàng " + product.getSku() + ".");
+        }
+        return batchNumber;
+    }
+
+    /**
+     * TC801-15/16: Chỉ Quản lý kho được phân công kho nhận (hoặc Admin) mới xác nhận nhận hàng.
+     * Trả 409 thay vì 403 để giao diện không đăng xuất người dùng.
+     */
+    private void assertCanReceive(UserDetailsImpl actor, Warehouse warehouse) {
+        Set<String> roles = new HashSet<>();
+        if (actor != null && actor.getAuthorities() != null) {
+            actor.getAuthorities().forEach(a -> roles.add(a.getAuthority()));
+        }
+        if (roles.contains("ROLE_ADMIN")) {
+            return;
+        }
+        if (!roles.contains("ROLE_WH_MANAGER")) {
+            throw BusinessException.conflict("RETURN_RECEIVE_MANAGER_ONLY",
+                    "Chỉ Quản lý kho mới được xác nhận nhận hàng trả về.", "status");
+        }
+        boolean isManager = warehouse.getManager() != null && Objects.equals(warehouse.getManager().getId(), actor.getId());
+        boolean assigned = isManager || userRepository.findById(actor.getId())
+                .map(u -> u.getWarehouses() != null
+                        && u.getWarehouses().stream().anyMatch(w -> Objects.equals(w.getId(), warehouse.getId())))
+                .orElse(false);
+        if (!assigned) {
+            throw BusinessException.conflict("RETURN_WAREHOUSE_NOT_ASSIGNED",
+                    "Bạn không được phân công kho " + warehouse.getName() + " nên không nhận hàng trả vào kho này được.", "status");
+        }
+    }
+
+    /** TC801-18: Nhật ký tồn kho trước / sau khi nhận hàng trả. */
+    private void auditReceive(SalesReturn r, SalesReturnLine line, Inventory inv, BigDecimal oldPhysical,
+                              BigDecimal oldDamaged, boolean damaged, UserDetailsImpl actor) {
+        String unit = line.getProduct().getBaseUnit() != null ? " " + line.getProduct().getBaseUnit() : "";
+        String before = "Tồn thực tế: " + plain(oldPhysical) + unit + "; Hàng lỗi cách ly: " + plain(oldDamaged) + unit;
+        String after = "Tồn thực tế: " + plain(inv.getPhysicalStock()) + unit + "; Hàng lỗi cách ly: " + plain(inv.getDamagedStock()) + unit;
+        String reason = (damaged ? "Nhận hàng trả bị lỗi vào khu cách ly" : "Nhận hàng trả nhập lại tồn bán được")
+                + " theo phiếu " + r.getCode() + " (HĐ " + r.getInvoiceCode() + ", đại lý " + r.getCustomerName() + ")"
+                + ", SKU " + line.getProduct().getSku()
+                + (StringUtils.hasText(line.getBatchNumber()) ? ", lô " + line.getBatchNumber() : "")
+                + ", số lượng " + plain(line.getBaseQuantity()) + unit;
+        auditLogService.record(AuditModule.INVENTORY, "SALES_RETURN_RECEIVE", "INVENTORY", inv.getId(),
+                r.getCode() + "/" + line.getProduct().getSku(), before, after, reason, actor);
+    }
+
+    private static String plain(BigDecimal v) {
+        return (v != null ? v : BigDecimal.ZERO).stripTrailingZeros().toPlainString();
     }
 
     /**

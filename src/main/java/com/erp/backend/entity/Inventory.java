@@ -51,6 +51,14 @@ public class Inventory {
     @Builder.Default
     private BigDecimal reservedStock = BigDecimal.ZERO;
 
+    /**
+     * S8-01: Hàng đại lý trả về bị hỏng / lỗi đang cách ly tại kho (theo ĐVT cơ sở).
+     * KHÔNG nằm trong tồn thực tế nên không bán / không soạn được.
+     */
+    @Column(name = "damaged_stock", nullable = false, precision = 15, scale = 4, columnDefinition = "numeric(15,4) default 0")
+    @Builder.Default
+    private BigDecimal damagedStock = BigDecimal.ZERO;
+
     @Version
     private Long version;
 

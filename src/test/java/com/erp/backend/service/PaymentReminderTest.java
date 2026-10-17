@@ -6,6 +6,8 @@ import com.erp.backend.entity.Invoice;
 import com.erp.backend.entity.Notification;
 import com.erp.backend.entity.PaymentReminderLog;
 import com.erp.backend.entity.User;
+import com.erp.backend.exception.BusinessException;
+import com.erp.backend.repository.CustomerRepository;
 import com.erp.backend.repository.InvoiceRepository;
 import com.erp.backend.repository.NotificationRepository;
 import com.erp.backend.repository.PaymentReminderLogRepository;
@@ -22,8 +24,10 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -47,6 +51,9 @@ class PaymentReminderTest {
     @Mock
     private EmailService emailService;
 
+    @Mock
+    private CustomerRepository customerRepository;
+
     @InjectMocks
     private PaymentReminderService paymentReminderService;
 
@@ -57,6 +64,7 @@ class PaymentReminderTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(reminderLogRepository.tryLockReminderRun()).thenReturn(true);
         User portalUser = new User();
         portalUser.setId(100L);
         portalUser.setUsername("agency_user");
@@ -258,5 +266,76 @@ class PaymentReminderTest {
         // Trường hợp customer null hoặc maxDebtDays null -> mặc định 30 ngày
         sampleCustomer.setMaxDebtDays(null);
         assertThat(sampleInvoice.calculateDueDate()).isEqualTo(LocalDate.of(2026, 1, 31));
+    }
+
+    @Test
+    @DisplayName("TC708-08: Đang có lượt quét khác giữ khoá -> lượt này bỏ qua, không gửi email / thông báo trùng")
+    void concurrentRun_skipped() {
+        when(reminderLogRepository.tryLockReminderRun()).thenReturn(false);
+
+        PaymentReminderRunResponse response = paymentReminderService.scanAndSendReminders(BASE_DATE);
+
+        assertThat(response.scannedCount()).isZero();
+        assertThat(response.sentBeforeDueCount()).isZero();
+        verifyNoInteractions(invoiceRepository, emailService, notificationRepository);
+        verify(reminderLogRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("TC708-08: Lưu nhật ký nhắc hạn trước rồi mới gửi email, gửi thành công thì đánh dấu emailSent")
+    void logSavedBeforeEmail() {
+        when(invoiceRepository.findUnpaidIssuedInvoicesWithCustomer()).thenReturn(List.of(sampleInvoice));
+        when(reminderLogRepository.existsByInvoiceIdAndReminderDate(10L, BASE_DATE)).thenReturn(false);
+        ArgumentCaptor<PaymentReminderLog> logCaptor = ArgumentCaptor.forClass(PaymentReminderLog.class);
+
+        paymentReminderService.scanAndSendReminders(BASE_DATE);
+
+        var order = inOrder(reminderLogRepository, emailService);
+        order.verify(reminderLogRepository).save(logCaptor.capture());
+        order.verify(emailService).sendPaymentDueReminderEmail(any(), any(), any(), any(), any(), anyLong(), anyBoolean());
+        assertThat(logCaptor.getValue().isEmailSent()).isTrue();
+    }
+
+    @Test
+    @DisplayName("TC708-21: NV kinh doanh xem lịch sử nhắc nợ hoá đơn của đại lý người khác phụ trách -> 404")
+    void invoiceLogs_otherRepCustomer_notFound() {
+        sampleCustomer.setSalesRep(CustomerTestData.salesRep(8L));
+        when(invoiceRepository.findById(10L)).thenReturn(Optional.of(sampleInvoice));
+
+        assertThatThrownBy(() -> paymentReminderService.getLogsForInvoice(10L, CustomerTestData.actor(7L, "ROLE_SALES_REP")))
+                .isInstanceOf(BusinessException.class);
+        verify(reminderLogRepository, never()).findByInvoiceIdOrderBySentAtDesc(anyLong());
+    }
+
+    @Test
+    @DisplayName("TC708-21: Kế toán xem lịch sử nhắc nợ trả DTO, không trả entity")
+    void invoiceLogs_accountant_dto() {
+        when(invoiceRepository.findById(10L)).thenReturn(Optional.of(sampleInvoice));
+        PaymentReminderLog log = new PaymentReminderLog();
+        log.setId(5L);
+        log.setInvoiceId(10L);
+        log.setInvoiceCode("INV-202610-0001");
+        log.setCustomerId(1L);
+        log.setCustomerCode("CUST001");
+        log.setReminderType(PaymentReminderLog.REMINDER_BEFORE_DUE_3_DAYS);
+        log.setReminderDate(BASE_DATE);
+        log.setEmailSent(true);
+        when(reminderLogRepository.findByInvoiceIdOrderBySentAtDesc(10L)).thenReturn(List.of(log));
+
+        var logs = paymentReminderService.getLogsForInvoice(10L, CustomerTestData.actor(3L, "ROLE_ACCOUNTANT"));
+
+        assertThat(logs).hasSize(1);
+        assertThat(logs.get(0).invoiceCode()).isEqualTo("INV-202610-0001");
+        assertThat(logs.get(0).customerCode()).isEqualTo("CUST001");
+        assertThat(logs.get(0).emailSent()).isTrue();
+    }
+
+    @Test
+    @DisplayName("TC708-21: Hoá đơn không tồn tại -> 404")
+    void invoiceLogs_missing_notFound() {
+        when(invoiceRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> paymentReminderService.getLogsForInvoice(99L, CustomerTestData.actor(3L, "ROLE_ACCOUNTANT")))
+                .isInstanceOf(BusinessException.class);
     }
 }

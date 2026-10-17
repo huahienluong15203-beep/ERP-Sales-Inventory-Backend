@@ -387,6 +387,20 @@ class OrderDeliveryServiceTest {
     // ======================= S6-09: TIMELINE & THỰC GIAO =======================
 
     @Test
+    @DisplayName("S6-09: Không có lịch sử chuyển sang soạn hàng -> mốc 'Đang soạn' để trống, không bịa giờ duyệt + 15 phút")
+    void getDeliveryTimeline_noPickingHistory_timeIsNull() {
+        order.setStatus(SalesOrder.STATUS_PICKING);
+        order.setApprovedAt(LocalDateTime.of(2026, 10, 15, 8, 30));
+        when(orderRepository.findById(100L)).thenReturn(Optional.of(order));
+        when(approvalRepository.findByOrder_IdOrderByCreatedAtAscIdAsc(100L)).thenReturn(List.of());
+
+        OrderDeliveryTimelineResponse timeline = service.getDeliveryTimeline(100L, whManager);
+
+        assertThat(timeline.steps().picking().current()).isTrue();
+        assertThat(timeline.steps().picking().time()).isNull();
+    }
+
+    @Test
     @DisplayName("S6-09 / SCRUM-258: Lấy delivery timeline thành công đủ 5 mốc & chi tiết số lượng thực giao từng dòng")
     void getDeliveryTimeline_success_allFiveMilestones() {
         order.setStatus(SalesOrder.STATUS_DELIVERED);

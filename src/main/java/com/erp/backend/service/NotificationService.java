@@ -72,6 +72,10 @@ public class NotificationService {
     public NotificationResponse markAsRead(Long id, UserDetailsImpl actor) {
         Notification notification = notificationRepository.findById(id)
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy thông báo"));
+        // Chỉ người nhận (theo tài khoản hoặc theo đại lý của tài khoản) mới xem / đánh dấu được; khác -> 404, không lộ nội dung
+        if (!isOwner(notification, actor)) {
+            throw BusinessException.notFound("Không tìm thấy thông báo");
+        }
 
         if (!notification.isRead()) {
             notification.setRead(true);
@@ -87,6 +91,18 @@ public class NotificationService {
         Long userId = actor != null ? actor.getId() : null;
         Long customerId = resolveCustomerId(actor);
         return notificationRepository.markAllAsRead(userId, customerId, LocalDateTime.now(clock));
+    }
+
+    /** Thông báo thuộc về người đang đăng nhập: gửi đích danh tài khoản, hoặc gửi cho đại lý mà tài khoản đại diện. */
+    boolean isOwner(Notification n, UserDetailsImpl actor) {
+        if (actor == null) {
+            return false;
+        }
+        if (n.getUserId() != null && n.getUserId().equals(actor.getId())) {
+            return true;
+        }
+        Long customerId = resolveCustomerId(actor);
+        return customerId != null && customerId.equals(n.getCustomerId());
     }
 
     private Long resolveCustomerId(UserDetailsImpl actor) {
