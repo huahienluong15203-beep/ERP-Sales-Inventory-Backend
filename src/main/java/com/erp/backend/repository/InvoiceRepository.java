@@ -12,6 +12,9 @@ import java.time.LocalDate;
 /** S7-01: Hoá đơn (chỉ thêm mới, không sửa / xoá). */
 public interface InvoiceRepository extends JpaRepository<Invoice, Long>, JpaSpecificationExecutor<Invoice> {
 
+    /** S8-10 / S7-06: Hoá đơn của 1 đại lý tới ngày (để tính số dư đầu kỳ và phát sinh). */
+    java.util.List<Invoice> findByCustomer_IdAndInvoiceDateLessThanEqual(Long customerId, LocalDate toDate);
+
     /** Ngày của hoá đơn mới nhất trong năm (số hoá đơn phải tăng theo ngày). */
     @Query("select max(i.invoiceDate) from Invoice i where i.seqYear = :year")
     LocalDate maxInvoiceDate(@Param("year") Integer year);
