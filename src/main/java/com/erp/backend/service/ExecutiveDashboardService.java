@@ -105,7 +105,7 @@ public class ExecutiveDashboardService {
         BigDecimal overdueDebtAmount = BigDecimal.ZERO;
         try {
             DebtLedgerService.Computed debtComputed = debtLedgerService.compute(
-                    new DebtLedgerService.Filter(null, null, null, false, false, "ALL"), actor);
+                    new DebtLedgerService.Filter(null, null, null, false, false, "OLDEST"), actor);
             if (debtComputed != null && debtComputed.totals() != null) {
                 overdueDebtAmount = debtComputed.totals().overdueAmount();
             }

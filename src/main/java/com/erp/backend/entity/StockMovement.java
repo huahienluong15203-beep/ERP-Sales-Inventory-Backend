@@ -48,12 +48,12 @@ public class StockMovement {
     public static final Map<String, String> TYPE_LABELS = Map.of(
             TYPE_RECEIPT, "Nhập kho",
             TYPE_SALES_DISPATCH, "Xuất bán",
-            TYPE_DELIVERY_RETURN, "Hàng giao không thành công nhập lại",
+            TYPE_DELIVERY_RETURN, "Nhập hàng hoàn",
             TYPE_TRANSFER_OUT, "Xuất chuyển kho",
             TYPE_TRANSFER_IN, "Nhận chuyển kho",
             TYPE_STOCKTAKE_ADJUST, "Điều chỉnh kiểm kê",
             TYPE_SALES_RETURN, "Nhập trả hàng từ đại lý",
-            TYPE_STOCK_ADJUSTMENT, "Điều chỉnh tồn kho (hỏng, mất, huỷ)");
+            TYPE_STOCK_ADJUSTMENT, "Xuất hủy hao hụt");
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
