@@ -345,4 +345,67 @@ class PaymentServiceTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("không được xoá, chỉ lập bút toán điều chỉnh");
     }
+
+    // ======================= SỬA LỖI TEST BE (TC702-12, TC702-14, TC702-20) =======================
+
+    private PaymentReceiptCreateRequest.PaymentReceiptCreateRequestBuilder baseRequest() {
+        return PaymentReceiptCreateRequest.builder()
+                .customerId(6L)
+                .amount(new BigDecimal("1000000.00"))
+                .paymentMethod("CASH")
+                .paymentDate(TODAY)
+                .collectorName("Kế toán");
+    }
+
+    @Test
+    @DisplayName("TC702-12: Hình thức thu / kiểu đối trừ không hợp lệ -> 400, không tạo phiếu")
+    void invalidMethodOrAllocationType_rejected() {
+        assertThatThrownBy(() -> service.createReceipt(baseRequest().paymentMethod("ABC").build(), accountant))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "INVALID_PAYMENT_METHOD");
+        assertThatThrownBy(() -> service.createReceipt(baseRequest().allocationType("XYZ").build(), accountant))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "INVALID_ALLOCATION_TYPE");
+        verifyNoInteractions(customerRepository, paymentReceiptRepository);
+    }
+
+    @Test
+    @DisplayName("TC702-12: Hình thức thu viết thường / MANUAL được chuẩn hoá")
+    void normalizeValues() {
+        assertThat(PaymentService.normalizePaymentMethod(" bank_transfer ")).isEqualTo("BANK_TRANSFER");
+        assertThat(PaymentService.normalizePaymentMethod(null)).isEqualTo("CASH");
+        assertThat(PaymentService.normalizeAllocationType("manual")).isEqualTo("SPECIFIC");
+        assertThat(PaymentService.normalizeAllocationType(null)).isEqualTo("FIFO");
+    }
+
+    @Test
+    @DisplayName("TC702-14: NV kinh doanh không ghi nhận thu trừ nợ ngay được (409, phải qua thu tiền theo tuyến)")
+    void salesRep_cannotCreateConfirmedReceipt() {
+        UserDetailsImpl rep = actor(7, "ROLE_SALES_REP");
+
+        assertThatThrownBy(() -> service.createReceipt(baseRequest().build(), rep))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "PAYMENT_ACCOUNTANT_ONLY")
+                .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT);
+        verifyNoInteractions(customerRepository, invoiceRepository, paymentReceiptRepository);
+    }
+
+    @Test
+    @DisplayName("TC702-20: Cùng 1 hoá đơn chọn 2 lần trong đối trừ chỉ định -> 400, không trừ nợ")
+    void specificAllocation_duplicateInvoice_rejected() {
+        when(customerRepository.findByIdForUpdate(6L)).thenReturn(Optional.of(cust));
+        when(sequenceRepository.findForUpdate(2026)).thenReturn(Optional.of(PaymentSequence.builder().seqYear(2026).lastNumber(1L).build()));
+        PaymentReceiptCreateRequest request = baseRequest()
+                .allocationType("SPECIFIC")
+                .specificAllocations(List.of(
+                        PaymentAllocationItemRequest.builder().invoiceId(101L).amount(new BigDecimal("500000.00")).build(),
+                        PaymentAllocationItemRequest.builder().invoiceId(101L).amount(new BigDecimal("500000.00")).build()))
+                .build();
+
+        assertThatThrownBy(() -> service.createReceipt(request, accountant))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "DUPLICATE_ALLOCATION_INVOICE");
+        verify(invoiceRepository, never()).findAllByIdForUpdate(any());
+        verify(paymentReceiptRepository, never()).save(any());
+    }
 }
