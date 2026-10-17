@@ -37,6 +37,7 @@ class PickingListServiceTest {
     @Mock private ProductLotRepository productLotRepository;
     @Mock private UserRepository userRepository;
     @Mock private AuditLogService auditLogService;
+    @Mock private com.erp.backend.repository.SalesOrderApprovalRepository approvalRepository;
 
     @InjectMocks private PickingListService service;
 
@@ -159,6 +160,14 @@ class PickingListServiceTest {
         // Kiểm tra các đơn hàng đã được cập nhật sang trạng thái PICKING
         assertThat(order1.getStatus()).isEqualTo(SalesOrder.STATUS_PICKING);
         assertThat(order2.getStatus()).isEqualTo(SalesOrder.STATUS_PICKING);
+        // S6-09: mỗi đơn có lịch sử APPROVED -> PICKING để tiến trình giao hàng có đúng mốc "Đang soạn"
+        org.mockito.ArgumentCaptor<com.erp.backend.entity.SalesOrderApproval> history =
+                org.mockito.ArgumentCaptor.forClass(com.erp.backend.entity.SalesOrderApproval.class);
+        org.mockito.Mockito.verify(approvalRepository, org.mockito.Mockito.times(2)).save(history.capture());
+        assertThat(history.getAllValues()).allSatisfy(h -> {
+            assertThat(h.getFromStatus()).isEqualTo(SalesOrder.STATUS_APPROVED);
+            assertThat(h.getToStatus()).isEqualTo(SalesOrder.STATUS_PICKING);
+        });
     }
 
     @Test

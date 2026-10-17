@@ -47,6 +47,7 @@ public class PickingListService {
     private final ProductLotRepository productLotRepository;
     private final UserRepository userRepository;
     private final AuditLogService auditLogService;
+    private final SalesOrderApprovalRepository approvalRepository;
 
     // =========================================================================
     // 1. DANH SÁCH ĐƠN KHẢ DỤNG & XEM TRƯỚC (PREVIEW) GOM ĐƠN (S6-03)
@@ -197,6 +198,9 @@ public class PickingListService {
             if (SalesOrder.STATUS_APPROVED.equals(o.getStatus())) {
                 o.setStatus(SalesOrder.STATUS_PICKING);
                 salesOrderRepository.save(o);
+                // S6-09: ghi lịch sử trạng thái để tiến trình giao hàng có đúng mốc "Đang soạn hàng"
+                OrderStatusService.saveHistory(approvalRepository, o, "PICKING", SalesOrder.STATUS_APPROVED,
+                        SalesOrder.STATUS_PICKING, "Gom vào phiếu soạn hàng " + code, actor);
                 log.info("Transitioned order {} to status PICKING for picking list {}", o.getCode(), code);
             }
         }
@@ -551,6 +555,8 @@ public class PickingListService {
             if (SalesOrder.STATUS_PICKING.equals(o.getStatus())) {
                 o.setStatus(SalesOrder.STATUS_APPROVED);
                 salesOrderRepository.save(o);
+                OrderStatusService.saveHistory(approvalRepository, o, "PICKING_CANCELLED", SalesOrder.STATUS_PICKING,
+                        SalesOrder.STATUS_APPROVED, "Huỷ phiếu soạn hàng " + pickingList.getCode(), actor);
                 log.info("Reverted order {} to status APPROVED due to picking list cancellation", o.getCode());
             }
         }

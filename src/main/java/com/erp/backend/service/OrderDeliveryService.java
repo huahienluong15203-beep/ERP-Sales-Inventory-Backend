@@ -364,9 +364,7 @@ public class OrderDeliveryService {
                 }
             }
         }
-        if (pickingAt == null && currentStep >= 2) {
-            pickingAt = approvedAt != null ? approvedAt.plusMinutes(15) : order.getCreatedAt();
-        }
+        // Không có lịch sử chuyển sang soạn hàng thì để trống, không tự đặt giờ (tránh hiển thị thời điểm không có thật)
         OrderDeliveryTimelineResponse.StepDetail stepPicking = new OrderDeliveryTimelineResponse.StepDetail(
                 SalesOrder.STATUS_PICKING,
                 "Đang soạn hàng",
