@@ -47,7 +47,8 @@ public class PortalService {
             Map.entry(SalesOrder.STATUS_PICKING, "Đang soạn hàng"),
             Map.entry(SalesOrder.STATUS_DISPATCHED, "Đã xuất kho"),
             Map.entry(SalesOrder.STATUS_DELIVERED, "Đã giao"),
-            Map.entry(SalesOrder.STATUS_CLOSED, "Hoàn tất"),
+            Map.entry(SalesOrder.STATUS_CLOSED, "Đã hoàn thành"),
+            Map.entry("COMPLETED", "Đã hoàn thành"),
             Map.entry(SalesOrder.STATUS_REJECTED, "Bị từ chối"),
             Map.entry(SalesOrder.STATUS_DELIVERY_FAILED, "Giao không thành công"),
             Map.entry(SalesOrder.STATUS_CANCELLED, "Đã huỷ"));
