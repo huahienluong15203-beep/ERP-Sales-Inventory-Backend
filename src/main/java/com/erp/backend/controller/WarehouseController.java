@@ -30,7 +30,7 @@ public class WarehouseController {
     // ==============================================================
 
     @GetMapping("/api/warehouses")
-    @PreAuthorize("hasAnyRole('ADMIN', 'WH_MANAGER', 'WAREHOUSE', 'SALES_MANAGER', 'ACCOUNTANT')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'WH_MANAGER', 'WAREHOUSE', 'SALES_MANAGER', 'ACCOUNTANT', 'SALES_REP')")
     public List<WarehouseResponse> getAllWarehouses(@RequestParam(required = false) String status,
                                                    @RequestParam(required = false) String keyword,
                                                    @AuthenticationPrincipal UserDetailsImpl actor) {
@@ -38,7 +38,7 @@ public class WarehouseController {
     }
 
     @GetMapping("/api/warehouses/{id}")
-    @PreAuthorize("hasAnyRole('ADMIN', 'WH_MANAGER', 'WAREHOUSE', 'SALES_MANAGER', 'ACCOUNTANT')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'WH_MANAGER', 'WAREHOUSE', 'SALES_MANAGER', 'ACCOUNTANT', 'SALES_REP')")
     public WarehouseResponse getWarehouseById(@PathVariable Long id,
                                              @AuthenticationPrincipal UserDetailsImpl actor) {
         return warehouseService.getById(id, actor);
