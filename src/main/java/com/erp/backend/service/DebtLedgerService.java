@@ -7,6 +7,7 @@ import com.erp.backend.entity.Customer;
 import com.erp.backend.entity.SalesOrder;
 import com.erp.backend.entity.User;
 import com.erp.backend.exception.BusinessException;
+import com.erp.backend.repository.CreditNoteRepository;
 import com.erp.backend.repository.CustomerRepository;
 import com.erp.backend.repository.DebtAgingRepository;
 import com.erp.backend.security.UserDetailsImpl;
@@ -39,7 +40,8 @@ import java.util.function.Function;
  * - Lọc riêng nhóm quá hạn (quá số ngày nợ tối đa của từng đại lý) hoặc theo 1 nhóm tuổi nợ; tổng cộng ở chân bảng.
  * - Mặc định sắp khoản nợ lâu nhất lên đầu để tập trung đòi trước. Xuất Excel.
  * - NV kinh doanh chỉ thấy đại lý mình phụ trách; Kế toán / QL kinh doanh / Admin thấy tất cả.
- * Cách tính công nợ giống kiểm tra công nợ khi tạo đơn (đơn chưa xuất hoá đơn + số còn nợ trên hoá đơn).
+ * Cách tính công nợ giống kiểm tra công nợ khi tạo đơn (đơn chưa xuất hoá đơn + số còn nợ trên hoá đơn
+ * - giảm trừ do trả hàng chưa đối trừ được, trừ vào khoản nợ cũ nhất trước).
  */
 @Service
 @RequiredArgsConstructor
@@ -56,6 +58,7 @@ public class DebtLedgerService {
 
     private final DebtAgingRepository agingRepository;
     private final CustomerRepository customerRepository;
+    private final CreditNoteRepository creditNoteRepository;
 
     Clock clock = Clock.system(VN_ZONE);
 
@@ -124,9 +127,16 @@ public class DebtLedgerService {
         }
 
         Map<Long, Customer> customers = new HashMap<>();
+        Map<Long, BigDecimal> credits = new HashMap<>();
         if (!byCustomer.isEmpty()) {
             for (Customer c : customerRepository.findAllById(byCustomer.keySet())) {
                 customers.put(c.getId(), c);
+            }
+            for (Object[] r : nz(creditNoteRepository.sumUnappliedByCustomerIds(byCustomer.keySet()))) {
+                Long cid = id(r[0]);
+                if (cid != null) {
+                    credits.put(cid, money(r[1]).max(ZERO));
+                }
             }
         }
 
@@ -144,7 +154,7 @@ public class DebtLedgerService {
             if (kw != null && !contains(c.getCode(), kw) && !contains(c.getName(), kw) && !contains(c.getPhone(), kw)) {
                 continue;
             }
-            DebtAgingRow row = e.getValue().toRow(c, today);
+            DebtAgingRow row = e.getValue().toRow(c, today, credits.getOrDefault(c.getId(), ZERO));
             if (!f.includeSettled() && row.outstanding().signum() <= 0) {
                 continue;
             }
@@ -209,24 +219,42 @@ public class DebtLedgerService {
         }
 
         DebtAgingRow toRow(Customer c, LocalDate today) {
+            return toRow(c, today, ZERO);
+        }
+
+        /** credit: giảm trừ chưa đối trừ của đại lý, trừ vào khoản nợ cũ nhất trước (khoản về 0 thì không còn tính tuổi nợ). */
+        DebtAgingRow toRow(Customer c, LocalDate today, BigDecimal credit) {
             Map<String, BigDecimal> buckets = new HashMap<>();
             BUCKETS.forEach(b -> buckets.put(b, ZERO));
             BigDecimal overdue = ZERO;
             long oldest = 0;
             Integer maxDays = c.getMaxDebtDays();
-            for (Item it : items) {
+            BigDecimal creditLeft = credit == null ? ZERO : credit.max(ZERO);
+            List<Item> sorted = new ArrayList<>(items);
+            sorted.sort(Comparator.comparing(Item::date, Comparator.nullsLast(Comparator.naturalOrder())));
+            for (Item it : sorted) {
+                BigDecimal remaining = it.remaining();
+                if (creditLeft.signum() > 0) {
+                    BigDecimal used = creditLeft.min(remaining);
+                    remaining = remaining.subtract(used);
+                    creditLeft = creditLeft.subtract(used);
+                }
+                if (remaining.signum() <= 0) {
+                    continue;
+                }
                 long age = it.date() == null ? 0 : Math.max(0, ChronoUnit.DAYS.between(it.date(), today));
-                buckets.merge(bucketOf(age), it.remaining(), BigDecimal::add);
+                buckets.merge(bucketOf(age), remaining, BigDecimal::add);
                 if (maxDays != null && maxDays >= 0 && age > maxDays) {
-                    overdue = overdue.add(it.remaining());
+                    overdue = overdue.add(remaining);
                 }
                 oldest = Math.max(oldest, age);
             }
+            BigDecimal creditBalance = credit == null ? ZERO : credit.max(ZERO);
             User rep = c.getSalesRep();
             return new DebtAgingRow(c.getId(), c.getCode(), c.getName(), rep != null ? rep.getId() : null,
                     rep != null ? rep.getFullName() : null, money(c.getCreditLimit()), maxDays, receivable, collected,
-                    outstanding, uninvoiced, buckets.get("D0_30"), buckets.get("D31_60"), buckets.get("D61_90"),
-                    buckets.get("D90_PLUS"), overdue, oldest);
+                    outstanding.subtract(creditBalance), uninvoiced, buckets.get("D0_30"), buckets.get("D31_60"),
+                    buckets.get("D61_90"), buckets.get("D90_PLUS"), overdue, oldest, creditBalance);
         }
     }
 
@@ -236,7 +264,7 @@ public class DebtLedgerService {
                 sum(rows, DebtAgingRow::outstanding), sum(rows, DebtAgingRow::uninvoiced),
                 sum(rows, DebtAgingRow::d0To30), sum(rows, DebtAgingRow::d31To60),
                 sum(rows, DebtAgingRow::d61To90), sum(rows, DebtAgingRow::over90),
-                sum(rows, DebtAgingRow::overdueAmount));
+                sum(rows, DebtAgingRow::overdueAmount), sum(rows, DebtAgingRow::creditBalance));
     }
 
     static Comparator<DebtAgingRow> comparator(String sort) {
@@ -321,7 +349,8 @@ public class DebtLedgerService {
 
             String[] headers = {"STT", "Mã đại lý", "Tên đại lý", "NV phụ trách", "Hạn mức (₫)", "Số ngày nợ tối đa",
                     "Phải thu (₫)", "Đã thu (₫)", "Còn nợ (₫)", "Trong đó chưa xuất HĐ (₫)", "0–30 ngày (₫)",
-                    "31–60 ngày (₫)", "61–90 ngày (₫)", "Trên 90 ngày (₫)", "Quá hạn (₫)", "Tuổi nợ lâu nhất (ngày)"};
+                    "31–60 ngày (₫)", "61–90 ngày (₫)", "Trên 90 ngày (₫)", "Quá hạn (₫)", "Tuổi nợ lâu nhất (ngày)",
+                    "Giảm trừ chưa đối trừ (₫)"};
             Row r0 = sheet.createRow(0);
             text(r0, 0, "SỔ CÔNG NỢ & TUỔI NỢ ĐẠI LÝ", title);
             sheet.addMergedRegion(new CellRangeAddress(0, 0, 0, headers.length - 1));
@@ -352,6 +381,7 @@ public class DebtLedgerService {
                 num(x, 13, row.over90(), money);
                 num(x, 14, row.overdueAmount(), money);
                 x.createCell(15).setCellValue(row.oldestDebtDays());
+                num(x, 16, row.creditBalance(), money);
             }
             DebtAgingTotals t = c.totals();
             Row tr = sheet.createRow(r);
@@ -365,7 +395,8 @@ public class DebtLedgerService {
             num(tr, 12, t.d61To90(), totalMoney);
             num(tr, 13, t.over90(), totalMoney);
             num(tr, 14, t.overdueAmount(), totalMoney);
-            int[] widths = {6, 14, 32, 22, 16, 12, 16, 16, 16, 18, 16, 16, 16, 16, 16, 14};
+            num(tr, 16, t.creditBalance(), totalMoney);
+            int[] widths = {6, 14, 32, 22, 16, 12, 16, 16, 16, 18, 16, 16, 16, 16, 16, 14, 18};
             for (int i = 0; i < widths.length; i++) {
                 sheet.setColumnWidth(i, widths[i] * 256);
             }
