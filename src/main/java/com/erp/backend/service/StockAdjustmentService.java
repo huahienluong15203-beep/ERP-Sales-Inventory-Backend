@@ -13,6 +13,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
+import jakarta.persistence.criteria.Predicate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -414,8 +416,35 @@ public class StockAdjustmentService {
         int s = Math.min(100, Math.max(1, size));
         Pageable pageable = PageRequest.of(p, s, Sort.by(Sort.Direction.DESC, "createdAt"));
 
-        Page<StockAdjustment> pageResult = stockAdjustmentRepository.searchAdjustments(
-                warehouseId, status, reason, fromDate, toDate, keyword, pageable);
+        Specification<StockAdjustment> spec = (root, q, cb) -> {
+            List<Predicate> ps = new ArrayList<>();
+            if (warehouseId != null) {
+                ps.add(cb.equal(root.get("warehouse").get("id"), warehouseId));
+            }
+            if (StringUtils.hasText(status) && !"ALL".equalsIgnoreCase(status.trim())) {
+                ps.add(cb.equal(root.get("status"), status.trim()));
+            }
+            if (StringUtils.hasText(reason) && !"ALL".equalsIgnoreCase(reason.trim())) {
+                ps.add(cb.equal(root.get("adjustmentReason"), reason.trim()));
+            }
+            if (fromDate != null) {
+                ps.add(cb.greaterThanOrEqualTo(root.<LocalDate>get("adjustmentDate"), fromDate));
+            }
+            if (toDate != null) {
+                ps.add(cb.lessThanOrEqualTo(root.<LocalDate>get("adjustmentDate"), toDate));
+            }
+            if (StringUtils.hasText(keyword)) {
+                String kw = "%" + keyword.trim().toLowerCase() + "%";
+                ps.add(cb.or(
+                        cb.like(cb.lower(root.get("code")), kw),
+                        cb.like(cb.lower(root.get("warehouseName")), kw),
+                        cb.like(cb.lower(root.get("createdByName")), kw)
+                ));
+            }
+            return cb.and(ps.toArray(new Predicate[0]));
+        };
+
+        Page<StockAdjustment> pageResult = stockAdjustmentRepository.findAll(spec, pageable);
 
         List<StockAdjustmentResponse> content = pageResult.getContent().stream()
                 .map(this::toResponse)
