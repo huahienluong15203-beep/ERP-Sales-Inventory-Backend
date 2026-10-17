@@ -38,6 +38,7 @@ class DebtLedgerServiceTest {
 
     @Mock private DebtAgingRepository agingRepository;
     @Mock private CustomerRepository customerRepository;
+    @Mock private com.erp.backend.repository.CreditNoteRepository creditNoteRepository;
 
     @InjectMocks private DebtLedgerService service;
 
@@ -280,5 +281,38 @@ class DebtLedgerServiceTest {
             assertThat(s.getRow(6).getCell(2).getStringCellValue()).contains("TỔNG CỘNG");
             assertThat(s.getRow(6).getCell(8).getNumericCellValue()).isEqualTo(4400000d);
         }
+    }
+
+    @Test
+    @DisplayName("S8-10: Giảm trừ chưa đối trừ trừ vào còn nợ, trừ vào khoản nợ cũ nhất trước (tuổi nợ, quá hạn giảm theo)")
+    void unappliedCredit_reducesOldestDebtFirst() {
+        data();
+        when(creditNoteRepository.sumUnappliedByCustomerIds(any())).thenReturn(List.<Object[]>of(
+                new Object[]{6L, new BigDecimal("500000")}));
+
+        DebtAgingRow r = service.ledger(filter(null, null, false, false), 0, 50, accountant).rows().stream()
+                .filter(x -> x.customerId() == 6L).findFirst().orElseThrow();
+
+        assertThat(r.creditBalance()).isEqualByComparingTo("500000");
+        assertThat(r.outstanding()).isEqualByComparingTo("3100000");
+        // 300.000 nợ ngày 01/07 (>90 ngày) hết trước, 200.000 còn lại trừ vào đơn chưa xuất HĐ ngày 01/08
+        assertThat(r.over90()).isEqualByComparingTo("0");
+        assertThat(r.d61To90()).isEqualByComparingTo("500000");
+        assertThat(r.overdueAmount()).isEqualByComparingTo("2500000");
+        assertThat(r.oldestDebtDays()).isEqualTo(76);
+        assertThat(r.d0To30().add(r.d31To60()).add(r.d61To90()).add(r.over90())).isEqualByComparingTo(r.outstanding());
+    }
+
+    @Test
+    @DisplayName("S8-10: Giảm trừ lớn hơn nợ -> đại lý không còn nợ, không hiện khi ẩn đại lý đã tất toán")
+    void creditCoversDebt_customerSettled() {
+        data();
+        when(creditNoteRepository.sumUnappliedByCustomerIds(any())).thenReturn(List.<Object[]>of(
+                new Object[]{8L, new BigDecimal("900000")}));
+
+        DebtLedgerResponse res = service.ledger(filter(null, null, false, false), 0, 50, accountant);
+
+        assertThat(res.rows()).extracting(DebtAgingRow::customerId).containsExactly(6L);
+        assertThat(res.totals().creditBalance()).isEqualByComparingTo("0");
     }
 }

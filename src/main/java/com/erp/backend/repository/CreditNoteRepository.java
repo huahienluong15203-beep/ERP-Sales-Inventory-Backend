@@ -17,6 +17,9 @@ public interface CreditNoteRepository extends JpaRepository<CreditNote, Long>, J
 
     boolean existsBySalesReturn_Id(Long salesReturnId);
 
+    /** S8-10 / S7-06: Chứng từ giảm trừ của 1 đại lý tới ngày. */
+    List<CreditNote> findByCustomer_IdAndNoteDateLessThanEqual(Long customerId, java.time.LocalDate toDate);
+
     Optional<CreditNote> findBySalesReturn_Id(Long salesReturnId);
 
     List<CreditNote> findBySalesReturn_IdIn(Collection<Long> salesReturnIds);

@@ -11,6 +11,10 @@ import java.util.Optional;
 /** S7-02: Kho dữ liệu phiếu thu / cấn trừ công nợ. */
 public interface PaymentReceiptRepository extends JpaRepository<PaymentReceipt, Long>, JpaSpecificationExecutor<PaymentReceipt> {
 
+    /** S8-10 / S7-06: Phiếu thu theo trạng thái của 1 đại lý tới ngày. */
+    java.util.List<PaymentReceipt> findByCustomer_IdAndStatusAndPaymentDateLessThanEqual(
+            Long customerId, String status, java.time.LocalDate toDate);
+
     Optional<PaymentReceipt> findByCode(String code);
 
     boolean existsByCode(String code);
