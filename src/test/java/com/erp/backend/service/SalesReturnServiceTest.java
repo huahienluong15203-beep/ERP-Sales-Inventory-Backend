@@ -45,6 +45,9 @@ class SalesReturnServiceTest {
     @Mock private ProductLotRepository productLotRepository;
     @Mock private StockMovementRepository stockMovementRepository;
     @Mock private AuditLogService auditLogService;
+    @Mock private CustomerRepository customerRepository;
+    @Mock private SalesOrderLineRepository salesOrderLineRepository;
+    @Mock private UserRepository userRepository;
 
     @InjectMocks
     private SalesReturnService salesReturnService;
@@ -67,12 +70,14 @@ class SalesReturnServiceTest {
         sampleCustomer.setId(1L);
         sampleCustomer.setCode("CUST001");
         sampleCustomer.setName("Đại lý Hải Đăng");
+        sampleCustomer.setSalesRep(CustomerTestData.salesRep(20L)); // NV kinh doanh 20 phụ trách
 
         sampleWarehouse = new Warehouse();
         sampleWarehouse.setId(5L);
         sampleWarehouse.setCode("KHO-TONG");
         sampleWarehouse.setName("Kho Tổng Miền Bắc");
         sampleWarehouse.setStatus("ACTIVE");
+        sampleWarehouse.setManager(CustomerTestData.user(30L, "ACTIVE", RoleName.ROLE_WH_MANAGER)); // QL kho 30 phụ trách kho
 
         sampleProduct = new Product();
         sampleProduct.setId(100L);
@@ -107,7 +112,7 @@ class SalesReturnServiceTest {
     void testCreateSalesReturn_Success() {
         when(invoiceRepository.findById(10L)).thenReturn(Optional.of(sampleInvoice));
         when(warehouseRepository.findById(5L)).thenReturn(Optional.of(sampleWarehouse));
-        when(invoiceLineRepository.findById(101L)).thenReturn(Optional.of(sampleInvoiceLine));
+        when(invoiceLineRepository.findByIdForUpdate(101L)).thenReturn(Optional.of(sampleInvoiceLine));
         when(salesReturnLineRepository.getPreviouslyReturnedQuantity(eq(101L), isNull(), anyString()))
                 .thenReturn(BigDecimal.ZERO);
         when(salesReturnRepository.findCodesByPrefix(anyString())).thenReturn(Collections.emptyList());
@@ -149,7 +154,7 @@ class SalesReturnServiceTest {
     void testCreateSalesReturn_FailWhenQuantityExceedsDelivered() {
         when(invoiceRepository.findById(10L)).thenReturn(Optional.of(sampleInvoice));
         when(warehouseRepository.findById(5L)).thenReturn(Optional.of(sampleWarehouse));
-        when(invoiceLineRepository.findById(101L)).thenReturn(Optional.of(sampleInvoiceLine));
+        when(invoiceLineRepository.findByIdForUpdate(101L)).thenReturn(Optional.of(sampleInvoiceLine));
         when(salesReturnLineRepository.getPreviouslyReturnedQuantity(eq(101L), isNull(), anyString()))
                 .thenReturn(BigDecimal.ZERO);
 
@@ -177,7 +182,7 @@ class SalesReturnServiceTest {
     void testCreateSalesReturn_FailWhenQuantityExceedsRemainingAfterPreviousReturn() {
         when(invoiceRepository.findById(10L)).thenReturn(Optional.of(sampleInvoice));
         when(warehouseRepository.findById(5L)).thenReturn(Optional.of(sampleWarehouse));
-        when(invoiceLineRepository.findById(101L)).thenReturn(Optional.of(sampleInvoiceLine));
+        when(invoiceLineRepository.findByIdForUpdate(101L)).thenReturn(Optional.of(sampleInvoiceLine));
         // Đã trả 7 thùng trước đó -> chỉ còn được trả tối đa 3 thùng
         when(salesReturnLineRepository.getPreviouslyReturnedQuantity(eq(101L), isNull(), anyString()))
                 .thenReturn(new BigDecimal("7"));
@@ -206,7 +211,7 @@ class SalesReturnServiceTest {
 
         when(invoiceRepository.findById(10L)).thenReturn(Optional.of(sampleInvoice));
         when(warehouseRepository.findById(5L)).thenReturn(Optional.of(sampleWarehouse));
-        when(invoiceLineRepository.findById(101L)).thenReturn(Optional.of(sampleInvoiceLine));
+        when(invoiceLineRepository.findByIdForUpdate(101L)).thenReturn(Optional.of(sampleInvoiceLine));
         when(salesReturnLineRepository.getPreviouslyReturnedQuantity(eq(101L), isNull(), anyString()))
                 .thenReturn(BigDecimal.ZERO);
 
@@ -313,46 +318,246 @@ class SalesReturnServiceTest {
     }
 
     @Test
-    @DisplayName("SCRUM-238: Hàng hỏng / vận chuyển vỡ - Nhập lại lô hàng ở trạng thái LOCKED để không xuất bán")
-    void testReceiveAndRestock_DamagedGoods_LocksLot() {
+    @DisplayName("TC801-11: Hàng hỏng SKU có lô - vào khu hàng lỗi, không cộng tồn bán được, lô hàng tốt vẫn ACTIVE")
+    void testReceiveAndRestock_DamagedLotGoods_QuarantinedLotStaysActive() {
         sampleProduct.setHasBatchManagement(true);
-
-        SalesReturn salesReturn = SalesReturn.builder()
-                .id(2L)
-                .code("PTH-202610-002")
-                .status(SalesReturn.STATUS_PENDING_RECEIPT)
-                .receivingWarehouse(sampleWarehouse)
-                .customer(sampleCustomer)
-                .returnReason(SalesReturn.REASON_DEFECTIVE_TRANSPORT) // Lý do hỏng do vận chuyển
-                .build();
-
-        SalesReturnLine line = SalesReturnLine.builder()
-                .id(12L)
-                .salesReturn(salesReturn)
-                .product(sampleProduct)
-                .returnQuantity(new BigDecimal("1"))
-                .baseQuantity(new BigDecimal("24"))
-                .hasBatchManagement(true)
-                .batchNumber("LOT-DAMAGED-01")
-                .isDamaged(true) // Đánh dấu hàng lỗi
-                .build();
-        salesReturn.addLine(line);
-
+        SalesReturn salesReturn = returnWithLine(2L, SalesReturn.REASON_AGENCY_OVERSTOCK, true, "LOT-HN-202610");
+        Inventory inv = Inventory.builder().id(50L).physicalStock(new BigDecimal("100")).reservedStock(BigDecimal.ZERO).build();
         when(salesReturnRepository.findByIdForUpdate(2L)).thenReturn(Optional.of(salesReturn));
-        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(anyLong(), anyLong()))
-                .thenReturn(Optional.of(Inventory.builder().physicalStock(BigDecimal.ZERO).build()));
-        when(productLotRepository.findByProductAndWarehouseAndBatchNumberForUpdate(anyLong(), anyLong(), anyString()))
-                .thenReturn(Optional.empty()); // Chưa có lô này
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(5L, 100L)).thenReturn(Optional.of(inv));
         when(salesReturnRepository.save(any(SalesReturn.class))).thenReturn(salesReturn);
 
         salesReturnService.receiveAndRestock(2L, "Hàng vỡ vỏ lon", warehouseManagerActor);
 
-        // Kiểm tra lô hàng tạo mới bị khóa LOCKED
-        ArgumentCaptor<ProductLot> lotCaptor = ArgumentCaptor.forClass(ProductLot.class);
-        verify(productLotRepository).save(lotCaptor.capture());
-        ProductLot savedLot = lotCaptor.getValue();
-        assertThat(savedLot.getStatus()).isEqualTo("LOCKED");
-        assertThat(savedLot.getNotes()).contains("Hàng trả lỗi");
+        assertThat(inv.getPhysicalStock()).isEqualByComparingTo("100");
+        assertThat(inv.getDamagedStock()).isEqualByComparingTo("24");
+        verify(productLotRepository, never()).findByProductAndWarehouseAndBatchNumberForUpdate(anyLong(), anyLong(), anyString());
+        verify(productLotRepository, never()).save(any());
+        verify(stockMovementRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("TC801-12: Hàng hỏng SKU không quản lý lô (lý do hỏng do vận chuyển) - không cộng vào tồn bán được")
+    void testReceiveAndRestock_DamagedNonLotGoods_NotSellable() {
+        SalesReturn salesReturn = returnWithLine(3L, "Bao bì móp méo / Hỏng khi vận chuyển", false, null);
+        Inventory inv = Inventory.builder().id(50L).physicalStock(new BigDecimal("100")).reservedStock(BigDecimal.ZERO).build();
+        when(salesReturnRepository.findByIdForUpdate(3L)).thenReturn(Optional.of(salesReturn));
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(5L, 100L)).thenReturn(Optional.of(inv));
+        when(salesReturnRepository.save(any(SalesReturn.class))).thenReturn(salesReturn);
+
+        salesReturnService.receiveAndRestock(3L, null, warehouseManagerActor);
+
+        assertThat(inv.getPhysicalStock()).isEqualByComparingTo("100");
+        assertThat(inv.getAvailableStock()).isEqualByComparingTo("100");
+        assertThat(inv.getDamagedStock()).isEqualByComparingTo("24");
+    }
+
+    @Test
+    @DisplayName("TC801-15: NV kho (không phải QL kho) xác nhận nhận hàng -> 409, tồn không đổi")
+    void testReceive_warehouseStaff_rejected() {
+        SalesReturn salesReturn = returnWithLine(4L, SalesReturn.REASON_AGENCY_OVERSTOCK, false, null);
+        when(salesReturnRepository.findByIdForUpdate(4L)).thenReturn(Optional.of(salesReturn));
+
+        assertThatThrownBy(() -> salesReturnService.receiveAndRestock(4L, null, CustomerTestData.actor(31L, "ROLE_WAREHOUSE")))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo("RETURN_RECEIVE_MANAGER_ONLY"));
+        verifyNoInteractions(inventoryRepository);
+    }
+
+    @Test
+    @DisplayName("TC801-16: QL kho không được phân công kho nhận -> 409")
+    void testReceive_managerOfOtherWarehouse_rejected() {
+        SalesReturn salesReturn = returnWithLine(4L, SalesReturn.REASON_AGENCY_OVERSTOCK, false, null);
+        when(salesReturnRepository.findByIdForUpdate(4L)).thenReturn(Optional.of(salesReturn));
+        User other = CustomerTestData.user(32L, "ACTIVE", RoleName.ROLE_WH_MANAGER);
+        Warehouse south = new Warehouse();
+        south.setId(6L);
+        other.setWarehouses(new java.util.HashSet<>(java.util.Set.of(south)));
+        when(userRepository.findById(32L)).thenReturn(Optional.of(other));
+
+        assertThatThrownBy(() -> salesReturnService.receiveAndRestock(4L, null, CustomerTestData.actor(32L, "ROLE_WH_MANAGER")))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo("RETURN_WAREHOUSE_NOT_ASSIGNED"));
+        verifyNoInteractions(inventoryRepository);
+    }
+
+    @Test
+    @DisplayName("TC801-16: QL kho được gắn kho qua phân công user_warehouses thì nhận được")
+    void testReceive_assignedManager_ok() {
+        sampleWarehouse.setManager(null);
+        SalesReturn salesReturn = returnWithLine(4L, SalesReturn.REASON_AGENCY_OVERSTOCK, false, null);
+        when(salesReturnRepository.findByIdForUpdate(4L)).thenReturn(Optional.of(salesReturn));
+        User mgr = CustomerTestData.user(30L, "ACTIVE", RoleName.ROLE_WH_MANAGER);
+        mgr.setWarehouses(new java.util.HashSet<>(java.util.Set.of(sampleWarehouse)));
+        when(userRepository.findById(30L)).thenReturn(Optional.of(mgr));
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(5L, 100L))
+                .thenReturn(Optional.of(Inventory.builder().id(50L).physicalStock(new BigDecimal("10")).build()));
+        when(salesReturnRepository.save(any(SalesReturn.class))).thenReturn(salesReturn);
+
+        assertThat(salesReturnService.receiveAndRestock(4L, null, warehouseManagerActor).getStatus())
+                .isEqualTo(SalesReturn.STATUS_RECEIVED);
+    }
+
+    @Test
+    @DisplayName("TC801-18: Nhận hàng ghi nhật ký INVENTORY có người nhận, tồn trước / sau")
+    void testReceive_writesAuditLog() {
+        SalesReturn salesReturn = returnWithLine(4L, SalesReturn.REASON_AGENCY_OVERSTOCK, false, null);
+        when(salesReturnRepository.findByIdForUpdate(4L)).thenReturn(Optional.of(salesReturn));
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(5L, 100L))
+                .thenReturn(Optional.of(Inventory.builder().id(50L).physicalStock(new BigDecimal("100")).build()));
+        when(salesReturnRepository.save(any(SalesReturn.class))).thenReturn(salesReturn);
+
+        salesReturnService.receiveAndRestock(4L, null, warehouseManagerActor);
+
+        verify(auditLogService).record(eq(AuditModule.INVENTORY), eq("SALES_RETURN_RECEIVE"), eq("INVENTORY"), eq(50L),
+                contains("PTH-4"), contains("Tồn thực tế: 100"), contains("Tồn thực tế: 124"),
+                contains("PTH-4"), eq(warehouseManagerActor));
+    }
+
+    private SalesReturn returnWithLine(long id, String reason, boolean damaged, String batch) {
+        SalesReturn r = SalesReturn.builder()
+                .id(id)
+                .code("PTH-" + id)
+                .status(SalesReturn.STATUS_PENDING_RECEIPT)
+                .receivingWarehouse(sampleWarehouse)
+                .customer(sampleCustomer)
+                .customerName("Đại lý Hải Đăng")
+                .invoiceCode("HD-202610-001")
+                .returnReason(reason)
+                .build();
+        r.addLine(SalesReturnLine.builder()
+                .id(id * 10)
+                .salesReturn(r)
+                .product(sampleProduct)
+                .returnQuantity(new BigDecimal("1"))
+                .baseQuantity(new BigDecimal("24"))
+                .hasBatchManagement(batch != null)
+                .batchNumber(batch)
+                .isDamaged(damaged)
+                .build());
+        return r;
+    }
+
+    private SalesReturnCreateRequest createRequest(String reason, SalesReturnItemRequest... items) {
+        return SalesReturnCreateRequest.builder()
+                .invoiceId(10L)
+                .receivingWarehouseId(5L)
+                .returnReason(reason)
+                .items(List.of(items))
+                .build();
+    }
+
+    private static SalesReturnItemRequest item(long lineId, String qty, String batch) {
+        return SalesReturnItemRequest.builder().invoiceLineId(lineId).returnQuantity(new BigDecimal(qty)).batchNumber(batch).build();
+    }
+
+    private void stubCreate(BigDecimal previouslyReturned) {
+        when(invoiceRepository.findById(10L)).thenReturn(Optional.of(sampleInvoice));
+        when(warehouseRepository.findById(5L)).thenReturn(Optional.of(sampleWarehouse));
+        when(invoiceLineRepository.findByIdForUpdate(101L)).thenReturn(Optional.of(sampleInvoiceLine));
+        when(salesReturnLineRepository.getPreviouslyReturnedQuantity(eq(101L), isNull(), anyString())).thenReturn(previouslyReturned);
+    }
+
+    private void stubSave() {
+        when(salesReturnRepository.findCodesByPrefix(anyString())).thenReturn(Collections.emptyList());
+        when(salesReturnRepository.save(any(SalesReturn.class))).thenAnswer(inv -> inv.getArgument(0));
+    }
+
+    @Test
+    @DisplayName("TC801-04: Cùng 1 dòng hoá đơn gửi 2 lần (2 + 2 thùng) mà chỉ còn trả được 3 -> 400, kiểm tra tổng")
+    void create_duplicateLines_totalChecked() {
+        stubCreate(new BigDecimal("7"));
+
+        assertThatThrownBy(() -> salesReturnService.createSalesReturn(createRequest(SalesReturn.REASON_AGENCY_OVERSTOCK,
+                item(101L, "2", null), item(101L, "2", null)), salesRepActor))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Số lượng trả (4)").hasMessageContaining("còn lại (3)");
+        verify(invoiceLineRepository, times(1)).findByIdForUpdate(101L);
+        verify(salesReturnRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("TC801-05: Lập phiếu khoá dòng hoá đơn FOR UPDATE rồi mới đọc số đã trả")
+    void create_locksInvoiceLineBeforeReadingReturned() {
+        stubCreate(BigDecimal.ZERO);
+        stubSave();
+
+        salesReturnService.createSalesReturn(createRequest(SalesReturn.REASON_AGENCY_OVERSTOCK, item(101L, "2", null)), salesRepActor);
+
+        var order = inOrder(invoiceLineRepository, salesReturnLineRepository);
+        order.verify(invoiceLineRepository).findByIdForUpdate(101L);
+        order.verify(salesReturnLineRepository).getPreviouslyReturnedQuantity(eq(101L), isNull(), anyString());
+        verify(invoiceLineRepository, never()).findById(anyLong());
+    }
+
+    @Test
+    @DisplayName("TC801-06: Lý do trả không có trong danh mục -> 400; nhãn giao diện đang dùng vẫn nhận")
+    void create_unknownReason_rejected() {
+        assertThatThrownBy(() -> salesReturnService.createSalesReturn(createRequest("LY_DO_BAT_KY", item(101L, "1", null)), salesRepActor))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo("INVALID_RETURN_REASON"));
+        verifyNoInteractions(invoiceRepository);
+
+        assertThat(SalesReturnService.reasonCode("Bao bì móp méo / Hỏng khi vận chuyển")).isEqualTo(SalesReturn.REASON_DEFECTIVE_TRANSPORT);
+        assertThat(SalesReturnService.reasonCode("Hàng cận date / Hết hạn sử dụng")).isEqualTo(SalesReturn.REASON_EXPIRED_OR_NEAR);
+        assertThat(SalesReturnService.reasonCode("agency_overstock")).isEqualTo(SalesReturn.REASON_AGENCY_OVERSTOCK);
+        assertThat(SalesReturnService.reasonCode("Lý do khác")).isEqualTo(SalesReturn.REASON_OTHER);
+    }
+
+    @Test
+    @DisplayName("TC801-10: Số lô khác lô đã xuất trên dòng đơn gốc -> 400")
+    void create_batchNotShipped_rejected() {
+        sampleProduct.setHasBatchManagement(true);
+        sampleInvoiceLine.setOrderLineId(900L);
+        SalesOrderLine ol = new SalesOrderLine();
+        ol.setBatchNumber("LOT-HN-202610");
+        stubCreate(BigDecimal.ZERO);
+        when(salesOrderLineRepository.findById(900L)).thenReturn(Optional.of(ol));
+
+        assertThatThrownBy(() -> salesReturnService.createSalesReturn(createRequest(SalesReturn.REASON_AGENCY_OVERSTOCK,
+                item(101L, "1", "L-BIA-KHONG-CO")), salesRepActor))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo("RETURN_BATCH_MISMATCH"));
+        verify(salesReturnRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("TC801-10: Đúng lô đã xuất (khác hoa thường) -> nhận, lưu theo số lô gốc")
+    void create_shippedBatch_ok() {
+        sampleProduct.setHasBatchManagement(true);
+        sampleInvoiceLine.setOrderLineId(900L);
+        SalesOrderLine ol = new SalesOrderLine();
+        ol.setBatchNumber("LOT-HN-202610");
+        stubCreate(BigDecimal.ZERO);
+        stubSave();
+        when(salesOrderLineRepository.findById(900L)).thenReturn(Optional.of(ol));
+
+        SalesReturnResponse r = salesReturnService.createSalesReturn(createRequest(SalesReturn.REASON_AGENCY_OVERSTOCK,
+                item(101L, "1", " lot-hn-202610 ")), salesRepActor);
+
+        assertThat(r.getStatus()).isEqualTo(SalesReturn.STATUS_PENDING_RECEIPT);
+        ArgumentCaptor<SalesReturn> c = ArgumentCaptor.forClass(SalesReturn.class);
+        verify(salesReturnRepository).save(c.capture());
+        assertThat(c.getValue().getLines().get(0).getBatchNumber()).isEqualTo("LOT-HN-202610");
+    }
+
+    @Test
+    @DisplayName("TC801-10: Dòng đơn cũ chưa lưu lô xuất, số lô không có thật của SKU -> 400")
+    void create_unknownBatch_noShippedInfo_rejected() {
+        sampleProduct.setHasBatchManagement(true);
+        stubCreate(BigDecimal.ZERO);
+        when(productLotRepository.existsByProduct_IdAndBatchNumberIgnoreCase(100L, "L-BIA-KHONG-CO")).thenReturn(false);
+
+        assertThatThrownBy(() -> salesReturnService.createSalesReturn(createRequest(SalesReturn.REASON_AGENCY_OVERSTOCK,
+                item(101L, "1", "L-BIA-KHONG-CO")), salesRepActor))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo("RETURN_BATCH_MISMATCH"));
+    }
+
+    @Test
+    @DisplayName("TC801-17: NV kinh doanh lập phiếu trả cho đại lý người khác phụ trách -> 404")
+    void create_otherRepCustomer_notFound() {
+        when(invoiceRepository.findById(10L)).thenReturn(Optional.of(sampleInvoice));
+
+        assertThatThrownBy(() -> salesReturnService.createSalesReturn(createRequest(SalesReturn.REASON_AGENCY_OVERSTOCK,
+                item(101L, "1", null)), CustomerTestData.actor(21L, "ROLE_SALES_REP")))
+                .isInstanceOf(BusinessException.class);
+        verifyNoInteractions(invoiceLineRepository, warehouseRepository);
     }
 
     @Test
