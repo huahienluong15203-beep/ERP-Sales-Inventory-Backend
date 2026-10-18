@@ -51,8 +51,37 @@ public class PaymentService {
     private final CustomerRepository customerRepository;
     private final CreditFlagService creditFlagService;
     private final AuditLogService auditLogService;
+    private final UserRepository userRepository;
 
     Clock clock = Clock.system(VN_ZONE);
+
+    /**
+     * Lấy danh sách người thu tiền / kế toán lập phiếu đủ điều kiện theo vai trò hệ thống.
+     * Chỉ bao gồm Kế toán, Nhân viên kinh doanh, Quản lý kinh doanh, hoặc Quản trị viên, đang hoạt động.
+     */
+    @Transactional(readOnly = true)
+    public List<PaymentCollectorResponse> getEligibleCollectors() {
+        List<RoleName> eligibleRoles = List.of(
+                RoleName.ROLE_ACCOUNTANT,
+                RoleName.ROLE_SALES_REP,
+                RoleName.ROLE_SALES_MANAGER,
+                RoleName.ROLE_ADMIN
+        );
+        List<User> users = userRepository.findDistinctByRoles_NameInAndStatusOrderByFullNameAsc(eligibleRoles, "ACTIVE");
+        return users.stream().map(u -> {
+            String primaryRole = u.getRoles().stream()
+                    .map(r -> r.getName().name())
+                    .filter(r -> r.equals("ROLE_ACCOUNTANT") || r.equals("ROLE_SALES_REP") || r.equals("ROLE_SALES_MANAGER") || r.equals("ROLE_ADMIN"))
+                    .findFirst().orElse("ROLE_ACCOUNTANT");
+            return PaymentCollectorResponse.builder()
+                    .id(u.getId())
+                    .username(u.getUsername())
+                    .fullName(u.getFullName())
+                    .role(primaryRole)
+                    .phone(u.getPhone())
+                    .build();
+        }).toList();
+    }
 
     /**
      * Tạo phiếu thu và thực hiện cấn trừ công nợ.
@@ -107,6 +136,21 @@ public class PaymentService {
 
         LocalDateTime now = LocalDateTime.now(clock);
 
+        Long collectorId = request.getCollectorId();
+        String collectorUsername = actor != null ? actor.getUsername() : null;
+        String collectorName = request.getCollectorName().trim();
+        if (collectorId != null) {
+            User collectorUser = userRepository.findById(collectorId).orElse(null);
+            if (collectorUser != null) {
+                collectorUsername = collectorUser.getUsername();
+                if (!StringUtils.hasText(collectorName)) {
+                    collectorName = collectorUser.getFullName();
+                }
+            }
+        } else if (actor != null) {
+            collectorId = actor.getId();
+        }
+
         PaymentReceipt receipt = PaymentReceipt.builder()
                 .code(receiptCode)
                 .customer(customer)
@@ -117,9 +161,9 @@ public class PaymentService {
                 .amount(receiptAmount)
                 .paymentMethod(paymentMethod)
                 .paymentDate(paymentDate)
-                .collectorName(request.getCollectorName().trim())
-                .collectorUsername(actor != null ? actor.getUsername() : null)
-                .collectorId(actor != null ? actor.getId() : null)
+                .collectorName(collectorName)
+                .collectorUsername(collectorUsername)
+                .collectorId(collectorId)
                 .note(StringUtils.hasText(request.getNotes()) ? request.getNotes().trim() : null)
                 .status(PaymentReceipt.STATUS_CONFIRMED)
                 .allocationType(allocationType)

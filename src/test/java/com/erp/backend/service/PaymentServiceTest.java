@@ -45,6 +45,7 @@ class PaymentServiceTest {
     @Mock private PaymentSequenceRepository sequenceRepository;
     @Mock private InvoiceRepository invoiceRepository;
     @Mock private CustomerRepository customerRepository;
+    @Mock private UserRepository userRepository;
     @Mock private CreditFlagService creditFlagService;
     @Mock private AuditLogService auditLogService;
 
@@ -407,5 +408,29 @@ class PaymentServiceTest {
                 .hasFieldOrPropertyWithValue("code", "DUPLICATE_ALLOCATION_INVOICE");
         verify(invoiceRepository, never()).findAllByIdForUpdate(any());
         verify(paymentReceiptRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("TC-COLLECTORS: Lấy danh sách nhân sự thu tiền / lập phiếu hợp lệ")
+    void getEligibleCollectors_success() {
+        Role roleAccountant = Role.builder().name(RoleName.ROLE_ACCOUNTANT).build();
+        User u1 = User.builder()
+                .id(10L)
+                .username("ketoan1")
+                .fullName("Nguyễn Văn Kế Toán")
+                .phone("0901234567")
+                .roles(java.util.Set.of(roleAccountant))
+                .status("ACTIVE")
+                .build();
+
+        when(userRepository.findDistinctByRoles_NameInAndStatusOrderByFullNameAsc(anyCollection(), eq("ACTIVE")))
+                .thenReturn(List.of(u1));
+
+        var collectors = service.getEligibleCollectors();
+
+        assertThat(collectors).hasSize(1);
+        assertThat(collectors.get(0).getUsername()).isEqualTo("ketoan1");
+        assertThat(collectors.get(0).getFullName()).isEqualTo("Nguyễn Văn Kế Toán");
+        assertThat(collectors.get(0).getRole()).isEqualTo("ROLE_ACCOUNTANT");
     }
 }
