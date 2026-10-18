@@ -110,6 +110,11 @@ public class OrderPrintService {
                 : esc(a.label()) + "<br>" + esc(a.address()) + "<br>Người nhận: " + esc(a.receiverName())
                 + " · " + esc(a.receiverPhone()))
                 + "<br>Ngày giao mong muốn: " + date(o.desiredDeliveryDate()) + "</div></div>"
+                + ("COD".equalsIgnoreCase(o.paymentMethod())
+                        ? "<div style=\"margin:8px 0;padding:8px 12px;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;color:#c2410c;font-weight:bold;\">"
+                        + "⚠️ HÌNH THỨC: THANH TOÁN KHI NHẬN HÀNG (COD) – TÀI XẾ THU ĐỦ TIỀN MỚI BÀN GIAO: " + vnd(o.totalAmount()) + "</div>"
+                        : "<div style=\"margin:8px 0;padding:8px 12px;background:#f0fdf4;border:1px solid #86efac;border-radius:6px;color:#15803d;font-weight:bold;\">"
+                        + "✓ HÌNH THỨC: CÔNG NỢ (CREDIT) – ĐẠI LÝ KÝ BIÊN BẢN GIAO NHẬN</div>")
                 + "<table><thead><tr><th>STT</th><th>Mã SKU</th><th>Tên hàng</th><th>ĐVT</th><th>Số lượng</th>"
                 + "<th>Đơn giá</th><th>Chiết khấu</th><th>Thành tiền</th></tr></thead><tbody>" + rows + "</tbody></table>"
                 + "<table class=\"tot\"><tr><td>Tổng tiền hàng</td><td class=\"r\">" + vnd(o.subtotal()) + "</td></tr>"

@@ -49,6 +49,10 @@ public class SalesOrder {
     public static final String RESERVATION_RELEASED = "RELEASED";
     public static final String RESERVATION_DISPATCHED = "DISPATCHED";
 
+    /** Hình thức thanh toán: Mua nợ gối đầu (CREDIT) hoặc Thanh toán khi nhận hàng (COD). */
+    public static final String PAYMENT_METHOD_CREDIT = "CREDIT";
+    public static final String PAYMENT_METHOD_COD = "COD";
+
     /**
      * S4-02: Trạng thái đơn đang tính vào công nợ của đại lý.
      * Chưa có hoá đơn / phiếu thu nên tạm coi đơn đã duyệt đến trước khi đóng là đang nợ; có module công nợ thì sửa ở đây.
@@ -85,6 +89,10 @@ public class SalesOrder {
 
     @Column(length = 500)
     private String note;
+
+    @Column(name = "payment_method", length = 30)
+    @Builder.Default
+    private String paymentMethod = PAYMENT_METHOD_CREDIT;
 
     // Tổng tiền hàng (trước chiết khấu), tổng chiết khấu, tổng phải thu (VND)
     @Column(nullable = false, precision = 18, scale = 2)

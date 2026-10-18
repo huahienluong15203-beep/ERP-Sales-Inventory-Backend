@@ -151,6 +151,10 @@ public class PaymentService {
             collectorId = actor.getId();
         }
 
+        String payerName = StringUtils.hasText(request.getPayerName())
+                ? request.getPayerName().trim()
+                : customer.getName();
+
         PaymentReceipt receipt = PaymentReceipt.builder()
                 .code(receiptCode)
                 .customer(customer)
@@ -158,6 +162,7 @@ public class PaymentService {
                 .customerName(customer.getName())
                 .customerAddress(customer.getAddress())
                 .customerPhone(customer.getPhone())
+                .payerName(payerName)
                 .amount(receiptAmount)
                 .paymentMethod(paymentMethod)
                 .paymentDate(paymentDate)
@@ -493,6 +498,10 @@ public class PaymentService {
         String imageUrl = StringUtils.hasText(request.getReceiptImageUrl()) ? request.getReceiptImageUrl()
                 : (StringUtils.hasText(request.getReceiptImageBase64()) ? request.getReceiptImageBase64() : null);
 
+        String payerName = StringUtils.hasText(request.getPayerName())
+                ? request.getPayerName().trim()
+                : customer.getName();
+
         PaymentReceipt receipt = PaymentReceipt.builder()
                 .code(receiptCode)
                 .customer(customer)
@@ -500,6 +509,7 @@ public class PaymentService {
                 .customerName(customer.getName())
                 .customerAddress(customer.getAddress())
                 .customerPhone(customer.getPhone())
+                .payerName(payerName)
                 .amount(amount)
                 .paymentMethod(paymentMethod)
                 .paymentDate(paymentDate)
@@ -781,6 +791,7 @@ public class PaymentService {
                 r.getCustomerName(),
                 r.getCustomerAddress(),
                 r.getCustomerPhone(),
+                r.getPayerName() != null ? r.getPayerName() : r.getCustomerName(),
                 r.getAmount(),
                 r.getPaymentMethod(),
                 r.getPaymentDate(),

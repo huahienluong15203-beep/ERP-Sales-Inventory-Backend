@@ -39,6 +39,10 @@ public class PaymentReceiptCreateRequest {
 
     private Long collectorId;
 
+    /** Tên người nộp tiền / tài xế bàn giao tiền (nếu để trống mặc định lấy tên đại lý). */
+    @Size(max = 150, message = "Tên người nộp tiền không được vượt quá 150 ký tự")
+    private String payerName;
+
     @Size(max = 500, message = "Ghi chú không được vượt quá 500 ký tự")
     private String notes;
 

@@ -62,8 +62,10 @@ public class PaymentReceiptPrintService {
                 + "<div>Ngày thu: " + date(r.paymentDate()) + "</div></div>"
                 + "<div class=\"muted\">Trạng thái: " + esc(statusLabel(r.status())) + "<br>Lập lúc: "
                 + dateTime(r.createdAt()) + "<br>Người lập: " + esc(r.createdByUsername()) + "</div></div>"
-                + "<div class=\"box\"><b>Người nộp tiền (đại lý)</b>"
-                + esc(r.customerName()) + " (" + esc(r.customerCode()) + ")<br>"
+                + "<div class=\"box\"><b>Người nộp tiền:</b> "
+                + (notBlank(r.payerName()) && !r.payerName().equalsIgnoreCase(r.customerName())
+                        ? "<b>" + esc(r.payerName()) + "</b> <i>(Bàn giao thay cho đại lý: " + esc(r.customerName()) + " - " + esc(r.customerCode()) + ")</i><br>"
+                        : esc(r.customerName()) + " (" + esc(r.customerCode()) + ")<br>")
                 + "Địa chỉ: " + esc(r.customerAddress()) + "<br>Điện thoại: " + esc(r.customerPhone()) + "</div>"
                 + "<table class=\"info\">"
                 + "<tr><td>Số tiền</td><td class=\"big\">" + vnd(r.amount()) + "</td></tr>"

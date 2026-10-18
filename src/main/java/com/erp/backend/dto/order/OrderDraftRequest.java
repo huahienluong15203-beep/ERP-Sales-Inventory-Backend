@@ -19,5 +19,7 @@ public class OrderDraftRequest {
     private Long deliveryAddressId;
     private LocalDate desiredDeliveryDate;
     private String note;
+    /** Hình thức thanh toán: CREDIT (Công nợ) hoặc COD (Thanh toán khi nhận hàng). */
+    private String paymentMethod;
     private List<OrderLineRequest> lines;
 }

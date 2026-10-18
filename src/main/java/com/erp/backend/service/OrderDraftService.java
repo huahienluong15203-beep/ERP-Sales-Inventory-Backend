@@ -460,6 +460,8 @@ public class OrderDraftService {
         order.setDeliveryAddress(resolveAddress(customer, req.getDeliveryAddressId()));
         order.setDesiredDeliveryDate(req.getDesiredDeliveryDate());
         order.setNote(StringUtils.hasText(req.getNote()) ? req.getNote().trim() : null);
+        String pm = StringUtils.hasText(req.getPaymentMethod()) ? req.getPaymentMethod().trim().toUpperCase() : SalesOrder.PAYMENT_METHOD_CREDIT;
+        order.setPaymentMethod(SalesOrder.PAYMENT_METHOD_COD.equalsIgnoreCase(pm) ? SalesOrder.PAYMENT_METHOD_COD : SalesOrder.PAYMENT_METHOD_CREDIT);
         order.getLines().clear();
 
         Set<Long> seenProducts = new HashSet<>();
@@ -792,7 +794,8 @@ public class OrderDraftService {
                 o.getCreatedByUsername(), o.getCreatedAt(), o.getUpdatedAt(), warnings(c, credit, o, lines), credit,
                 OrderApprovalReasons.of(o), o.getLastApprovalComment(), o.getSubmittedAt(), o.getApprovedAt(),
                 o.getApprovedByUsername(), o.getCancelReason(), o.getCancelledAt(), o.getCancelledByUsername(),
-                hasShortage, shortageLineCount, fulfillment(o));
+                hasShortage, shortageLineCount, fulfillment(o),
+                o.getPaymentMethod() != null ? o.getPaymentMethod() : SalesOrder.PAYMENT_METHOD_CREDIT);
     }
 
     /** S6-05 / S6-08: thông tin xuất kho, đơn nợ hàng, giao hàng (đơn chưa lưu thì không có). */

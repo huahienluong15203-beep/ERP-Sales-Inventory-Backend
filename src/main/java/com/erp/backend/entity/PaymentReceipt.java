@@ -66,6 +66,10 @@ public class PaymentReceipt {
     @Column(name = "customer_phone", length = 30, updatable = false)
     private String customerPhone;
 
+    /** Tên người nộp tiền / tài xế bàn giao tiền (nếu để trống mặc định là tên đại lý). */
+    @Column(name = "payer_name", length = 150)
+    private String payerName;
+
     @Column(nullable = false, precision = 18, scale = 2, updatable = false)
     private BigDecimal amount;
 
