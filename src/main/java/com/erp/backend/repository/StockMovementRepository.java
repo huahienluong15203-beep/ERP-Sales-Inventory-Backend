@@ -42,4 +42,7 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, Lo
             + "and m.product.id = :productId and m.movementAt >= :from and m.movementAt < :to and m.quantity < 0")
     BigDecimal sumOut(@Param("warehouseId") Long warehouseId, @Param("productId") Long productId,
                       @Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
+
+    @Query("SELECT sm.warehouse.id, sm.product.id, MAX(sm.movementAt) FROM StockMovement sm WHERE (:warehouseId IS NULL OR sm.warehouse.id = :warehouseId) AND sm.quantity > 0 GROUP BY sm.warehouse.id, sm.product.id")
+    List<Object[]> findLatestInboundMovementDates(@Param("warehouseId") Long warehouseId);
 }

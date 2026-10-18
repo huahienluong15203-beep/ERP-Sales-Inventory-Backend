@@ -21,8 +21,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -44,6 +46,7 @@ class StockAdjustmentServiceTest {
     @Mock private InventoryRepository inventoryRepository;
     @Mock private ProductLotRepository productLotRepository;
     @Mock private StockMovementRepository stockMovementRepository;
+    @Mock private UserRepository userRepository;
     @Mock private AuditLogService auditLogService;
 
     @InjectMocks
@@ -67,6 +70,13 @@ class StockAdjustmentServiceTest {
         sampleWarehouse.setCode("KHO-TONG");
         sampleWarehouse.setName("Kho Tổng Hà Nội");
         sampleWarehouse.setStatus("ACTIVE");
+
+        User staffUser = CustomerTestData.user(10L, "ACTIVE", RoleName.ROLE_WAREHOUSE);
+        staffUser.setWarehouses(new HashSet<>(Set.of(sampleWarehouse)));
+        User managerUser = CustomerTestData.user(20L, "ACTIVE", RoleName.ROLE_WH_MANAGER);
+        managerUser.setWarehouses(new HashSet<>(Set.of(sampleWarehouse)));
+        lenient().when(userRepository.findById(10L)).thenReturn(Optional.of(staffUser));
+        lenient().when(userRepository.findById(20L)).thenReturn(Optional.of(managerUser));
 
         sampleProduct = new Product();
         sampleProduct.setId(100L);
@@ -119,7 +129,7 @@ class StockAdjustmentServiceTest {
                 ))
                 .build();
 
-        StockAdjustmentResponse response = stockAdjustmentService.createAdjustment(request, warehouseStaffActor);
+        StockAdjustmentResponse response = stockAdjustmentService.createAdjustment(request, warehouseManagerActor);
 
         assertThat(response).isNotNull();
         assertThat(response.getStatus()).isEqualTo(StockAdjustment.STATUS_PENDING_APPROVAL);

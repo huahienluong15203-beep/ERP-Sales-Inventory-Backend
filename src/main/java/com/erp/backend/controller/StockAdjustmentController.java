@@ -90,8 +90,10 @@ public class StockAdjustmentController {
      */
     @GetMapping("/{id}")
     @PreAuthorize("hasAnyRole('WH_MANAGER', 'WAREHOUSE', 'ACCOUNTANT', 'ADMIN')")
-    public ResponseEntity<StockAdjustmentResponse> getAdjustmentDetail(@PathVariable Long id) {
-        StockAdjustmentResponse response = stockAdjustmentService.getAdjustmentDetail(id);
+    public ResponseEntity<StockAdjustmentResponse> getAdjustmentDetail(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        StockAdjustmentResponse response = stockAdjustmentService.getAdjustmentDetail(id, actor);
         return ResponseEntity.ok(response);
     }
 
@@ -108,17 +110,19 @@ public class StockAdjustmentController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate,
             @RequestParam(required = false) String keyword,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
+            @RequestParam(defaultValue = "20") int size,
+            @AuthenticationPrincipal UserDetailsImpl actor) {
         PageResponse<StockAdjustmentResponse> response = stockAdjustmentService.searchAdjustments(
-                warehouseId, status, reason, fromDate, toDate, keyword, page, size);
+                warehouseId, status, reason, fromDate, toDate, keyword, page, size, actor);
         return ResponseEntity.ok(response);
     }
 
     /**
      * Lấy bảng giá vốn (costPrice) các sản phẩm phục vụ tính giá trị tổn thất khi lập phiếu điều chỉnh.
+     * Quy tắc bảo mật: Giá vốn chỉ dành cho QL kho / Kế toán / Quản trị.
      */
     @GetMapping("/product-costs")
-    @PreAuthorize("hasAnyRole('WH_MANAGER', 'WAREHOUSE', 'ACCOUNTANT', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('WH_MANAGER', 'ACCOUNTANT', 'ADMIN', 'SALES_MANAGER')")
     public ResponseEntity<Map<Long, BigDecimal>> getProductCosts(
             @RequestParam(required = false) List<Long> productIds) {
         return ResponseEntity.ok(stockAdjustmentService.getProductCosts(productIds));

@@ -1,6 +1,7 @@
 package com.erp.backend.controller;
 
 import com.erp.backend.dto.inventory.aging.*;
+import com.erp.backend.security.UserDetailsImpl;
 import com.erp.backend.service.InventoryAgingReportService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -9,6 +10,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
@@ -40,8 +42,9 @@ public class InventoryAgingReportController {
             @RequestParam(required = false) String warehouseId,
             @RequestParam(required = false) String categoryId,
             @RequestParam(required = false) String agingBracket,
-            @RequestParam(required = false) String keyword) {
-        return ResponseEntity.ok(agingReportService.getAgingReport(warehouseId, categoryId, agingBracket, keyword));
+            @RequestParam(required = false) String keyword,
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        return ResponseEntity.ok(agingReportService.getAgingReport(warehouseId, categoryId, agingBracket, keyword, actor));
     }
 
     /**
@@ -54,9 +57,10 @@ public class InventoryAgingReportController {
             @RequestParam(required = false) String warehouseId,
             @RequestParam(required = false) String categoryId,
             @RequestParam(required = false) String agingBracket,
-            @RequestParam(required = false) String keyword) throws IOException {
+            @RequestParam(required = false) String keyword,
+            @AuthenticationPrincipal UserDetailsImpl actor) throws IOException {
 
-        byte[] excelBytes = agingReportService.exportToExcel(warehouseId, categoryId, agingBracket, keyword);
+        byte[] excelBytes = agingReportService.exportToExcel(warehouseId, categoryId, agingBracket, keyword, actor);
         String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
         String fileName = "Bao_cao_luan_chuyen_kho_" + timestamp + ".xlsx";
 
@@ -72,8 +76,9 @@ public class InventoryAgingReportController {
     @Operation(summary = "Thống kê giá trị tồn kho theo từng kho")
     @GetMapping("/summary-by-warehouse")
     @PreAuthorize("hasAnyRole('WH_MANAGER', 'WAREHOUSE', 'ADMIN', 'SALES_MANAGER', 'ACCOUNTANT')")
-    public ResponseEntity<List<InventoryAgingWarehouseValueResponse>> getSummaryByWarehouse() {
-        return ResponseEntity.ok(agingReportService.getSummaryByWarehouse());
+    public ResponseEntity<List<InventoryAgingWarehouseValueResponse>> getSummaryByWarehouse(
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        return ResponseEntity.ok(agingReportService.getSummaryByWarehouse(actor));
     }
 
     /**
@@ -82,7 +87,8 @@ public class InventoryAgingReportController {
     @Operation(summary = "Thống kê giá trị tồn kho theo từng nhóm hàng")
     @GetMapping("/summary-by-category")
     @PreAuthorize("hasAnyRole('WH_MANAGER', 'WAREHOUSE', 'ADMIN', 'SALES_MANAGER', 'ACCOUNTANT')")
-    public ResponseEntity<List<InventoryAgingCategoryValueResponse>> getSummaryByCategory() {
-        return ResponseEntity.ok(agingReportService.getSummaryByCategory());
+    public ResponseEntity<List<InventoryAgingCategoryValueResponse>> getSummaryByCategory(
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        return ResponseEntity.ok(agingReportService.getSummaryByCategory(actor));
     }
 }
