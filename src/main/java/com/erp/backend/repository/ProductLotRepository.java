@@ -52,4 +52,7 @@ public interface ProductLotRepository extends JpaRepository<ProductLot, Long>, J
     List<ProductLot> findByWarehouse_IdAndExpiredDateBetween(Long warehouseId, LocalDate start, LocalDate end);
 
     boolean existsBySupplier_Id(Long supplierId);
+
+    @Query("SELECT l FROM ProductLot l WHERE (:warehouseId IS NULL OR l.warehouse.id = :warehouseId) AND l.quantity > 0")
+    List<ProductLot> findActiveLotsByWarehouseId(@Param("warehouseId") Long warehouseId);
 }

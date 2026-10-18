@@ -4,10 +4,12 @@ import com.erp.backend.dto.dashboard.*;
 import com.erp.backend.dto.debt.DebtAgingRow;
 import com.erp.backend.dto.debt.DebtAgingTotals;
 import com.erp.backend.dto.inventory.alert.MinStockSummaryResponse;
+import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.SalesOrderRepository;
 import com.erp.backend.security.UserDetailsImpl;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,6 +17,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.*;
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * S8-05: Dịch vụ cung cấp số liệu Dashboard điều hành bán hàng và kho cho Quản lý kinh doanh.
@@ -56,13 +59,39 @@ public class ExecutiveDashboardService {
 
     Clock clock = Clock.system(VN_ZONE);
 
+    private String getScopeKey(UserDetailsImpl actor) {
+        if (actor == null || actor.getAuthorities() == null) {
+            return "anon";
+        }
+        Set<String> roles = actor.getAuthorities().stream()
+                .map(GrantedAuthority::getAuthority)
+                .collect(Collectors.toSet());
+        if (roles.contains("ROLE_ADMIN") || roles.contains("ROLE_SALES_MANAGER") || roles.contains("ROLE_ACCOUNTANT")) {
+            return "EXECUTIVE_FULL";
+        }
+        if (roles.contains("ROLE_WH_MANAGER")) {
+            return "WH_MANAGER_" + actor.getId();
+        }
+        return "USER_" + actor.getId();
+    }
+
+    private void validateMonthYear(Integer month, Integer year) {
+        if (month != null && (month < 1 || month > 12)) {
+            throw BusinessException.badRequest("Tham số tháng không hợp lệ (phải từ 1 đến 12).");
+        }
+        if (year != null && (year < 2000 || year > 2100)) {
+            throw BusinessException.badRequest("Tham số năm không hợp lệ (phải từ 2000 đến 2100).");
+        }
+    }
+
     /**
      * 1. Thẻ chỉ số tổng quan hoạt động bán hàng & kho.
      */
     @Transactional(readOnly = true)
     public ExecutiveDashboardSummaryResponse getSummary(boolean refresh, UserDetailsImpl actor) {
+        String cacheKey = CACHE_KEY_SUMMARY + ":" + getScopeKey(actor);
         if (!refresh) {
-            Optional<ExecutiveDashboardSummaryResponse> cached = cacheService.get(CACHE_KEY_SUMMARY, ExecutiveDashboardSummaryResponse.class);
+            Optional<ExecutiveDashboardSummaryResponse> cached = cacheService.get(cacheKey, ExecutiveDashboardSummaryResponse.class);
             if (cached.isPresent()) {
                 ExecutiveDashboardSummaryResponse resp = cached.get();
                 resp.setFromCache(true);
@@ -135,7 +164,7 @@ public class ExecutiveDashboardService {
                 .computedAt(LocalDateTime.now(clock))
                 .build();
 
-        cacheService.put(CACHE_KEY_SUMMARY, response);
+        cacheService.put(cacheKey, response);
         return response;
     }
 
@@ -144,11 +173,12 @@ public class ExecutiveDashboardService {
      */
     @Transactional(readOnly = true)
     public ExecutiveDailySalesResponse getDailySalesInMonth(Integer targetMonth, Integer targetYear, boolean refresh, UserDetailsImpl actor) {
+        validateMonthYear(targetMonth, targetYear);
         LocalDate today = LocalDate.now(clock);
-        int month = (targetMonth != null && targetMonth >= 1 && targetMonth <= 12) ? targetMonth : today.getMonthValue();
-        int year = (targetYear != null && targetYear >= 2000) ? targetYear : today.getYear();
+        int month = targetMonth != null ? targetMonth : today.getMonthValue();
+        int year = targetYear != null ? targetYear : today.getYear();
 
-        String cacheKey = CACHE_KEY_DAILY_PREFIX + year + "-" + month;
+        String cacheKey = CACHE_KEY_DAILY_PREFIX + getScopeKey(actor) + ":" + year + "-" + month;
         if (!refresh) {
             Optional<ExecutiveDailySalesResponse> cached = cacheService.get(cacheKey, ExecutiveDailySalesResponse.class);
             if (cached.isPresent()) {
@@ -220,11 +250,12 @@ public class ExecutiveDashboardService {
      */
     @Transactional(readOnly = true)
     public ExecutiveRegionSalesResponse getSalesByRegion(Integer targetMonth, Integer targetYear, boolean refresh, UserDetailsImpl actor) {
+        validateMonthYear(targetMonth, targetYear);
         LocalDate today = LocalDate.now(clock);
-        int month = (targetMonth != null && targetMonth >= 1 && targetMonth <= 12) ? targetMonth : today.getMonthValue();
-        int year = (targetYear != null && targetYear >= 2000) ? targetYear : today.getYear();
+        int month = targetMonth != null ? targetMonth : today.getMonthValue();
+        int year = targetYear != null ? targetYear : today.getYear();
 
-        String cacheKey = CACHE_KEY_REGION_PREFIX + year + "-" + month;
+        String cacheKey = CACHE_KEY_REGION_PREFIX + getScopeKey(actor) + ":" + year + "-" + month;
         if (!refresh) {
             Optional<ExecutiveRegionSalesResponse> cached = cacheService.get(cacheKey, ExecutiveRegionSalesResponse.class);
             if (cached.isPresent()) {
@@ -305,7 +336,7 @@ public class ExecutiveDashboardService {
     @Transactional(readOnly = true)
     public ExecutiveOverdueAgenciesResponse getOverdueAgencies(Integer limit, boolean refresh, UserDetailsImpl actor) {
         int maxResults = (limit != null && limit > 0) ? Math.min(limit, 100) : 10;
-        String cacheKey = CACHE_KEY_OVERDUE_PREFIX + maxResults;
+        String cacheKey = CACHE_KEY_OVERDUE_PREFIX + getScopeKey(actor) + ":" + maxResults;
 
         if (!refresh) {
             Optional<ExecutiveOverdueAgenciesResponse> cached = cacheService.get(cacheKey, ExecutiveOverdueAgenciesResponse.class);
@@ -316,39 +347,48 @@ public class ExecutiveDashboardService {
             }
         }
 
-        DebtLedgerService.Computed debtComputed = debtLedgerService.compute(
-                new DebtLedgerService.Filter(null, null, null, true, false, "OVERDUE"), actor);
-
-        List<DebtAgingRow> overdueRows = debtComputed.rows().stream()
-                .filter(r -> r.overdueAmount().compareTo(BigDecimal.ZERO) > 0)
-                .sorted(Comparator.comparing(DebtAgingRow::overdueAmount).reversed()
-                        .thenComparing(DebtAgingRow::oldestDebtDays, Comparator.reverseOrder()))
-                .toList();
-
-        BigDecimal totalOverdue = debtComputed.totals() != null ? debtComputed.totals().overdueAmount() : BigDecimal.ZERO;
         List<ExecutiveOverdueAgencyItem> items = new ArrayList<>();
-        int rank = 1;
+        BigDecimal totalOverdue = BigDecimal.ZERO;
+        int totalAgencies = 0;
 
-        for (DebtAgingRow row : overdueRows.stream().limit(maxResults).toList()) {
-            items.add(ExecutiveOverdueAgencyItem.builder()
-                    .rank(rank++)
-                    .customerId(row.customerId())
-                    .customerCode(row.customerCode())
-                    .customerName(row.customerName())
-                    .contactName(null)
-                    .phone(null)
-                    .salesRepId(row.salesRepId())
-                    .salesRepName(row.salesRepName())
-                    .creditLimit(row.creditLimit())
-                    .currentDebt(row.outstanding())
-                    .overdueAmount(row.overdueAmount())
-                    .oldestOverdueDays(row.oldestDebtDays())
-                    .build());
+        try {
+            DebtLedgerService.Computed debtComputed = debtLedgerService.compute(
+                    new DebtLedgerService.Filter(null, null, null, true, false, "OVERDUE"), actor);
+
+            List<DebtAgingRow> overdueRows = debtComputed.rows().stream()
+                    .filter(r -> r.overdueAmount().compareTo(BigDecimal.ZERO) > 0)
+                    .sorted(Comparator.comparing(DebtAgingRow::overdueAmount).reversed()
+                            .thenComparing(DebtAgingRow::oldestDebtDays, Comparator.reverseOrder()))
+                    .toList();
+
+            totalOverdue = debtComputed.totals() != null ? debtComputed.totals().overdueAmount() : BigDecimal.ZERO;
+            totalAgencies = overdueRows.size();
+            int rank = 1;
+
+            for (DebtAgingRow row : overdueRows.stream().limit(maxResults).toList()) {
+                items.add(ExecutiveOverdueAgencyItem.builder()
+                        .rank(rank++)
+                        .customerId(row.customerId())
+                        .customerCode(row.customerCode())
+                        .customerName(row.customerName())
+                        .contactName(null)
+                        .phone(null)
+                        .salesRepId(row.salesRepId())
+                        .salesRepName(row.salesRepName())
+                        .creditLimit(row.creditLimit())
+                        .currentDebt(row.outstanding())
+                        .overdueAmount(row.overdueAmount())
+                        .oldestOverdueDays(row.oldestDebtDays())
+                        .build());
+            }
+        } catch (Exception ex) {
+            log.info("S8-05: Người dùng {} không có quyền xem chi tiết công nợ: {}",
+                    actor != null ? actor.getUsername() : "anonymous", ex.getMessage());
         }
 
         ExecutiveOverdueAgenciesResponse response = ExecutiveOverdueAgenciesResponse.builder()
                 .totalOverdueAmount(totalOverdue.setScale(2, RoundingMode.HALF_UP))
-                .totalOverdueAgencies(overdueRows.size())
+                .totalOverdueAgencies(totalAgencies)
                 .agencies(items)
                 .fromCache(false)
                 .build();
@@ -362,14 +402,15 @@ public class ExecutiveDashboardService {
      */
     @Transactional(readOnly = true)
     public ExecutiveDashboardOverviewResponse getCompleteDashboard(Integer month, Integer year, Integer limit, boolean refresh, UserDetailsImpl actor) {
+        validateMonthYear(month, year);
         long startMs = System.currentTimeMillis();
 
         LocalDate today = LocalDate.now(clock);
-        int targetMonth = (month != null && month >= 1 && month <= 12) ? month : today.getMonthValue();
-        int targetYear = (year != null && year >= 2000) ? year : today.getYear();
+        int targetMonth = month != null ? month : today.getMonthValue();
+        int targetYear = year != null ? year : today.getYear();
         int topLimit = (limit != null && limit > 0) ? Math.min(limit, 100) : 10;
 
-        String cacheKey = CACHE_KEY_OVERVIEW_PREFIX + targetYear + "-" + targetMonth + ":" + topLimit;
+        String cacheKey = CACHE_KEY_OVERVIEW_PREFIX + getScopeKey(actor) + ":" + targetYear + "-" + targetMonth + ":" + topLimit;
         if (!refresh) {
             Optional<ExecutiveDashboardOverviewResponse> cached = cacheService.get(cacheKey, ExecutiveDashboardOverviewResponse.class);
             if (cached.isPresent()) {

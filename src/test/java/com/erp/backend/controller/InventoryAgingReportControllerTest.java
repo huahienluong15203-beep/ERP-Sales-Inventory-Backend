@@ -2,6 +2,7 @@ package com.erp.backend.controller;
 
 import com.erp.backend.dto.inventory.aging.*;
 import com.erp.backend.service.InventoryAgingReportService;
+import com.erp.backend.security.UserDetailsImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -9,9 +10,16 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.core.MethodParameter;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.bind.support.WebDataBinderFactory;
+import org.springframework.web.context.request.NativeWebRequest;
+import org.springframework.web.method.support.HandlerMethodArgumentResolver;
+import org.springframework.web.method.support.ModelAndViewContainer;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -32,10 +40,33 @@ class InventoryAgingReportControllerTest {
     private InventoryAgingReportController agingReportController;
 
     private MockMvc mockMvc;
+    private UserDetailsImpl mockActor;
 
     @BeforeEach
     void setUp() {
-        mockMvc = MockMvcBuilders.standaloneSetup(agingReportController).build();
+        mockActor = new UserDetailsImpl(
+                1L, "sales_mgr", "Quản lý kinh doanh", "mgr@erp.com", "password", true,
+                List.of(new SimpleGrantedAuthority("ROLE_SALES_MANAGER"))
+        );
+
+        HandlerMethodArgumentResolver authPrincipalResolver = new HandlerMethodArgumentResolver() {
+            @Override
+            public boolean supportsParameter(MethodParameter parameter) {
+                return parameter.hasParameterAnnotation(AuthenticationPrincipal.class);
+            }
+
+            @Override
+            public Object resolveArgument(MethodParameter parameter,
+                                          ModelAndViewContainer mavContainer,
+                                          NativeWebRequest webRequest,
+                                          WebDataBinderFactory binderFactory) {
+                return mockActor;
+            }
+        };
+
+        mockMvc = MockMvcBuilders.standaloneSetup(agingReportController)
+                .setCustomArgumentResolvers(authPrincipalResolver)
+                .build();
     }
 
     @Test
@@ -63,7 +94,7 @@ class InventoryAgingReportControllerTest {
                         .build())
                 .build();
 
-        when(agingReportService.getAgingReport(any(), any(), any(), any()))
+        when(agingReportService.getAgingReport(any(), any(), any(), any(), any()))
                 .thenReturn(mockResponse);
 
         mockMvc.perform(get("/api/inventory/aging-report")
@@ -80,7 +111,7 @@ class InventoryAgingReportControllerTest {
     void testExportExcel_Returns200WithExcelContent() throws Exception {
         byte[] mockBytes = "fake-excel-content".getBytes();
 
-        when(agingReportService.exportToExcel(any(), any(), any(), any()))
+        when(agingReportService.exportToExcel(any(), any(), any(), any(), any()))
                 .thenReturn(mockBytes);
 
         mockMvc.perform(get("/api/inventory/aging-report/export")
@@ -93,7 +124,7 @@ class InventoryAgingReportControllerTest {
     @Test
     @DisplayName("GET /api/inventory/aging-report/summary-by-warehouse -> 200 OK thống kê theo kho")
     void testGetSummaryByWarehouse_Returns200() throws Exception {
-        when(agingReportService.getSummaryByWarehouse())
+        when(agingReportService.getSummaryByWarehouse(any()))
                 .thenReturn(List.of(
                         InventoryAgingWarehouseValueResponse.builder()
                                 .warehouseId(1L)
@@ -111,7 +142,7 @@ class InventoryAgingReportControllerTest {
     @Test
     @DisplayName("GET /api/inventory/aging-report/summary-by-category -> 200 OK thống kê theo nhóm hàng")
     void testGetSummaryByCategory_Returns200() throws Exception {
-        when(agingReportService.getSummaryByCategory())
+        when(agingReportService.getSummaryByCategory(any()))
                 .thenReturn(List.of(
                         InventoryAgingCategoryValueResponse.builder()
                                 .categoryId(10L)

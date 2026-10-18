@@ -11,15 +11,23 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.erp.backend.exception.BusinessException;
+import com.erp.backend.security.UserDetailsImpl;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 /**
@@ -46,6 +54,12 @@ class InventoryAgingReportServiceTest {
 
     @Mock
     private ProductCategoryRepository categoryRepository;
+
+    @Mock
+    private UserRepository userRepository;
+
+    @Mock
+    private StockMovementRepository stockMovementRepository;
 
     @InjectMocks
     private InventoryAgingReportService agingReportService;
@@ -248,5 +262,135 @@ class InventoryAgingReportServiceTest {
 
         assertThat(excelBytes).isNotNull();
         assertThat(excelBytes.length).isGreaterThan(100);
+    }
+
+    @Test
+    @DisplayName("TC807-02: Lô có ngày sản xuất sớm hơn ngày nhập kho -> Tính theo ngày NHẬP KHO thực tế")
+    void testTC807_02_CalculateAverageAgingDays_UsesLotCreatedAtOverManufactureDate() {
+        // Lô sản xuất cách đây 273 ngày, nhưng nhập kho cách đây 3 ngày
+        ProductLot lot = ProductLot.builder()
+                .id(15L)
+                .product(product1)
+                .warehouse(warehouse1)
+                .batchNumber("LOT-EXP-273")
+                .manufactureDate(today.minusDays(273))
+                .createdAt(today.minusDays(3).atStartOfDay())
+                .quantity(new BigDecimal("100"))
+                .build();
+
+        when(productLotRepository.findByProduct_IdAndWarehouse_Id(100L, 1L))
+                .thenReturn(List.of(lot));
+
+        long avgDays = agingReportService.calculateAverageAgingDays(product1, warehouse1, inventory1, today);
+
+        // Phải ra 3 ngày (nhóm 0_30 / FAST), không được lấy 273 ngày (chôn vốn)
+        assertThat(avgDays).isEqualTo(3L);
+        assertThat(InventoryAgingReportService.determineAgingBracket(avgDays)).isEqualTo("0_30");
+        assertThat(InventoryAgingReportService.determineTurnoverSpeed(avgDays)).isEqualTo("FAST");
+    }
+
+    @Test
+    @DisplayName("TC807-03: SKU không quản lý lô đã bán hết rồi nhập lại -> Tính theo đợt nhập lại mới nhất")
+    void testTC807_03_CalculateAverageAgingDays_WithoutLots_UsesLatestInboundMovementDate() {
+        when(productLotRepository.findByProduct_IdAndWarehouse_Id(200L, 1L))
+                .thenReturn(List.of());
+
+        // Bản ghi tồn kho tạo từ 90 ngày trước
+        inventory2.setCreatedAt(today.minusDays(90).atStartOfDay());
+
+        // Đợt nhập kho mới nhất diễn ra cách đây 2 ngày
+        LocalDateTime latestInbound = today.minusDays(2).atStartOfDay();
+
+        long avgDays = agingReportService.calculateAverageAgingDays(
+                product2, warehouse1, inventory2, today, null, latestInbound);
+
+        // Phải ra 2 ngày (nhóm 0_30 / FAST)
+        assertThat(avgDays).isEqualTo(2L);
+        assertThat(InventoryAgingReportService.determineAgingBracket(avgDays)).isEqualTo("0_30");
+        assertThat(InventoryAgingReportService.determineTurnoverSpeed(avgDays)).isEqualTo("FAST");
+    }
+
+    @Test
+    @DisplayName("TC807-11: Validate tham số không hợp lệ trên URL -> Ném 400 Bad Request")
+    void testTC807_11_ValidateInvalidParameters_ThrowsBadRequest() {
+        // WarehouseId không phải số
+        assertThatThrownBy(() -> agingReportService.getAgingReport("abc", "ALL", "ALL", null))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getStatus().value()).isEqualTo(400);
+                    assertThat(be.getMessage()).contains("Mã kho không hợp lệ");
+                });
+
+        // CategoryId không phải số
+        assertThatThrownBy(() -> agingReportService.getAgingReport("1", "invalid_cat", "ALL", null))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getStatus().value()).isEqualTo(400);
+                    assertThat(be.getMessage()).contains("Mã nhóm hàng không hợp lệ");
+                });
+
+        // AgingBracket không hợp lệ
+        assertThatThrownBy(() -> agingReportService.getAgingReport("1", "ALL", "INVALID_BRACKET", null))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getStatus().value()).isEqualTo(400);
+                    assertThat(be.getMessage()).contains("Nhóm tuổi hàng không hợp lệ");
+                });
+    }
+
+    @Test
+    @DisplayName("TC807-13: Phân quyền: Nhân viên kho / Kế toán bị ẩn giá vốn và tổng giá trị tồn kho")
+    void testTC807_13_WarehouseStaffOrAccountant_CostPriceAndTotalValueMasked() {
+        when(inventoryRepository.findAll()).thenReturn(List.of(inventory1));
+
+        UserDetailsImpl warehouseStaff = new UserDetailsImpl(
+                5L, "staff", "Warehouse Staff", "staff@erp.com", "pass", true,
+                List.of(new SimpleGrantedAuthority("ROLE_WAREHOUSE")));
+
+        User userEntity = User.builder()
+                .id(5L)
+                .warehouses(java.util.Set.of(warehouse1))
+                .build();
+        lenient().when(userRepository.findById(5L)).thenReturn(Optional.of(userEntity));
+
+        InventoryAgingReportResponse report = agingReportService.getAgingReport(
+                "1", "ALL", "ALL", null, warehouseStaff);
+
+        assertThat(report.getItems()).hasSize(1);
+        InventoryAgingItemResponse item = report.getItems().get(0);
+        // Nhân viên kho không được xem costPrice và totalValue
+        assertThat(item.getCostPrice()).isNull();
+        assertThat(item.getTotalValue()).isNull();
+
+        // Summary cũng bị ẩn giá trị tiền
+        assertThat(report.getSummary().getTotalInventoryValue()).isNull();
+        assertThat(report.getSummary().getStagnantValue()).isNull();
+    }
+
+    @Test
+    @DisplayName("TC807-14: Phân quyền IDOR: Nhân viên kho xem kho khác chi nhánh -> Ném 403 Forbidden")
+    void testTC807_14_WarehouseStaff_AccessDifferentWarehouse_Throws403Forbidden() {
+        UserDetailsImpl warehouseStaff = new UserDetailsImpl(
+                5L, "staff", "Warehouse Staff", "staff@erp.com", "pass", true,
+                List.of(new SimpleGrantedAuthority("ROLE_WAREHOUSE")));
+
+        User userEntity = User.builder()
+                .id(5L)
+                .warehouses(java.util.Set.of(warehouse1)) // được gán kho 1
+                .build();
+        when(userRepository.findById(5L)).thenReturn(Optional.of(userEntity));
+
+        // Nhân viên kho 1 cố tình truy vấn kho 2
+        assertThatThrownBy(() -> agingReportService.getAgingReport(
+                "2", "ALL", "ALL", null, warehouseStaff))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getStatus().value()).isEqualTo(403);
+                    assertThat(be.getCode()).isEqualTo("ACCESS_DENIED");
+                });
     }
 }

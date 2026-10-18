@@ -49,4 +49,7 @@ public interface InventoryRepository extends JpaRepository<Inventory, Long>, Jpa
 
     @Query("SELECT i FROM Inventory i JOIN FETCH i.product p LEFT JOIN FETCH p.productCategory c WHERE i.warehouse.id = :warehouseId AND LOWER(p.status) = 'active'")
     List<Inventory> findActiveByWarehouseIdWithProductAndCategory(@Param("warehouseId") Long warehouseId);
+
+    @Query("SELECT i FROM Inventory i JOIN FETCH i.warehouse w JOIN FETCH i.product p LEFT JOIN FETCH p.productCategory c WHERE (:warehouseId IS NULL OR w.id = :warehouseId) AND i.physicalStock > 0")
+    List<Inventory> findAgingInventoryWithProductAndWarehouse(@Param("warehouseId") Long warehouseId);
 }
