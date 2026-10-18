@@ -49,7 +49,7 @@ public class DebtLedgerService {
 
     static final ZoneId VN_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
     static final Set<String> BUCKETS = Set.of("D0_30", "D31_60", "D61_90", "D90_PLUS");
-    static final Set<String> SORTS = Set.of("OLDEST", "OUTSTANDING", "OVERDUE", "CODE");
+    static final Set<String> SORTS = Set.of("OLDEST", "NEWEST", "OUTSTANDING", "OVERDUE", "CODE");
     static final int DEFAULT_PAGE_SIZE = 50;
     static final int MAX_PAGE_SIZE = 500;
     private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(2);
@@ -113,7 +113,9 @@ public class DebtLedgerService {
             BigDecimal total = money(r[2]);
             BigDecimal remaining = money(r[4]).max(ZERO);
             BigDecimal paid = r[3] != null ? money(r[3]) : total.subtract(remaining).max(ZERO);
-            byCustomer.computeIfAbsent(cid, k -> new Acc()).add(total, paid, remaining, (LocalDate) r[1], false);
+            LocalDate invDate = (LocalDate) r[1];
+            LocalDateTime invDt = invDate != null ? invDate.atStartOfDay() : today.atStartOfDay();
+            byCustomer.computeIfAbsent(cid, k -> new Acc()).add(total, paid, remaining, invDate, false, invDt);
         }
         for (Object[] r : nz(orders)) {
             Long cid = id(r[0]);
@@ -122,8 +124,9 @@ public class DebtLedgerService {
             }
             BigDecimal total = money(r[2]);
             LocalDateTime approvedAt = (LocalDateTime) r[1];
+            LocalDateTime ordDt = approvedAt != null ? approvedAt : today.atStartOfDay();
             byCustomer.computeIfAbsent(cid, k -> new Acc())
-                    .add(total, ZERO, total, approvedAt != null ? approvedAt.toLocalDate() : today, true);
+                    .add(total, ZERO, total, approvedAt != null ? approvedAt.toLocalDate() : today, true, ordDt);
         }
 
         Map<Long, Customer> customers = new HashMap<>();
@@ -204,9 +207,15 @@ public class DebtLedgerService {
         private BigDecimal collected = ZERO;
         private BigDecimal outstanding = ZERO;
         private BigDecimal uninvoiced = ZERO;
+        private LocalDateTime latestActivity;
         private final List<Item> items = new ArrayList<>();
 
         void add(BigDecimal total, BigDecimal paid, BigDecimal remaining, LocalDate date, boolean uninvoicedOrder) {
+            add(total, paid, remaining, date, uninvoicedOrder, null);
+        }
+
+        void add(BigDecimal total, BigDecimal paid, BigDecimal remaining, LocalDate date, boolean uninvoicedOrder,
+                 LocalDateTime activityTime) {
             receivable = receivable.add(total);
             collected = collected.add(paid);
             outstanding = outstanding.add(remaining);
@@ -215,6 +224,11 @@ public class DebtLedgerService {
             }
             if (remaining.signum() > 0) {
                 items.add(new Item(remaining, date));
+            }
+            if (activityTime != null) {
+                if (latestActivity == null || activityTime.isAfter(latestActivity)) {
+                    latestActivity = activityTime;
+                }
             }
         }
 
@@ -254,7 +268,7 @@ public class DebtLedgerService {
             return new DebtAgingRow(c.getId(), c.getCode(), c.getName(), rep != null ? rep.getId() : null,
                     rep != null ? rep.getFullName() : null, money(c.getCreditLimit()), maxDays, receivable, collected,
                     outstanding.subtract(creditBalance), uninvoiced, buckets.get("D0_30"), buckets.get("D31_60"),
-                    buckets.get("D61_90"), buckets.get("D90_PLUS"), overdue, oldest, creditBalance);
+                    buckets.get("D61_90"), buckets.get("D90_PLUS"), overdue, oldest, creditBalance, latestActivity);
         }
     }
 
@@ -271,6 +285,8 @@ public class DebtLedgerService {
         Comparator<DebtAgingRow> byCode = Comparator.comparing(DebtAgingRow::customerCode,
                 Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER));
         return switch (sort) {
+            case "NEWEST" -> Comparator.comparing(DebtAgingRow::latestActivity, Comparator.nullsLast(Comparator.reverseOrder()))
+                    .thenComparing(Comparator.comparing(DebtAgingRow::customerId).reversed());
             case "OUTSTANDING" -> Comparator.comparing(DebtAgingRow::outstanding).reversed().thenComparing(byCode);
             case "OVERDUE" -> Comparator.comparing(DebtAgingRow::overdueAmount).reversed()
                     .thenComparing(Comparator.comparing(DebtAgingRow::outstanding).reversed()).thenComparing(byCode);
@@ -307,7 +323,7 @@ public class DebtLedgerService {
         String sort = StringUtils.hasText(f.sort()) ? f.sort().trim().toUpperCase(Locale.ROOT) : "OLDEST";
         if (!SORTS.contains(sort)) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_SORT",
-                    "Sắp xếp: OLDEST, OUTSTANDING, OVERDUE hoặc CODE", "sort");
+                    "Sắp xếp: NEWEST, OLDEST, OUTSTANDING, OVERDUE hoặc CODE", "sort");
         }
         String kw = StringUtils.hasText(f.keyword()) ? f.keyword().trim() : null;
         if (kw != null && kw.length() > 100) {
