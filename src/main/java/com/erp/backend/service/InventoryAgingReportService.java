@@ -488,14 +488,36 @@ public class InventoryAgingReportService {
             headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
             headerStyle.setAlignment(HorizontalAlignment.CENTER);
             headerStyle.setVerticalAlignment(VerticalAlignment.CENTER);
+            headerStyle.setBorderTop(BorderStyle.THIN);
+            headerStyle.setBorderBottom(BorderStyle.THIN);
+            headerStyle.setBorderLeft(BorderStyle.THIN);
+            headerStyle.setBorderRight(BorderStyle.THIN);
+
+            // Style mặc định có border
+            CellStyle defaultStyle = workbook.createCellStyle();
+            defaultStyle.setBorderTop(BorderStyle.THIN);
+            defaultStyle.setBorderBottom(BorderStyle.THIN);
+            defaultStyle.setBorderLeft(BorderStyle.THIN);
+            defaultStyle.setBorderRight(BorderStyle.THIN);
+            defaultStyle.setVerticalAlignment(VerticalAlignment.CENTER);
 
             // Style tiền tệ
             DataFormat format = workbook.createDataFormat();
             CellStyle currencyStyle = workbook.createCellStyle();
             currencyStyle.setDataFormat(format.getFormat("#,##0"));
+            currencyStyle.setBorderTop(BorderStyle.THIN);
+            currencyStyle.setBorderBottom(BorderStyle.THIN);
+            currencyStyle.setBorderLeft(BorderStyle.THIN);
+            currencyStyle.setBorderRight(BorderStyle.THIN);
+            currencyStyle.setVerticalAlignment(VerticalAlignment.CENTER);
 
             CellStyle centerStyle = workbook.createCellStyle();
             centerStyle.setAlignment(HorizontalAlignment.CENTER);
+            centerStyle.setVerticalAlignment(VerticalAlignment.CENTER);
+            centerStyle.setBorderTop(BorderStyle.THIN);
+            centerStyle.setBorderBottom(BorderStyle.THIN);
+            centerStyle.setBorderLeft(BorderStyle.THIN);
+            centerStyle.setBorderRight(BorderStyle.THIN);
 
             String[] columns = {
                     "STT", "Mã SKU", "Tên sản phẩm", "Nhóm hàng", "Kho lưu trữ",
@@ -504,7 +526,7 @@ public class InventoryAgingReportService {
             };
 
             Row headerRow = sheet.createRow(0);
-            headerRow.setHeightInPoints(24);
+            headerRow.setHeightInPoints(26);
             for (int col = 0; col < columns.length; col++) {
                 Cell cell = headerRow.createCell(col);
                 cell.setCellValue(columns[col]);
@@ -514,13 +536,15 @@ public class InventoryAgingReportService {
             int rowIdx = 1;
             for (InventoryAgingItemResponse item : items) {
                 Row row = sheet.createRow(rowIdx);
-                row.createCell(0).setCellValue(rowIdx);
-                row.createCell(1).setCellValue(item.getProductSku());
-                row.createCell(2).setCellValue(item.getProductName());
-                row.createCell(3).setCellValue(item.getCategoryName());
-                row.createCell(4).setCellValue(item.getWarehouseName());
-                row.createCell(5).setCellValue(item.getBaseUnit());
-                row.createCell(6).setCellValue(item.getQuantity().doubleValue());
+                row.setHeightInPoints(20);
+
+                Cell c0 = row.createCell(0); c0.setCellValue(rowIdx); c0.setCellStyle(centerStyle);
+                Cell c1 = row.createCell(1); c1.setCellValue(item.getProductSku()); c1.setCellStyle(defaultStyle);
+                Cell c2 = row.createCell(2); c2.setCellValue(item.getProductName()); c2.setCellStyle(defaultStyle);
+                Cell c3 = row.createCell(3); c3.setCellValue(item.getCategoryName()); c3.setCellStyle(defaultStyle);
+                Cell c4 = row.createCell(4); c4.setCellValue(item.getWarehouseName()); c4.setCellStyle(defaultStyle);
+                Cell c5 = row.createCell(5); c5.setCellValue(item.getBaseUnit()); c5.setCellStyle(centerStyle);
+                Cell c6 = row.createCell(6); c6.setCellValue(item.getQuantity().doubleValue()); c6.setCellStyle(currencyStyle);
 
                 Cell costCell = row.createCell(7);
                 Cell valCell = row.createCell(8);
@@ -539,16 +563,18 @@ public class InventoryAgingReportService {
                     valCell.setCellStyle(centerStyle);
                 }
 
-                row.createCell(9).setCellValue(item.getAverageAgingDays());
-                row.createCell(10).setCellValue(mapSpeedLabel(item.getTurnoverSpeed()));
-                row.createCell(11).setCellValue(mapBracketLabel(item.getAgingBracket()));
+                Cell c9 = row.createCell(9); c9.setCellValue(item.getAverageAgingDays()); c9.setCellStyle(centerStyle);
+                Cell c10 = row.createCell(10); c10.setCellValue(mapSpeedLabel(item.getTurnoverSpeed())); c10.setCellStyle(defaultStyle);
+                Cell c11 = row.createCell(11); c11.setCellValue(mapBracketLabel(item.getAgingBracket())); c11.setCellStyle(defaultStyle);
 
                 rowIdx++;
             }
 
-            for (int col = 0; col < columns.length; col++) {
-                sheet.autoSizeColumn(col);
+            int[] colWidths = {6, 18, 38, 22, 22, 14, 16, 18, 22, 26, 24, 20};
+            for (int i = 0; i < colWidths.length; i++) {
+                sheet.setColumnWidth(i, colWidths[i] * 256);
             }
+            sheet.createFreezePane(0, 1);
 
             workbook.write(out);
             return out.toByteArray();

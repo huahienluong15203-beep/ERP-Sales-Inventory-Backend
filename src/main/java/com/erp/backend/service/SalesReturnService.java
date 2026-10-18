@@ -258,7 +258,12 @@ public class SalesReturnService {
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy phiếu trả hàng ID: " + returnId));
 
         if (!SalesReturn.STATUS_PENDING_RECEIPT.equals(salesReturn.getStatus())) {
-            throw BusinessException.badRequest("Phiếu trả hàng " + salesReturn.getCode() + " không ở trạng thái chờ nhận hàng (hiện tại: " + salesReturn.getStatus() + ").");
+            String vnStatus = SalesReturn.STATUS_RECEIVED.equalsIgnoreCase(salesReturn.getStatus())
+                    ? "Đã nhận hàng vào kho"
+                    : SalesReturn.STATUS_CANCELLED.equalsIgnoreCase(salesReturn.getStatus())
+                    ? "Đã huỷ"
+                    : salesReturn.getStatus();
+            throw BusinessException.badRequest("Phiếu trả hàng " + salesReturn.getCode() + " không ở trạng thái chờ nhận hàng (Trạng thái hiện tại: " + vnStatus + ").");
         }
 
         Warehouse warehouse = salesReturn.getReceivingWarehouse();
@@ -423,13 +428,16 @@ public class SalesReturnService {
                 : salesOrderLineRepository.findById(invLine.getOrderLineId())
                         .map(SalesOrderLine::getBatchNumber).orElse(null);
         if (StringUtils.hasText(shipped)) {
-            if (!shipped.trim().equalsIgnoreCase(batchNumber)) {
+            if (!StringUtils.hasText(batchNumber)) {
+                return shipped.trim();
+            }
+            if (!shipped.trim().equalsIgnoreCase(batchNumber.trim())) {
                 throw BusinessException.badRequest("RETURN_BATCH_MISMATCH", "Số lô " + batchNumber + " không phải lô đã giao cho đại lý của mặt hàng "
                         + product.getSku() + " (lô đã giao: " + shipped.trim() + ").");
             }
             return shipped.trim();
         }
-        if (!productLotRepository.existsByProduct_IdAndBatchNumberIgnoreCase(product.getId(), batchNumber)) {
+        if (StringUtils.hasText(batchNumber) && !productLotRepository.existsByProduct_IdAndBatchNumberIgnoreCase(product.getId(), batchNumber)) {
             throw BusinessException.badRequest("RETURN_BATCH_MISMATCH", "Số lô " + batchNumber + " không tồn tại cho mặt hàng " + product.getSku() + ".");
         }
         return batchNumber;
@@ -453,12 +461,11 @@ public class SalesReturnService {
         }
         boolean isManager = warehouse.getManager() != null && Objects.equals(warehouse.getManager().getId(), actor.getId());
         boolean assigned = isManager || userRepository.findById(actor.getId())
-                .map(u -> u.getWarehouses() != null
-                        && u.getWarehouses().stream().anyMatch(w -> Objects.equals(w.getId(), warehouse.getId())))
+                .map(u -> u.getWarehouses() != null && u.getWarehouses().stream().anyMatch(w -> Objects.equals(w.getId(), warehouse.getId())))
                 .orElse(false);
         if (!assigned) {
             throw BusinessException.conflict("RETURN_WAREHOUSE_NOT_ASSIGNED",
-                    "Bạn không được phân công kho " + warehouse.getName() + " nên không nhận hàng trả vào kho này được.", "status");
+                    "Bạn không được phân công quản lý kho nhận hàng này.", "status");
         }
     }
 
@@ -502,6 +509,31 @@ public class SalesReturnService {
 
             Product product = line.getProduct();
             boolean hasBatch = product != null && Boolean.TRUE.equals(product.getHasBatchManagement());
+            String shippedBatch = null;
+            LocalDate shippedExp = null;
+            LocalDate shippedMfg = null;
+            if (hasBatch) {
+                if (line.getOrderLineId() != null) {
+                    shippedBatch = salesOrderLineRepository.findById(line.getOrderLineId())
+                            .map(SalesOrderLine::getBatchNumber).orElse(null);
+                }
+                if (!StringUtils.hasText(shippedBatch) && product != null) {
+                    ProductLot pl = productLotRepository.findByProduct_Id(product.getId()).stream()
+                            .filter(l -> StringUtils.hasText(l.getBatchNumber()))
+                            .findFirst().orElse(null);
+                    if (pl != null) {
+                        shippedBatch = pl.getBatchNumber();
+                        shippedExp = pl.getExpiredDate();
+                        shippedMfg = pl.getManufactureDate();
+                    }
+                } else if (StringUtils.hasText(shippedBatch) && product != null) {
+                    ProductLot pl = productLotRepository.findFirstByProduct_IdAndBatchNumberIgnoreCase(product.getId(), shippedBatch).orElse(null);
+                    if (pl != null) {
+                        shippedExp = pl.getExpiredDate();
+                        shippedMfg = pl.getManufactureDate();
+                    }
+                }
+            }
 
             result.add(ReturnableInvoiceLineResponse.builder()
                     .invoiceLineId(line.getId())
@@ -516,6 +548,9 @@ public class SalesReturnService {
                     .remainingReturnableQuantity(remaining)
                     .pricePerUnit(line.getPricePerUnit())
                     .hasBatchManagement(hasBatch)
+                    .batchNumber(shippedBatch)
+                    .manufactureDate(shippedMfg)
+                    .expiredDate(shippedExp)
                     .build());
         }
 

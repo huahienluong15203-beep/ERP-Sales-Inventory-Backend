@@ -293,18 +293,47 @@ public class StockTransferService {
             // (trước đây chỉ cộng lô ở kho đến khi nhận, lô ở kho đi giữ nguyên -> tồn theo lô bị đếm 2 lần)
             if (StringUtils.hasText(line.getBatchNumber())) {
                 String batchNum = line.getBatchNumber().trim();
-                ProductLot sourceLot = productLotRepository
-                        .findByProduct_IdAndWarehouse_IdAndBatchNumber(product.getId(), sourceWh.getId(), batchNum)
-                        .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST, "LOT_NOT_FOUND",
-                                "Kho xuất không có lô " + batchNum + " của mặt hàng [" + product.getName() + "]"));
-                BigDecimal lotQty = sourceLot.getQuantity() != null ? sourceLot.getQuantity() : BigDecimal.ZERO;
-                if (lotQty.compareTo(transferQty) < 0) {
-                    throw new BusinessException(HttpStatus.BAD_REQUEST, "LOT_INSUFFICIENT",
-                            "Lô " + batchNum + " của [" + product.getName() + "] chỉ còn " + plain(lotQty)
-                                    + ", không đủ để chuyển " + plain(transferQty));
+                Optional<ProductLot> lotOpt = productLotRepository
+                        .findByProduct_IdAndWarehouse_IdAndBatchNumber(product.getId(), sourceWh.getId(), batchNum);
+
+                if (lotOpt.isEmpty()) {
+                    if (Boolean.TRUE.equals(product.getHasBatchManagement())) {
+                        // Tìm lô đang còn tồn thực tế tại kho xuất
+                        List<ProductLot> availableLots = productLotRepository
+                                .findByProduct_IdAndWarehouse_Id(product.getId(), sourceWh.getId())
+                                .stream()
+                                .filter(l -> l.getQuantity() != null && l.getQuantity().compareTo(BigDecimal.ZERO) > 0)
+                                .sorted((a, b) -> {
+                                    if (a.getExpiredDate() != null && b.getExpiredDate() != null) {
+                                        return a.getExpiredDate().compareTo(b.getExpiredDate());
+                                    }
+                                    return 0;
+                                })
+                                .toList();
+                        if (!availableLots.isEmpty()) {
+                            lotOpt = Optional.of(availableLots.get(0));
+                            line.setBatchNumber(availableLots.get(0).getBatchNumber());
+                            log.info("Lô {} không tồn tại tại kho xuất, tự động gán sang lô thực tế còn tồn {}", batchNum, line.getBatchNumber());
+                        } else {
+                            throw new BusinessException(HttpStatus.BAD_REQUEST, "LOT_NOT_FOUND",
+                                    "Kho xuất [" + sourceWh.getName() + "] không có lô [" + batchNum + "] còn tồn của mặt hàng [" + product.getName() + "].");
+                        }
+                    } else {
+                        // Mặt hàng không quản lý theo lô -> không chặn xuất kho
+                        line.setBatchNumber(null);
+                    }
                 }
-                sourceLot.setQuantity(lotQty.subtract(transferQty));
-                productLotRepository.save(sourceLot);
+
+                if (lotOpt.isPresent()) {
+                    ProductLot sourceLot = lotOpt.get();
+                    BigDecimal lotQty = sourceLot.getQuantity() != null ? sourceLot.getQuantity() : BigDecimal.ZERO;
+                    if (lotQty.compareTo(transferQty) < 0) {
+                        sourceLot.setQuantity(BigDecimal.ZERO);
+                    } else {
+                        sourceLot.setQuantity(lotQty.subtract(transferQty));
+                    }
+                    productLotRepository.save(sourceLot);
+                }
             }
         }
 

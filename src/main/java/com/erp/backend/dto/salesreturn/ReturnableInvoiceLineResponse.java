@@ -25,4 +25,7 @@ public class ReturnableInvoiceLineResponse {
     private BigDecimal remainingReturnableQuantity;
     private BigDecimal pricePerUnit;
     private Boolean hasBatchManagement;
+    private String batchNumber;
+    private java.time.LocalDate manufactureDate;
+    private java.time.LocalDate expiredDate;
 }
