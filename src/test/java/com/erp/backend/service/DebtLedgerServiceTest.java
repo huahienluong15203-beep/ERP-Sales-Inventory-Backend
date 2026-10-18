@@ -197,6 +197,17 @@ class DebtLedgerServiceTest {
     }
 
     @Test
+    @DisplayName("S7-03: Sắp theo đơn mới nhất trước (NEWEST)")
+    void ledger_sortNewest() {
+        data();
+
+        DebtLedgerResponse res = service.ledger(
+                new DebtLedgerService.Filter(null, null, null, false, false, "NEWEST"), 0, 50, accountant);
+
+        assertThat(res.rows()).extracting(DebtAgingRow::customerId).containsExactly(8L, 6L);
+    }
+
+    @Test
     @DisplayName("S7-03: NV kinh doanh chỉ thấy đại lý mình phụ trách, gửi salesRepId người khác cũng không được")
     void salesRep_scoped() {
         UserDetailsImpl rep = actor(7, "ROLE_SALES_REP");
