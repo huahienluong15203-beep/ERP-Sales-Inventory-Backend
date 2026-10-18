@@ -178,6 +178,7 @@ public class OrderDraftService {
                 .deliveryAddress(deliveryAddress)
                 .desiredDeliveryDate(desiredDate)
                 .note(note)
+                .paymentMethod(source.getPaymentMethod() != null ? source.getPaymentMethod() : SalesOrder.PAYMENT_METHOD_CREDIT)
                 .createdById(actor != null ? actor.getId() : null)
                 .createdByUsername(actor != null ? actor.getUsername() : null)
                 .build();
@@ -404,6 +405,7 @@ public class OrderDraftService {
         req.setDeliveryAddressId(order.getDeliveryAddress() != null ? order.getDeliveryAddress().getId() : null);
         req.setDesiredDeliveryDate(order.getDesiredDeliveryDate());
         req.setNote(order.getNote());
+        req.setPaymentMethod(order.getPaymentMethod());
         List<OrderLineRequest> lines = new ArrayList<>();
         for (SalesOrderLine l : order.getLines()) {
             OrderLineRequest r = new OrderLineRequest();
@@ -460,8 +462,12 @@ public class OrderDraftService {
         order.setDeliveryAddress(resolveAddress(customer, req.getDeliveryAddressId()));
         order.setDesiredDeliveryDate(req.getDesiredDeliveryDate());
         order.setNote(StringUtils.hasText(req.getNote()) ? req.getNote().trim() : null);
-        String pm = StringUtils.hasText(req.getPaymentMethod()) ? req.getPaymentMethod().trim().toUpperCase() : SalesOrder.PAYMENT_METHOD_CREDIT;
-        order.setPaymentMethod(SalesOrder.PAYMENT_METHOD_COD.equalsIgnoreCase(pm) ? SalesOrder.PAYMENT_METHOD_COD : SalesOrder.PAYMENT_METHOD_CREDIT);
+        if (StringUtils.hasText(req.getPaymentMethod())) {
+            String pm = req.getPaymentMethod().trim().toUpperCase();
+            order.setPaymentMethod(SalesOrder.PAYMENT_METHOD_COD.equalsIgnoreCase(pm) ? SalesOrder.PAYMENT_METHOD_COD : SalesOrder.PAYMENT_METHOD_CREDIT);
+        } else if (order.getPaymentMethod() == null) {
+            order.setPaymentMethod(SalesOrder.PAYMENT_METHOD_CREDIT);
+        }
         order.getLines().clear();
 
         Set<Long> seenProducts = new HashSet<>();

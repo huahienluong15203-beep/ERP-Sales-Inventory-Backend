@@ -530,6 +530,7 @@ public class OrderStatusService {
                 .backorder(Boolean.TRUE)
                 .parentOrder(parent)
                 .parentOrderCode(parent.getCode())
+                .paymentMethod(parent.getPaymentMethod() != null ? parent.getPaymentMethod() : SalesOrder.PAYMENT_METHOD_CREDIT)
                 .createdById(actor != null ? actor.getId() : null)
                 .createdByUsername(actor != null ? actor.getUsername() : null)
                 .build();
