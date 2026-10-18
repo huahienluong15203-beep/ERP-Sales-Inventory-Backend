@@ -1,6 +1,7 @@
 package com.erp.backend.controller;
 
 import com.erp.backend.dto.payment.CustomerInvoiceDebtResponse;
+import com.erp.backend.dto.payment.PaymentCollectorResponse;
 import com.erp.backend.dto.payment.PaymentReceiptCreateRequest;
 import com.erp.backend.dto.payment.PaymentReceiptResponse;
 import com.erp.backend.dto.user.PageResponse;
@@ -156,5 +157,14 @@ public class PaymentController {
         com.erp.backend.dto.payment.PaymentReconciliationResponse response =
                 paymentService.getReconciliation(fromDate, toDate, collectorId, actor);
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Lấy danh sách nhân sự đủ điều kiện lập phiếu thu / thu tiền (Kế toán, Admin, Sales).
+     */
+    @GetMapping("/collectors")
+    @PreAuthorize("hasAnyRole('ACCOUNTANT', 'ADMIN', 'SALES_MANAGER', 'SALES_REP')")
+    public ResponseEntity<List<PaymentCollectorResponse>> getEligibleCollectors() {
+        return ResponseEntity.ok(paymentService.getEligibleCollectors());
     }
 }

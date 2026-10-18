@@ -26,4 +26,8 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
     @Modifying
     @Query("update Notification n set n.isRead = true, n.readAt = :readAt where ((:userId is not null and n.userId = :userId) or (:customerId is not null and n.customerId = :customerId)) and n.isRead = false")
     int markAllAsRead(@Param("userId") Long userId, @Param("customerId") Long customerId, @Param("readAt") LocalDateTime readAt);
+
+    boolean existsByReferenceTypeAndReferenceIdAndIsReadFalse(String referenceType, Long referenceId);
+
+    List<Notification> findByReferenceTypeAndCustomerIdAndIsReadFalse(String referenceType, Long customerId);
 }

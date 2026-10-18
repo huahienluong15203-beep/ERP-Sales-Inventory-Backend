@@ -36,10 +36,11 @@ public class PortalDebtController {
 
     @GetMapping("/invoices")
     public PageResponse<CustomerInvoiceDebtResponse> invoices(@RequestParam(required = false) String status,
+                                                              @RequestParam(required = false) String keyword,
                                                               @RequestParam(defaultValue = "0") int page,
-                                                              @RequestParam(defaultValue = "20") int size,
+                                                              @RequestParam(defaultValue = "10") int size,
                                                               @AuthenticationPrincipal UserDetailsImpl actor) {
-        return portalDebtService.invoices(status, page, size, actor);
+        return portalDebtService.invoices(status, keyword, page, size, actor);
     }
 
     @GetMapping("/payments")
