@@ -796,34 +796,38 @@ public class CustomerService {
         return resolveEffectivePriceLists().get(group);
     }
 
-    CustomerResponse toResponse(Customer c) {
-        BigDecimal debt = BigDecimal.ZERO;
-        if (c.getId() != null) {
-            BigDecimal sum = orderRepository.sumTotalAmountByCustomerAndStatuses(
-                    c.getId(), SalesOrder.OUTSTANDING_DEBT_STATUSES);
-            if (sum != null) debt = sum;
+    /**
+     * Công nợ hiện tại của 1 đại lý, cùng công thức với danh sách đại lý và CustomerCreditService:
+     * đơn đã duyệt chưa xuất hoá đơn + số còn nợ trên hoá đơn - giảm trừ chưa đối trừ (S8-02).
+     */
+    BigDecimal currentDebt(Long customerId) {
+        if (customerId == null) {
+            return BigDecimal.ZERO;
         }
+        BigDecimal orders = orderRepository.sumTotalAmountByCustomerAndStatuses(
+                customerId, SalesOrder.OUTSTANDING_DEBT_STATUSES);
+        BigDecimal invoices = invoiceRepository.sumOpenRemainingByCustomer(customerId);
+        BigDecimal credit = creditNoteRepository.sumUnappliedByCustomer(customerId);
+        return nz(orders).add(nz(invoices)).subtract(nz(credit));
+    }
+
+    private static BigDecimal nz(BigDecimal v) {
+        return v != null ? v : BigDecimal.ZERO;
+    }
+
+    CustomerResponse toResponse(Customer c) {
+        BigDecimal debt = currentDebt(c.getId());
         return toResponse(c, resolvePriceListForGroup(c.getCustomerGroup()), null, debt);
     }
 
     CustomerResponse toResponse(Customer c, RefItem priceListRef) {
-        BigDecimal debt = BigDecimal.ZERO;
-        if (c.getId() != null) {
-            BigDecimal sum = orderRepository.sumTotalAmountByCustomerAndStatuses(
-                    c.getId(), SalesOrder.OUTSTANDING_DEBT_STATUSES);
-            if (sum != null) debt = sum;
-        }
+        BigDecimal debt = currentDebt(c.getId());
         int count = c.getId() != null ? (int) addressRepository.countByCustomer_IdAndStatus(c.getId(), ACTIVE) : 0;
         return toResponse(c, priceListRef, count, debt);
     }
 
     CustomerResponse toResponse(Customer c, RefItem priceListRef, Integer deliveryPointCount) {
-        BigDecimal debt = BigDecimal.ZERO;
-        if (c.getId() != null) {
-            BigDecimal sum = orderRepository.sumTotalAmountByCustomerAndStatuses(
-                    c.getId(), SalesOrder.OUTSTANDING_DEBT_STATUSES);
-            if (sum != null) debt = sum;
-        }
+        BigDecimal debt = currentDebt(c.getId());
         return toResponse(c, priceListRef, deliveryPointCount, debt);
     }
 
