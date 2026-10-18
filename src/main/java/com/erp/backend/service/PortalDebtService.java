@@ -46,6 +46,8 @@ public class PortalDebtService {
 
     static final ZoneId VN_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
     static final String FILTER_OPEN = "OPEN";
+    static final String FILTER_UNPAID = "UNPAID";
+    static final String FILTER_PARTIALLY_PAID = "PARTIALLY_PAID";
     static final String FILTER_OVERDUE = "OVERDUE";
     static final String FILTER_PAID = "PAID";
     static final String FILTER_ALL = "ALL";
@@ -92,15 +94,23 @@ public class PortalDebtService {
 
     /**
      * Hoá đơn của đại lý, mới nhất trước.
-     * status: OPEN (còn nợ, mặc định) | OVERDUE (còn nợ đã quá hạn) | PAID (đã trả đủ) | ALL.
+     * status: OPEN (còn nợ, mặc định) | UNPAID (chưa trả đồng nào) | PARTIALLY_PAID (đã trả 1 phần) | OVERDUE | PAID | ALL.
      */
     @Transactional(readOnly = true)
     public PageResponse<CustomerInvoiceDebtResponse> invoices(String status, int page, int size, UserDetailsImpl actor) {
+        return invoices(status, null, page, size, actor);
+    }
+
+    /**
+     * Hoá đơn của đại lý có tìm kiếm từ khoá (mã hoá đơn hoặc mã đơn hàng) và phân trang.
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<CustomerInvoiceDebtResponse> invoices(String status, String keyword, int page, int size, UserDetailsImpl actor) {
         Customer c = currentCustomer(actor);
-        String filter = StringUtils.hasText(status) ? status.trim().toUpperCase(Locale.ROOT) : FILTER_OPEN;
-        if (!List.of(FILTER_OPEN, FILTER_OVERDUE, FILTER_PAID, FILTER_ALL).contains(filter)) {
+        String filter = StringUtils.hasText(status) ? status.trim().toUpperCase(Locale.ROOT) : FILTER_ALL;
+        if (!List.of(FILTER_OPEN, FILTER_UNPAID, FILTER_PARTIALLY_PAID, FILTER_OVERDUE, FILTER_PAID, FILTER_ALL).contains(filter)) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_INVOICE_FILTER",
-                    "Bộ lọc hoá đơn: OPEN, OVERDUE, PAID hoặc ALL", "status");
+                    "Bộ lọc hoá đơn: ALL, UNPAID, PARTIALLY_PAID, OPEN, OVERDUE hoặc PAID", "status");
         }
         LocalDate today = LocalDate.now(clock);
         Integer maxDays = c.getMaxDebtDays();
@@ -112,13 +122,34 @@ public class PortalDebtService {
         Specification<Invoice> spec = (root, query, cb) -> {
             var remaining = cb.coalesce(root.<BigDecimal>get("remainingAmount"), root.<BigDecimal>get("totalAmount"));
             var byCustomer = cb.equal(root.get("customer").get("id"), customerId);
-            return switch (filter) {
+            var paid = cb.coalesce(root.<BigDecimal>get("paidAmount"), BigDecimal.ZERO);
+
+            jakarta.persistence.criteria.Predicate statusPred = switch (filter) {
                 case FILTER_OPEN -> cb.and(byCustomer, cb.gt(remaining, BigDecimal.ZERO));
+                case FILTER_UNPAID -> cb.and(byCustomer, cb.gt(remaining, BigDecimal.ZERO), cb.le(paid, BigDecimal.ZERO));
+                case FILTER_PARTIALLY_PAID -> cb.and(byCustomer, cb.gt(remaining, BigDecimal.ZERO), cb.gt(paid, BigDecimal.ZERO));
                 case FILTER_OVERDUE -> cb.and(byCustomer, cb.gt(remaining, BigDecimal.ZERO),
-                        cb.lessThan(root.<LocalDate>get("invoiceDate"), today.minusDays(maxDays)));
+                        maxDays != null && maxDays >= 0
+                                ? cb.lessThan(root.<LocalDate>get("invoiceDate"), today.minusDays(maxDays))
+                                : cb.disjunction());
                 case FILTER_PAID -> cb.and(byCustomer, cb.le(remaining, BigDecimal.ZERO));
                 default -> byCustomer;
             };
+
+            if (StringUtils.hasText(keyword)) {
+                String kw = "%" + keyword.trim().toLowerCase() + "%";
+                jakarta.persistence.criteria.Predicate codeMatch = cb.like(cb.lower(root.get("code")), kw);
+
+                jakarta.persistence.criteria.Subquery<Long> subquery = query.subquery(Long.class);
+                jakarta.persistence.criteria.Root<InvoiceLine> lineRoot = subquery.from(InvoiceLine.class);
+                subquery.select(lineRoot.get("invoice").get("id"))
+                        .where(cb.like(cb.lower(lineRoot.get("orderCode")), kw));
+
+                jakarta.persistence.criteria.Predicate orderCodeMatch = root.get("id").in(subquery);
+                return cb.and(statusPred, cb.or(codeMatch, orderCodeMatch));
+            }
+
+            return statusPred;
         };
         Page<Invoice> result = invoiceRepository.findAll(spec, PageRequest.of(Math.max(0, page), safeSize(size),
                 Sort.by(Sort.Direction.DESC, "invoiceDate").and(Sort.by(Sort.Direction.DESC, "id"))));

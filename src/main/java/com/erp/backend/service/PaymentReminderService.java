@@ -80,13 +80,17 @@ public class PaymentReminderService {
                     continue;
                 }
 
-                LocalDate dueDate = inv.calculateDueDate();
+                Customer customer = inv.getCustomer();
+                Integer maxDebt = customer != null ? customer.getMaxDebtDays() : null;
+                LocalDate dueDate = (maxDebt != null && maxDebt >= 0 && inv.getInvoiceDate() != null)
+                        ? inv.getInvoiceDate().plusDays(maxDebt)
+                        : inv.calculateDueDate();
                 long daysDiff = ChronoUnit.DAYS.between(today, dueDate);
 
                 String reminderType = null;
                 boolean isOverdue = false;
 
-                if (daysDiff == 3) {
+                if (daysDiff <= 3 && daysDiff >= 0) {
                     reminderType = PaymentReminderLog.REMINDER_BEFORE_DUE_3_DAYS;
                     isOverdue = false;
                 } else if (daysDiff < 0) {
@@ -106,7 +110,6 @@ public class PaymentReminderService {
                     continue;
                 }
 
-                Customer customer = inv.getCustomer();
                 String customerName = customer != null ? customer.getName() : inv.getCustomerName();
                 String customerCode = customer != null ? customer.getCode() : inv.getCustomerCode();
                 Long customerId = customer != null ? customer.getId() : null;
@@ -201,6 +204,106 @@ public class PaymentReminderService {
         log.info("S7-08: {}", msg);
 
         return new PaymentReminderRunResponse(today, scanned, sentBeforeDue, sentOverdue, skipped, errors, msg);
+    }
+
+    /**
+     * Tự động đồng bộ và tạo thông báo nhắc nợ / quá hạn cho Đại lý đang đăng nhập khớp đúng dữ liệu thực tế.
+     */
+    @Transactional
+    public void ensureRemindersForCustomer(UserDetailsImpl actor) {
+        if (actor == null || !CustomerAccess.isCustomer(actor)) {
+            return;
+        }
+        Customer c = CustomerAccess.resolveCustomerForActor(actor, customerRepository);
+        if (c == null) {
+            return;
+        }
+        LocalDate today = LocalDate.now(clock);
+        List<Invoice> unpaid = invoiceRepository.findUnpaidByCustomerIdOrderByInvoiceDateAsc(c.getId());
+
+        List<Notification> unreadInvoiceNotifs = new java.util.ArrayList<>();
+        try {
+            unreadInvoiceNotifs = new java.util.ArrayList<>(
+                    notificationRepository.findByReferenceTypeAndCustomerIdAndIsReadFalse("INVOICE", c.getId()));
+            for (Notification n : unreadInvoiceNotifs) {
+                if (n.getReferenceId() != null) {
+                    boolean stillUnpaid = unpaid.stream().anyMatch(inv -> inv.getId().equals(n.getReferenceId()));
+                    if (!stillUnpaid) {
+                        n.setRead(true);
+                        n.setReadAt(LocalDateTime.now(clock));
+                        notificationRepository.save(n);
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            log.debug("Lỗi dọn thông báo cũ: {}", ex.getMessage());
+        }
+
+        // 2. Tạo hoặc cập nhật thông báo cho các hoá đơn nợ quá hạn hoặc sắp đến hạn trong vòng 3 ngày
+        for (Invoice inv : unpaid) {
+            if (inv.getRemainingAmount() == null || inv.getRemainingAmount().compareTo(BigDecimal.ZERO) <= 0
+                    || Invoice.PAYMENT_STATUS_PAID.equals(inv.getPaymentStatus())) {
+                continue;
+            }
+            LocalDate dueDate = (c.getMaxDebtDays() != null && c.getMaxDebtDays() >= 0 && inv.getInvoiceDate() != null)
+                    ? inv.getInvoiceDate().plusDays(c.getMaxDebtDays())
+                    : inv.calculateDueDate();
+            if (dueDate == null) {
+                continue;
+            }
+            long daysDiff = ChronoUnit.DAYS.between(today, dueDate);
+
+            boolean isOverdue = daysDiff < 0;
+            boolean isDueSoon = daysDiff >= 0 && daysDiff <= 3;
+
+            if (!isOverdue && !isDueSoon) {
+                continue;
+            }
+
+            String notifType = isOverdue ? Notification.TYPE_PAYMENT_OVERDUE : Notification.TYPE_PAYMENT_DUE_SOON;
+            String notifTitle = isOverdue
+                    ? "[Cảnh báo quá hạn] Hoá đơn " + inv.getCode() + " đã quá hạn thanh toán"
+                    : (daysDiff == 0
+                            ? "[Nhắc hạn thanh toán] Hoá đơn " + inv.getCode() + " đến hạn thanh toán hôm nay"
+                            : "[Nhắc hạn thanh toán] Hoá đơn " + inv.getCode() + " sắp đến hạn thanh toán (còn " + daysDiff + " ngày)");
+
+            String notifContent = isOverdue
+                    ? String.format("Hoá đơn %s (nợ còn lại: %s) đã quá hạn %d ngày (hạn trả: %s). Vui lòng thanh toán để không bị khoá đặt đơn mới.",
+                            inv.getCode(), formatVnd(inv.getRemainingAmount()), Math.abs(daysDiff), dueDate)
+                    : (daysDiff == 0
+                            ? String.format("Hoá đơn %s (nợ còn lại: %s) đến hạn thanh toán hôm nay (%s). Vui lòng thanh toán để duy trì hạn mức.",
+                                    inv.getCode(), formatVnd(inv.getRemainingAmount()), dueDate)
+                            : String.format("Hoá đơn %s (nợ còn lại: %s) sẽ đến hạn thanh toán vào ngày %s (còn %d ngày). Vui lòng sắp xếp thanh toán đúng hạn.",
+                                    inv.getCode(), formatVnd(inv.getRemainingAmount()), dueDate, daysDiff));
+
+            Notification existing = unreadInvoiceNotifs.stream()
+                    .filter(n -> !n.isRead() && inv.getId().equals(n.getReferenceId()))
+                    .findFirst()
+                    .orElse(null);
+
+            if (existing != null) {
+                existing.setTitle(notifTitle);
+                existing.setContent(notifContent);
+                existing.setNotificationType(notifType);
+                notificationRepository.save(existing);
+            } else {
+                Notification notification = Notification.builder()
+                        .userId(actor.getId())
+                        .customerId(c.getId())
+                        .customerCode(c.getCode())
+                        .title(notifTitle)
+                        .content(notifContent)
+                        .notificationType(notifType)
+                        .referenceType("INVOICE")
+                        .referenceId(inv.getId())
+                        .referenceCode(inv.getCode())
+                        .isRead(false)
+                        .createdAt(LocalDateTime.now(clock))
+                        .build();
+
+                notificationRepository.save(notification);
+            }
+        }
     }
 
     /** Lịch sử nhắc nợ của 1 hoá đơn: NV kinh doanh chỉ xem được hoá đơn của đại lý mình phụ trách (khác -> 404). */

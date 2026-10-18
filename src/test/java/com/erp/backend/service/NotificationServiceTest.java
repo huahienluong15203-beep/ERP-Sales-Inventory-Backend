@@ -28,6 +28,7 @@ class NotificationServiceTest {
 
     @Mock private NotificationRepository notificationRepository;
     @Mock private CustomerRepository customerRepository;
+    @Mock private PaymentReminderService paymentReminderService;
 
     @InjectMocks private NotificationService service;
 

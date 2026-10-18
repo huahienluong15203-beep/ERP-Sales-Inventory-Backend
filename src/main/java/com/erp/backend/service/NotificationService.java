@@ -31,11 +31,16 @@ public class NotificationService {
 
     private final NotificationRepository notificationRepository;
     private final CustomerRepository customerRepository;
+    @org.springframework.context.annotation.Lazy
+    private final PaymentReminderService paymentReminderService;
 
     Clock clock = Clock.system(ZoneId.of("Asia/Ho_Chi_Minh"));
 
-    @Transactional(readOnly = true)
+    @Transactional
     public PageResponse<NotificationResponse> getMyNotifications(int page, int size, UserDetailsImpl actor) {
+        if (paymentReminderService != null) {
+            paymentReminderService.ensureRemindersForCustomer(actor);
+        }
         Long userId = actor != null ? actor.getId() : null;
         Long customerId = resolveCustomerId(actor);
 
@@ -52,8 +57,11 @@ public class NotificationService {
                 result.getTotalElements(), result.getTotalPages());
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public List<NotificationResponse> getTopRecent(UserDetailsImpl actor) {
+        if (paymentReminderService != null) {
+            paymentReminderService.ensureRemindersForCustomer(actor);
+        }
         Long userId = actor != null ? actor.getId() : null;
         Long customerId = resolveCustomerId(actor);
         return notificationRepository.findTop30ByUserOrCustomer(userId, customerId).stream()
@@ -61,8 +69,11 @@ public class NotificationService {
                 .toList();
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public long getUnreadCount(UserDetailsImpl actor) {
+        if (paymentReminderService != null) {
+            paymentReminderService.ensureRemindersForCustomer(actor);
+        }
         Long userId = actor != null ? actor.getId() : null;
         Long customerId = resolveCustomerId(actor);
         return notificationRepository.countUnread(userId, customerId);
