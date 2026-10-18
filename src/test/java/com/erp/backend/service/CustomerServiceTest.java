@@ -142,6 +142,42 @@ class CustomerServiceTest {
         assertThat(res.content().get(1).currentDebt()).isEqualByComparingTo("300000");
     }
 
+    @Test
+    @DisplayName("S8-02: Chi tiết đại lý trả cùng công nợ với danh sách (đơn chưa xuất HĐ + còn nợ hoá đơn - giảm trừ chưa đối trừ)")
+    void getById_debtSameAsList() {
+        Customer c = customer(7, null);
+        when(customerRepository.findById(7L)).thenReturn(java.util.Optional.of(c));
+        when(orderRepository.sumTotalAmountByCustomerAndStatuses(7L, SalesOrder.OUTSTANDING_DEBT_STATUSES))
+                .thenReturn(new BigDecimal("1000000"));
+        when(invoiceRepository.sumOpenRemainingByCustomer(7L)).thenReturn(new BigDecimal("2500000"));
+        when(creditNoteRepository.sumUnappliedByCustomer(7L)).thenReturn(new BigDecimal("200000"));
+
+        assertThat(service.getById(7L, manager).currentDebt()).isEqualByComparingTo("3300000");
+
+        when(customerRepository.findAll(any(org.springframework.data.jpa.domain.Specification.class),
+                any(org.springframework.data.domain.Pageable.class)))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(c)));
+        when(orderRepository.sumTotalAmountByCustomerIdsAndStatuses(eq(List.of(7L)), eq(SalesOrder.OUTSTANDING_DEBT_STATUSES)))
+                .thenReturn(List.<Object[]>of(new Object[]{7L, new BigDecimal("1000000")}));
+        when(invoiceRepository.sumOpenRemainingByCustomerIds(List.of(7L)))
+                .thenReturn(List.<Object[]>of(new Object[]{7L, new BigDecimal("2500000")}));
+        when(creditNoteRepository.sumUnappliedByCustomerIds(List.of(7L)))
+                .thenReturn(List.<Object[]>of(new Object[]{7L, new BigDecimal("200000")}));
+
+        assertThat(service.search(null, null, null, null, null, null, 0, 20, manager).content().get(0).currentDebt())
+                .isEqualByComparingTo("3300000");
+    }
+
+    @Test
+    @DisplayName("S8-02: Đơn đã lập hoá đơn 100.000 -> chi tiết đại lý vẫn báo nợ 100.000 (không về 0)")
+    void getById_invoicedOrderStillDebt() {
+        Customer c = customer(7, null);
+        when(customerRepository.findById(7L)).thenReturn(java.util.Optional.of(c));
+        when(invoiceRepository.sumOpenRemainingByCustomer(7L)).thenReturn(new BigDecimal("100000"));
+
+        assertThat(service.getById(7L, manager).currentDebt()).isEqualByComparingTo("100000");
+    }
+
     // ======================= S3-03: TẠO / SỬA =======================
 
     @Test
