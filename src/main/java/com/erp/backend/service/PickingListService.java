@@ -629,7 +629,15 @@ public class PickingListService {
                     h.allocations = new ArrayList<>();
 
                     // 1. Xác định vị trí lưu kho: ưu tiên vị trí mặc định của sản phẩm
-                    h.location = p.getDefaultLocation();
+                    if (p.getDefaultLocation() != null) {
+                        if (p.getDefaultLocation().getWarehouse() == null || p.getDefaultLocation().getWarehouse().getId().equals(warehouseId)) {
+                            h.location = p.getDefaultLocation();
+                        } else {
+                            String code = p.getDefaultLocation().getCode();
+                            h.location = locationRepository.findByWarehouse_IdAndCodeIgnoreCase(warehouseId, code)
+                                    .orElse(p.getDefaultLocation());
+                        }
+                    }
 
                     return h;
                 });
@@ -667,6 +675,25 @@ public class PickingListService {
                     if (h.location == null && bestLot.getLocation() != null) {
                         h.location = bestLot.getLocation();
                     }
+                }
+            }
+        }
+
+        // 2.5 Nếu vẫn chưa xác định được vị trí lưu kho, tự động gán vị trí phù hợp trong kho này
+        List<WarehouseLocation> whLocations = null;
+        for (GroupedItemHolder h : map.values()) {
+            if (h.location == null) {
+                if (whLocations == null) {
+                    whLocations = locationRepository.findByWarehouse_IdOrderByCodeAsc(warehouseId);
+                }
+                if (!whLocations.isEmpty()) {
+                    String cat = h.product.getCategory() != null ? h.product.getCategory().toLowerCase() : "";
+                    final List<WarehouseLocation> locList = whLocations;
+                    h.location = locList.stream()
+                            .filter(loc -> (loc.getName() != null && loc.getName().toLowerCase().contains(cat))
+                                    || (loc.getZone() != null && cat.contains(loc.getZone().toLowerCase())))
+                            .findFirst()
+                            .orElse(locList.get(0));
                 }
             }
         }

@@ -237,4 +237,118 @@ INSERT INTO stock_take_lines (
     500.0000, 500.0000, 0.0000, 'Khớp sổ sách'
 );
 
+-- =========================================================================
+-- 6. Dữ liệu Vị trí lưu kho chuẩn cho tất cả các kho và gán vị trí cho sản phẩm
+-- =========================================================================
+
+-- Kho Tổng Miền Bắc (id = 3)
+INSERT INTO warehouse_locations (warehouse_id, code, name, location_type, zone, shelf, description, status, created_at, updated_at)
+VALUES
+    (3, 'ZONE-MB-03', 'Phân khu Lương Thực & Gạo Nông Sản', 'ZONE', 'Khu C', NULL, 'Khu bảo quản gạo ST25 và nông sản khô', 'ACTIVE', NOW(), NOW()),
+    (3, 'ZONE-MB-04', 'Phân khu Sữa & Chế Phẩm Sữa', 'ZONE', 'Khu D', NULL, 'Khu bảo quản sữa tươi, bơ sữa nhiệt độ mát', 'ACTIVE', NOW(), NOW()),
+    (3, 'RACK-MB-B2', 'Kệ Hàng Bia Chai & Rượu Nhẹ B2', 'RACK', 'Khu B', 'Kệ B2', 'Dãy kệ chuyên xếp két bia chai 24 chai', 'ACTIVE', NOW(), NOW()),
+    (3, 'RACK-MB-C1', 'Kệ Hàng Gạo ST25 & Nông Sản C1', 'RACK', 'Khu C', 'Kệ C1', 'Dãy kệ pallet chứa bao gạo 5kg - 25kg', 'ACTIVE', NOW(), NOW()),
+    (3, 'RACK-MB-D1', 'Kệ Hàng Sữa & Bơ Phô Mai D1', 'RACK', 'Khu D', 'Kệ D1', 'Dãy kệ sữa thùng và chế phẩm bơ sữa', 'ACTIVE', NOW(), NOW()),
+    (3, 'SHELF-MB-B2-T1', 'Tầng 1 - Kệ B2', 'SHELF', 'Khu B', 'Kệ B2', 'Tầng 1 kệ B2 bia chai két', 'ACTIVE', NOW(), NOW()),
+    (3, 'SHELF-MB-C1-T1', 'Tầng 1 - Kệ C1', 'SHELF', 'Khu C', 'Kệ C1', 'Tầng 1 kệ C1 gạo ST25', 'ACTIVE', NOW(), NOW()),
+    (3, 'SHELF-MB-D1-T1', 'Tầng 1 - Kệ D1', 'SHELF', 'Khu D', 'Kệ D1', 'Tầng 1 kệ D1 sữa hộp', 'ACTIVE', NOW(), NOW()),
+    (3, 'BIN-MB-B1-02', 'Ô Chứa B1-02 (Nước Ngọt Lon & Chai)', 'BIN', 'Khu B', 'Tầng 1', 'Ô chứa Coca, Pepsi, 7Up các loại', 'ACTIVE', NOW(), NOW()),
+    (3, 'BIN-MB-B1-03', 'Ô Chứa B1-03 (Nước Đóng Chai & Nước Khoáng)', 'BIN', 'Khu B', 'Tầng 1', 'Ô chứa nước khoáng, nước tinh khiết đóng chai', 'ACTIVE', NOW(), NOW()),
+    (3, 'BIN-MB-B2-01', 'Ô Chứa B2-01 (Bia Chai & Rượu Nhẹ)', 'BIN', 'Khu B', 'Kệ B2', 'Ô chứa két bia chai Heineken, Saigon, Tiger', 'ACTIVE', NOW(), NOW()),
+    (3, 'BIN-MB-C1-01', 'Ô Chứa C1-01 (Gạo ST25 & Thực Phẩm Khô)', 'BIN', 'Khu C', 'Kệ C1', 'Ô chứa túi gạo ST25 Ông Cua 5kg', 'ACTIVE', NOW(), NOW()),
+    (3, 'BIN-MB-D1-01', 'Ô Chứa D1-01 (Sữa Tươi & Sữa Chua)', 'BIN', 'Khu D', 'Kệ D1', 'Ô chứa sữa tươi hộp 180ml, 1L và sữa chua', 'ACTIVE', NOW(), NOW())
+ON CONFLICT (warehouse_id, code) DO NOTHING;
+
+-- Kho Miền Trung (id = 4)
+INSERT INTO warehouse_locations (warehouse_id, code, name, location_type, zone, shelf, description, status, created_at, updated_at)
+VALUES
+    (4, 'ZONE-MT-01', 'Phân khu A - Hàng Tiêu Dùng Nhanh', 'ZONE', 'Khu A', NULL, 'Khu tập kết cà phê, bánh kẹo, thực phẩm khô', 'ACTIVE', NOW(), NOW()),
+    (4, 'ZONE-MT-02', 'Phân khu B - Đồ Uống & Nước Giải Khát', 'ZONE', 'Khu B', NULL, 'Khu chứa bia lon, nước ngọt đóng chai', 'ACTIVE', NOW(), NOW()),
+    (4, 'ZONE-MT-03', 'Phân khu C - Lương Thực & Gạo Nông Sản', 'ZONE', 'Khu C', NULL, 'Khu bảo quản gạo ST25 bao túi thương mại', 'ACTIVE', NOW(), NOW()),
+    (4, 'RACK-MT-A1', 'Kệ Hàng Tiêu Dùng A1', 'RACK', 'Khu A', 'Kệ A1', 'Dãy kệ A1 chứa cà phê G7, bánh kẹo', 'ACTIVE', NOW(), NOW()),
+    (4, 'RACK-MT-B1', 'Kệ Hàng Bia & Nước Giải Khát B1', 'RACK', 'Khu B', 'Kệ B1', 'Dãy kệ B1 chứa bia và nước ngọt', 'ACTIVE', NOW(), NOW()),
+    (4, 'RACK-MT-C1', 'Kệ Hàng Gạo & Nông Sản C1', 'RACK', 'Khu C', 'Kệ C1', 'Dãy kệ C1 chứa gạo ST25', 'ACTIVE', NOW(), NOW()),
+    (4, 'SHELF-MT-A1-T1', 'Tầng 1 - Kệ A1', 'SHELF', 'Khu A', 'Kệ A1', 'Tầng 1 kệ A1 hàng tiêu dùng', 'ACTIVE', NOW(), NOW()),
+    (4, 'SHELF-MT-B1-T1', 'Tầng 1 - Kệ B1', 'SHELF', 'Khu B', 'Kệ B1', 'Tầng 1 kệ B1 đồ uống', 'ACTIVE', NOW(), NOW()),
+    (4, 'SHELF-MT-C1-T1', 'Tầng 1 - Kệ C1', 'SHELF', 'Khu C', 'Kệ C1', 'Tầng 1 kệ C1 gạo', 'ACTIVE', NOW(), NOW()),
+    (4, 'BIN-MT-A1-01', 'Ô Chứa A1-01 (Cà phê G7 & Bánh kẹo)', 'BIN', 'Khu A', 'Kệ A1', 'Ô nhặt hàng cà phê G7 3in1 và bánh kẹo hộp', 'ACTIVE', NOW(), NOW()),
+    (4, 'BIN-MT-B1-01', 'Ô Chứa B1-01 (Bia Lon & Nước Ngọt)', 'BIN', 'Khu B', 'Kệ B1', 'Ô nhặt hàng bia thùng và nước ngọt lon', 'ACTIVE', NOW(), NOW()),
+    (4, 'BIN-MT-C1-01', 'Ô Chứa C1-01 (Gạo ST25 Ông Cua 5kg)', 'BIN', 'Khu C', 'Kệ C1', 'Vị trí lưu trữ gạo ST25 Ông Cua chính hãng', 'ACTIVE', NOW(), NOW())
+ON CONFLICT (warehouse_id, code) DO NOTHING;
+
+-- Kho Tổng Hà Nội (id = 1)
+INSERT INTO warehouse_locations (warehouse_id, code, name, location_type, zone, shelf, description, status, created_at, updated_at)
+VALUES
+    (1, 'ZONE-HN-01', 'Phân khu A - Hàng Tiêu Dùng Nhanh', 'ZONE', 'Khu A', NULL, 'Khu tập kết cà phê, bánh kẹo, thực phẩm khô', 'ACTIVE', NOW(), NOW()),
+    (1, 'ZONE-HN-02', 'Phân khu B - Đồ Uống & Nước Giải Khát', 'ZONE', 'Khu B', NULL, 'Khu chứa bia lon, nước ngọt đóng chai', 'ACTIVE', NOW(), NOW()),
+    (1, 'ZONE-HN-03', 'Phân khu C - Lương Thực & Gạo Nông Sản', 'ZONE', 'Khu C', NULL, 'Khu chứa gạo ST25 và ngũ cốc', 'ACTIVE', NOW(), NOW()),
+    (1, 'RACK-HN-A1', 'Kệ Hàng Tiêu Dùng A1', 'RACK', 'Khu A', 'Kệ A1', 'Dãy kệ A1 chứa cà phê G7, bánh kẹo', 'ACTIVE', NOW(), NOW()),
+    (1, 'RACK-HN-B1', 'Kệ Hàng Bia & Nước Giải Khát B1', 'RACK', 'Khu B', 'Kệ B1', 'Dãy kệ B1 chứa bia và nước ngọt lon', 'ACTIVE', NOW(), NOW()),
+    (1, 'RACK-HN-C1', 'Kệ Hàng Gạo & Lương Thực C1', 'RACK', 'Khu C', 'Kệ C1', 'Dãy kệ C1 chứa gạo ST25', 'ACTIVE', NOW(), NOW()),
+    (1, 'SHELF-HN-A1-T1', 'Tầng 1 - Kệ A1', 'SHELF', 'Khu A', 'Kệ A1', 'Tầng 1 kệ A1 hàng khô', 'ACTIVE', NOW(), NOW()),
+    (1, 'SHELF-HN-B1-T1', 'Tầng 1 - Kệ B1', 'SHELF', 'Khu B', 'Kệ B1', 'Tầng 1 kệ B1 đồ uống', 'ACTIVE', NOW(), NOW()),
+    (1, 'SHELF-HN-C1-T1', 'Tầng 1 - Kệ C1', 'SHELF', 'Khu C', 'Kệ C1', 'Tầng 1 kệ C1 gạo', 'ACTIVE', NOW(), NOW()),
+    (1, 'BIN-HN-A1-01', 'Ô Chứa A1-01 (Cà phê G7 & Bánh kẹo)', 'BIN', 'Khu A', 'Kệ A1', 'Ô nhặt hàng cà phê G7 3in1 và bánh kẹo hộp', 'ACTIVE', NOW(), NOW()),
+    (1, 'BIN-HN-B1-01', 'Ô Chứa B1-01 (Bia & Nước Ngọt Pepsi)', 'BIN', 'Khu B', 'Kệ B1', 'Ô nhặt hàng Pepsi lon và nước ngọt', 'ACTIVE', NOW(), NOW()),
+    (1, 'BIN-HN-C1-01', 'Ô Chứa C1-01 (Gạo ST25 Ông Cua 5kg)', 'BIN', 'Khu C', 'Kệ C1', 'Ô nhặt hàng gạo ST25 túi 5kg', 'ACTIVE', NOW(), NOW())
+ON CONFLICT (warehouse_id, code) DO NOTHING;
+
+-- Kho Tổng TP.HCM (id = 2)
+INSERT INTO warehouse_locations (warehouse_id, code, name, location_type, zone, shelf, description, status, created_at, updated_at)
+VALUES
+    (2, 'ZONE-HCM-01', 'Phân khu A - Hàng Tiêu Dùng Nhanh', 'ZONE', 'Khu A', NULL, 'Khu tập kết cà phê, bánh kẹo, thực phẩm khô', 'ACTIVE', NOW(), NOW()),
+    (2, 'ZONE-HCM-02', 'Phân khu B - Đồ Uống & Nước Giải Khát', 'ZONE', 'Khu B', NULL, 'Khu chứa bia lon, nước ngọt đóng chai', 'ACTIVE', NOW(), NOW()),
+    (2, 'ZONE-HCM-03', 'Phân khu C - Lương Thực & Gạo Nông Sản', 'ZONE', 'Khu C', NULL, 'Khu bảo quản gạo ST25 và nông sản', 'ACTIVE', NOW(), NOW()),
+    (2, 'RACK-HCM-A1', 'Kệ Hàng Tiêu Dùng A1', 'RACK', 'Khu A', 'Kệ A1', 'Dãy kệ A1 chứa cà phê G7, bánh kẹo', 'ACTIVE', NOW(), NOW()),
+    (2, 'RACK-HCM-B1', 'Kệ Hàng Bia & Nước Giải Khát B1', 'RACK', 'Khu B', 'Kệ B1', 'Dãy kệ B1 chứa bia lon và nước ngọt', 'ACTIVE', NOW(), NOW()),
+    (2, 'RACK-HCM-C1', 'Kệ Hàng Gạo & Nông Sản C1', 'RACK', 'Khu C', 'Kệ C1', 'Dãy kệ C1 chứa gạo ST25 túi 5kg', 'ACTIVE', NOW(), NOW()),
+    (2, 'SHELF-HCM-A1-T1', 'Tầng 1 - Kệ A1', 'SHELF', 'Khu A', 'Kệ A1', 'Tầng 1 kệ A1 tiêu dùng', 'ACTIVE', NOW(), NOW()),
+    (2, 'SHELF-HCM-B1-T1', 'Tầng 1 - Kệ B1', 'SHELF', 'Khu B', 'Kệ B1', 'Tầng 1 kệ B1 đồ uống', 'ACTIVE', NOW(), NOW()),
+    (2, 'SHELF-HCM-C1-T1', 'Tầng 1 - Kệ C1', 'SHELF', 'Khu C', 'Kệ C1', 'Tầng 1 kệ C1 gạo', 'ACTIVE', NOW(), NOW()),
+    (2, 'BIN-HCM-A1-01', 'Ô Chứa A1-01 (Cà phê G7 & Bánh kẹo)', 'BIN', 'Khu A', 'Kệ A1', 'Ô nhặt hàng cà phê G7 3in1 và bánh kẹo hộp', 'ACTIVE', NOW(), NOW()),
+    (2, 'BIN-HCM-B1-01', 'Ô Chứa B1-01 (Bia & Nước Ngọt Pepsi)', 'BIN', 'Khu B', 'Kệ B1', 'Ô nhặt hàng Pepsi lon và nước ngọt', 'ACTIVE', NOW(), NOW()),
+    (2, 'BIN-HCM-C1-01', 'Ô Chứa C1-01 (Gạo ST25 Ông Cua 5kg)', 'BIN', 'Khu C', 'Kệ C1', 'Ô nhặt hàng gạo ST25', 'ACTIVE', NOW(), NOW())
+ON CONFLICT (warehouse_id, code) DO NOTHING;
+
+-- Kho Tổng Miền Nam (id = 5)
+INSERT INTO warehouse_locations (warehouse_id, code, name, location_type, zone, shelf, description, status, created_at, updated_at)
+VALUES
+    (5, 'ZONE-MN-02', 'Phân khu B - Đồ Uống & Nước Giải Khát', 'ZONE', 'Khu B', NULL, 'Khu bia lon và nước giải khát', 'ACTIVE', NOW(), NOW()),
+    (5, 'RACK-MN-02', 'Kệ Hàng Đồ Uống MN-B1', 'RACK', 'Khu B', 'Kệ B1', 'Dãy kệ bia lon và nước giải khát', 'ACTIVE', NOW(), NOW()),
+    (5, 'BIN-MN-01-02', 'Ô Chứa MN-01-02 (Cà phê & Bánh kẹo)', 'BIN', 'Khu Trung Tâm', 'Kệ MN-01', 'Ô nhặt hàng FMCG', 'ACTIVE', NOW(), NOW()),
+    (5, 'BIN-MN-02-01', 'Ô Chứa MN-02-01 (Bia & Nước Ngọt)', 'BIN', 'Khu B', 'Kệ B1', 'Ô nhặt hàng đồ uống', 'ACTIVE', NOW(), NOW())
+ON CONFLICT (warehouse_id, code) DO NOTHING;
+
+-- Gán vị trí mặc định cho sản phẩm
+UPDATE products SET default_location_id = (SELECT id FROM warehouse_locations WHERE warehouse_id = 3 AND code = 'BIN-MB-B1-01')
+WHERE category ILIKE '%Bia lon%' OR sku ILIKE 'BIA-%-LON' OR (sku ILIKE 'BIA-%' AND packaging ILIKE '%lon%');
+
+UPDATE products SET default_location_id = (SELECT id FROM warehouse_locations WHERE warehouse_id = 3 AND code = 'BIN-MB-B2-01')
+WHERE category ILIKE '%Bia chai%' OR packaging ILIKE '%chai%' OR sku ILIKE '%CHAI%';
+
+UPDATE products SET default_location_id = (SELECT id FROM warehouse_locations WHERE warehouse_id = 3 AND code = 'BIN-MB-B1-02')
+WHERE category ILIKE '%Nước ngọt%' OR sku IN ('PEPSI-LON-330', 'COCA-320', '7UP-CHAI-390');
+
+UPDATE products SET default_location_id = (SELECT id FROM warehouse_locations WHERE warehouse_id = 3 AND code = 'BIN-MB-B1-03')
+WHERE category ILIKE '%Nước bình%' OR category ILIKE '%500ml%';
+
+UPDATE products SET default_location_id = (SELECT id FROM warehouse_locations WHERE warehouse_id = 3 AND code = 'BIN-MB-C1-01')
+WHERE category ILIKE '%Gạo%' OR sku = 'GAO-ST25-5K' OR name ILIKE '%Gạo ST25%';
+
+UPDATE products SET default_location_id = (SELECT id FROM warehouse_locations WHERE warehouse_id = 3 AND code = 'BIN-MB-A1-01')
+WHERE category ILIKE '%Đồ hộp%' OR sku = 'CAFE-G7-3IN1' OR name ILIKE '%Cà phê%' OR sku = 'SD';
+
+UPDATE products SET default_location_id = (SELECT id FROM warehouse_locations WHERE warehouse_id = 3 AND code = 'BIN-MB-A1-02')
+WHERE category ILIKE '%Mì%' OR category ILIKE '%Snack%' OR category ILIKE '%Kẹo%' OR category ILIKE '%Bánh%' OR category ILIKE '%Socola%';
+
+UPDATE products SET default_location_id = (SELECT id FROM warehouse_locations WHERE warehouse_id = 3 AND code = 'BIN-MB-D1-01')
+WHERE category ILIKE '%Sữa%' OR category ILIKE '%Phô mai%' OR category ILIKE '%Bơ thực vật%';
+
+UPDATE products SET default_location_id = (SELECT id FROM warehouse_locations WHERE warehouse_id = 3 AND code = 'RACK-MB-A1')
+WHERE category ILIKE '%Dầu ăn%' OR category ILIKE '%Nước mắm%' OR category ILIKE '%gia vị%';
+
+UPDATE products SET default_location_id = (SELECT id FROM warehouse_locations WHERE warehouse_id = 3 AND code = 'BIN-MB-A1-01')
+WHERE default_location_id IS NULL;
+
 COMMIT;
+
