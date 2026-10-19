@@ -36,6 +36,29 @@ public class PaymentReminderController {
     }
 
     /**
+     * Gửi nhắc nợ thủ công cho một đại lý cụ thể (từ màn hình Sổ công nợ & Tuổi nợ).
+     */
+    @PostMapping("/customers/{customerId}/send")
+    @PreAuthorize("hasAnyRole('ADMIN', 'ACCOUNTANT', 'SALES_MANAGER')")
+    public ResponseEntity<PaymentReminderRunResponse> sendReminderToCustomer(
+            @PathVariable Long customerId,
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        PaymentReminderRunResponse response = reminderService.sendManualReminderToCustomer(customerId, actor);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Gửi nhắc nợ cho tất cả các đại lý đang phát sinh công nợ hoá đơn.
+     */
+    @PostMapping("/send-all")
+    @PreAuthorize("hasAnyRole('ADMIN', 'ACCOUNTANT', 'SALES_MANAGER')")
+    public ResponseEntity<PaymentReminderRunResponse> sendReminderToAll(
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        PaymentReminderRunResponse response = reminderService.sendManualReminderToAll(actor);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
      * Xem nhật ký gửi nhắc nợ theo ngày.
      */
     @GetMapping("/logs")
