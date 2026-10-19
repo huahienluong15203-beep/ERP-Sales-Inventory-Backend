@@ -207,6 +207,181 @@ public class PaymentReminderService {
     }
 
     /**
+     * S7-08: Kế toán gửi nhắc nợ thủ công cho 1 đại lý cụ thể.
+     * Tạo thông báo chuông trực tiếp cho tài khoản đại lý (portalUser / user) và gửi email nếu có.
+     */
+    @Transactional
+    public PaymentReminderRunResponse sendManualReminderToCustomer(Long customerId, UserDetailsImpl actor) {
+        Customer customer = customerRepository.findById(customerId)
+                .orElseThrow(() -> BusinessException.notFound("Không tìm thấy đại lý"));
+
+        CustomerAccess.checkCanAccess(actor, customer);
+
+        LocalDate today = LocalDate.now(clock);
+        List<Invoice> unpaid = invoiceRepository.findUnpaidByCustomerIdOrderByInvoiceDateAsc(customerId);
+
+        Long targetUserId = null;
+        if (customer.getPortalUser() != null) {
+            targetUserId = customer.getPortalUser().getId();
+        } else if (customer.getUser() != null) {
+            targetUserId = customer.getUser().getId();
+        }
+
+        int sentDue = 0;
+        int sentOverdue = 0;
+        int errors = 0;
+
+        if (!unpaid.isEmpty()) {
+            for (Invoice inv : unpaid) {
+                if (inv.getRemainingAmount() == null || inv.getRemainingAmount().compareTo(BigDecimal.ZERO) <= 0
+                        || Invoice.PAYMENT_STATUS_PAID.equals(inv.getPaymentStatus())) {
+                    continue;
+                }
+
+                try {
+                    LocalDate dueDate = (customer.getMaxDebtDays() != null && customer.getMaxDebtDays() >= 0 && inv.getInvoiceDate() != null)
+                            ? inv.getInvoiceDate().plusDays(customer.getMaxDebtDays())
+                            : inv.calculateDueDate();
+                    long daysDiff = dueDate != null ? ChronoUnit.DAYS.between(today, dueDate) : 0;
+                    boolean isOverdue = daysDiff < 0;
+
+                    String notifTitle = isOverdue
+                            ? "[Cảnh báo quá hạn] Hoá đơn " + inv.getCode() + " đã quá hạn thanh toán"
+                            : "[Nhắc thanh toán] Hoá đơn " + inv.getCode() + " - Nợ: " + formatVnd(inv.getRemainingAmount());
+
+                    String notifContent = isOverdue
+                            ? String.format("Kế toán gửi nhắc nợ: Hoá đơn %s (còn nợ %s) đã quá hạn %d ngày (hạn trả: %s). Vui lòng thanh toán sớm.",
+                                    inv.getCode(), formatVnd(inv.getRemainingAmount()), Math.abs(daysDiff), dueDate)
+                            : (daysDiff == 0
+                                    ? String.format("Kế toán gửi nhắc nợ: Hoá đơn %s (còn nợ %s) đến hạn hôm nay (%s). Vui lòng thanh toán.",
+                                            inv.getCode(), formatVnd(inv.getRemainingAmount()), dueDate)
+                                    : String.format("Kế toán gửi nhắc nợ: Hoá đơn %s còn nợ %s (hạn trả: %s, còn %d ngày). Vui lòng sắp xếp thanh toán.",
+                                            inv.getCode(), formatVnd(inv.getRemainingAmount()), dueDate, daysDiff));
+
+                    Notification notification = Notification.builder()
+                            .userId(targetUserId)
+                            .customerId(customer.getId())
+                            .customerCode(customer.getCode())
+                            .title(notifTitle)
+                            .content(notifContent)
+                            .notificationType(isOverdue ? Notification.TYPE_PAYMENT_OVERDUE : Notification.TYPE_PAYMENT_DUE_SOON)
+                            .referenceType("INVOICE")
+                            .referenceId(inv.getId())
+                            .referenceCode(inv.getCode())
+                            .isRead(false)
+                            .createdAt(LocalDateTime.now(clock))
+                            .build();
+
+                    notificationRepository.save(notification);
+
+                    // Ghi nhật ký reminder log
+                    PaymentReminderLog rLog = reminderLogRepository.findByInvoiceIdAndReminderDate(inv.getId(), today).orElse(null);
+                    if (rLog == null) {
+                        rLog = PaymentReminderLog.builder()
+                                .invoiceId(inv.getId())
+                                .invoiceCode(inv.getCode())
+                                .customerId(customer.getId())
+                                .customerCode(customer.getCode() != null ? customer.getCode() : "")
+                                .customerName(customer.getName())
+                                .reminderType(isOverdue ? PaymentReminderLog.REMINDER_OVERDUE : PaymentReminderLog.REMINDER_BEFORE_DUE_3_DAYS)
+                                .reminderDate(today)
+                                .dueDate(dueDate != null ? dueDate : today)
+                                .daysDifference(daysDiff)
+                                .emailSent(false)
+                                .inAppSent(true)
+                                .recipientEmail(customer.getEmail())
+                                .sentAt(LocalDateTime.now(clock))
+                                .build();
+                    } else {
+                        rLog.setSentAt(LocalDateTime.now(clock));
+                        rLog.setInAppSent(true);
+                    }
+                    reminderLogRepository.save(rLog);
+
+                    if (StringUtils.hasText(customer.getEmail())) {
+                        try {
+                            emailService.sendPaymentDueReminderEmail(
+                                    customer.getEmail(),
+                                    customer.getName(),
+                                    inv.getCode(),
+                                    inv.getRemainingAmount(),
+                                    dueDate != null ? dueDate : today,
+                                    daysDiff,
+                                    isOverdue
+                            );
+                            rLog.setEmailSent(true);
+                            reminderLogRepository.save(rLog);
+                        } catch (Exception ex) {
+                            log.warn("S7-08: Không thể gửi email nhắc nợ tới {}: {}", customer.getEmail(), ex.getMessage());
+                        }
+                    }
+
+                    if (isOverdue) sentOverdue++;
+                    else sentDue++;
+                } catch (Exception ex) {
+                    errors++;
+                    log.error("S7-08: Lỗi gửi nhắc nợ thủ công cho hoá đơn {}: {}", inv.getCode(), ex.getMessage());
+                }
+            }
+        } else {
+            // Trường hợp có công nợ phát sinh từ đơn chưa xuất HĐ
+            Notification notification = Notification.builder()
+                    .userId(targetUserId)
+                    .customerId(customer.getId())
+                    .customerCode(customer.getCode())
+                    .title("[Nhắc thanh toán công nợ] Thông báo số dư công nợ phát sinh")
+                    .content(String.format("Kế toán gửi thông báo: Đại lý %s hiện đang có số dư công nợ phát sinh. Vui lòng kiểm tra sổ công nợ và hoàn tất thanh toán.", customer.getName()))
+                    .notificationType(Notification.TYPE_PAYMENT_DUE_SOON)
+                    .referenceType("CUSTOMER_DEBT")
+                    .referenceId(customer.getId())
+                    .referenceCode(customer.getCode())
+                    .isRead(false)
+                    .createdAt(LocalDateTime.now(clock))
+                    .build();
+
+            notificationRepository.save(notification);
+            sentDue++;
+        }
+
+        String msg = String.format("Đã gửi thông báo nhắc nợ thành công đến đại lý %s (%d hoá đơn)",
+                customer.getName(), sentDue + sentOverdue);
+        return new PaymentReminderRunResponse(today, unpaid.size(), sentDue, sentOverdue, 0, errors, msg);
+    }
+
+    /**
+     * S7-08: Gửi nhắc nợ cho tất cả các đại lý đang phát sinh công nợ hoá đơn.
+     */
+    @Transactional
+    public PaymentReminderRunResponse sendManualReminderToAll(UserDetailsImpl actor) {
+        LocalDate today = LocalDate.now(clock);
+        List<Invoice> unpaidInvoices = invoiceRepository.findUnpaidIssuedInvoicesWithCustomer();
+        java.util.Set<Long> customerIds = unpaidInvoices.stream()
+                .filter(inv -> inv.getCustomer() != null)
+                .map(inv -> inv.getCustomer().getId())
+                .collect(java.util.stream.Collectors.toSet());
+
+        int totalSentDue = 0;
+        int totalSentOverdue = 0;
+        int totalErrors = 0;
+
+        for (Long custId : customerIds) {
+            try {
+                PaymentReminderRunResponse res = sendManualReminderToCustomer(custId, actor);
+                totalSentDue += res.sentBeforeDueCount();
+                totalSentOverdue += res.sentOverdueCount();
+                totalErrors += res.errorCount();
+            } catch (Exception ex) {
+                totalErrors++;
+                log.error("S7-08: Lỗi gửi nhắc nợ cho đại lý {}: {}", custId, ex.getMessage());
+            }
+        }
+
+        String msg = String.format("Đã gửi nhắc nợ tới %d đại lý (%d hoá đơn trước hạn, %d quá hạn)",
+                customerIds.size(), totalSentDue, totalSentOverdue);
+        return new PaymentReminderRunResponse(today, unpaidInvoices.size(), totalSentDue, totalSentOverdue, 0, totalErrors, msg);
+    }
+
+    /**
      * Tự động đồng bộ và tạo thông báo nhắc nợ / quá hạn cho Đại lý đang đăng nhập khớp đúng dữ liệu thực tế.
      */
     @Transactional
