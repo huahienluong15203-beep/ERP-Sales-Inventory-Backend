@@ -479,6 +479,7 @@ public class PickingListService {
         }
 
         // S6-04: Đồng bộ số lô thực xuất và lý do đổi lô về các dòng đơn hàng
+        Set<SalesOrder> ordersToSave = new HashSet<>();
         for (PickingListItem item : pickingList.getItems()) {
             String chosenBatch = StringUtils.hasText(item.getActualBatchNumber())
                     ? item.getActualBatchNumber().trim()
@@ -497,19 +498,22 @@ public class PickingListService {
 
                 for (PickingListItemAllocation alloc : item.getAllocations()) {
                     SalesOrder order = alloc.getOrder();
-                    if (order != null && order.getLines() != null) {
-                        for (SalesOrderLine line : order.getLines()) {
+                    if (order != null && order.getLines() != null && item.getProduct() != null) {
+                        for (SalesOrderLine line : new ArrayList<>(order.getLines())) {
                             if (line.getProduct() != null && line.getProduct().getId().equals(item.getProduct().getId())) {
                                 line.setBatchNumber(chosenBatch);
                                 line.setSuggestedBatchNumber(item.getSuggestedBatchNumber());
                                 line.setLotChangeReason(item.getLotChangeReason());
                                 line.setLotExpiredDate(chosenExpiredDate);
-                                salesOrderRepository.save(order);
+                                ordersToSave.add(order);
                             }
                         }
                     }
                 }
             }
+        }
+        if (!ordersToSave.isEmpty()) {
+            salesOrderRepository.saveAll(ordersToSave);
         }
 
         String oldStatus = pickingList.getStatus();
