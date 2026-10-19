@@ -15,6 +15,8 @@ public interface PaymentReminderLogRepository extends JpaRepository<PaymentRemin
      */
     boolean existsByInvoiceIdAndReminderDate(Long invoiceId, LocalDate reminderDate);
 
+    java.util.Optional<PaymentReminderLog> findByInvoiceIdAndReminderDate(Long invoiceId, LocalDate reminderDate);
+
     List<PaymentReminderLog> findByInvoiceIdOrderBySentAtDesc(Long invoiceId);
 
     List<PaymentReminderLog> findByReminderDateOrderBySentAtDesc(LocalDate reminderDate);
