@@ -179,6 +179,7 @@ public class OrderQueryService {
                 o.getCreatedAt(),
                 hasShortage,
                 o.isBackorderOrder(),
-                o.getParentOrderCode());
+                o.getParentOrderCode(),
+                o.getPaymentMethod() != null ? o.getPaymentMethod() : SalesOrder.PAYMENT_METHOD_CREDIT);
     }
 }

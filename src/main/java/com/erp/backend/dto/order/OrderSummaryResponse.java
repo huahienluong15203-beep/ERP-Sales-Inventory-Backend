@@ -29,7 +29,33 @@ public record OrderSummaryResponse(
         Boolean hasShortage,
         // S6-05: đơn nợ hàng và đơn gốc của nó
         Boolean backorder,
-        String parentOrderCode) {
+        String parentOrderCode,
+        String paymentMethod) {
+
+    public OrderSummaryResponse(
+            Long id,
+            String code,
+            String status,
+            Long customerId,
+            String customerCode,
+            String customerName,
+            LocalDate desiredDeliveryDate,
+            int lineCount,
+            BigDecimal totalAmount,
+            String createdByUsername,
+            LocalDateTime updatedAt,
+            Long salesRepId,
+            String salesRepName,
+            Long regionId,
+            String regionName,
+            LocalDateTime createdAt,
+            Boolean hasShortage,
+            Boolean backorder,
+            String parentOrderCode) {
+        this(id, code, status, customerId, customerCode, customerName, desiredDeliveryDate,
+                lineCount, totalAmount, createdByUsername, updatedAt, salesRepId, salesRepName,
+                regionId, regionName, createdAt, hasShortage, backorder, parentOrderCode, "CREDIT");
+    }
 
     public OrderSummaryResponse(
             Long id,
@@ -50,6 +76,6 @@ public record OrderSummaryResponse(
             LocalDateTime createdAt) {
         this(id, code, status, customerId, customerCode, customerName, desiredDeliveryDate,
                 lineCount, totalAmount, createdByUsername, updatedAt, salesRepId, salesRepName,
-                regionId, regionName, createdAt, false, false, null);
+                regionId, regionName, createdAt, false, false, null, "CREDIT");
     }
 }

@@ -33,6 +33,9 @@ public class RouteCashCollectionRequest {
     @NotNull(message = "Vui lòng chọn ngày thu tiền")
     private LocalDate paymentDate;
 
+    @Size(max = 150, message = "Tên người nộp/tài xế không được vượt quá 150 ký tự")
+    private String payerName;
+
     @Size(max = 500, message = "Ghi chú không được vượt quá 500 ký tự")
     private String notes;
 
