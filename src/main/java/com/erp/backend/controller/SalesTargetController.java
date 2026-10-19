@@ -40,7 +40,7 @@ public class SalesTargetController {
 
     /** NV kinh doanh xem chỉ tiêu và doanh số của chính mình. Vd: ?period=2026-10 */
     @GetMapping("/my-progress")
-    @PreAuthorize("hasRole('SALES_REP')")
+    @PreAuthorize("hasAnyRole('SALES_REP', 'SALES_MANAGER', 'ADMIN')")
     public MySalesProgressResponse myProgress(@RequestParam(required = false) String period,
                                               @AuthenticationPrincipal UserDetailsImpl actor) {
         return salesTargetService.myProgress(period, actor);
