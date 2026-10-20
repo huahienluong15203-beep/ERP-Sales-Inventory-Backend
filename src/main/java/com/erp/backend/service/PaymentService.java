@@ -837,7 +837,10 @@ public class PaymentService {
                     r.getConfirmedByUsername(),
                     r.getRejectedAt(),
                     r.getRejectedByUsername(),
-                    r.getRejectionReason()
+                    r.getRejectionReason(),
+                    r.getCollectorId(),
+                    r.getCollectorName(),
+                    r.getCollectorUsername()
             ));
         }
 
