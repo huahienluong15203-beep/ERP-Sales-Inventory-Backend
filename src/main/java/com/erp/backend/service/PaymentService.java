@@ -52,6 +52,7 @@ public class PaymentService {
     private final CreditFlagService creditFlagService;
     private final AuditLogService auditLogService;
     private final UserRepository userRepository;
+    private final ReceiptImageStorageService receiptImageStorage;
 
     Clock clock = Clock.system(VN_ZONE);
 
@@ -172,7 +173,7 @@ public class PaymentService {
                 .note(StringUtils.hasText(request.getNotes()) ? request.getNotes().trim() : null)
                 .status(PaymentReceipt.STATUS_CONFIRMED)
                 .allocationType(allocationType)
-                .receiptImageUrl(request.getReceiptImageUrl())
+                .receiptImageUrl(isHttpUrl(request.getReceiptImageUrl()) ? request.getReceiptImageUrl().trim() : null)
                 .confirmedAt(now)
                 .confirmedByUsername(actor != null ? actor.getUsername() : null)
                 .createdAt(now)
@@ -456,6 +457,57 @@ public class PaymentService {
         return toReceiptResponse(receipt);
     }
 
+    /** S7-05: Ảnh biên lai của phiếu thu (quyền như xem phiếu thu). */
+    @Transactional(readOnly = true)
+    public ReceiptImageStorageService.LoadedFile getReceiptImage(Long id, UserDetailsImpl actor) {
+        PaymentReceipt receipt = paymentReceiptRepository.findById(id)
+                .orElseThrow(() -> BusinessException.notFound("Không tìm thấy phiếu thu"));
+        CustomerAccess.checkCanAccess(actor, receipt.getCustomer(), customerRepository);
+        if (!ReceiptImageStorageService.isStoredName(receipt.getReceiptImageUrl())) {
+            throw BusinessException.notFound("Phiếu thu " + receipt.getCode() + " không có ảnh biên lai lưu trên hệ thống");
+        }
+        return receiptImageStorage.load(receipt.getReceiptImageUrl());
+    }
+
+    /**
+     * Ảnh lưu trên hệ thống -> trả đường dẫn API xem ảnh (có kiểm quyền); đường dẫn http(s) cũ giữ nguyên;
+     * dữ liệu cũ không hợp lệ (base64 bị cắt...) -> null.
+     */
+    static String receiptImageUrl(PaymentReceipt r) {
+        String v = r.getReceiptImageUrl();
+        if (ReceiptImageStorageService.isStoredName(v)) {
+            return "/api/payments/" + r.getId() + "/image";
+        }
+        return isHttpUrl(v) ? v : null;
+    }
+
+    static boolean isHttpUrl(String v) {
+        return StringUtils.hasText(v) && v.length() <= 1000
+                && (v.startsWith("https://") || v.startsWith("http://"));
+    }
+
+    /**
+     * Lưu ảnh base64 thành tệp; nếu giao dịch lưu phiếu thu bị huỷ thì xoá tệp vừa ghi để không sót tệp mồ côi.
+     */
+    private String storeRouteReceiptImage(RouteCashCollectionRequest request) {
+        if (!StringUtils.hasText(request.getReceiptImageBase64())) {
+            return request.getReceiptImageUrl().trim();
+        }
+        String fileName = receiptImageStorage.storeDataUrl(request.getReceiptImageBase64());
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCompletion(int status) {
+                            if (status != STATUS_COMMITTED) {
+                                receiptImageStorage.deleteQuietly(fileName);
+                            }
+                        }
+                    });
+        }
+        return fileName;
+    }
+
     /**
      * S7-05: NVKD ghi nhận thu tiền tại tuyến kèm ảnh biên lai (trạng thái Chờ nộp).
      */
@@ -469,6 +521,12 @@ public class PaymentService {
         }
         if (request.getAmount() == null || request.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_AMOUNT", "Số tiền thu phải lớn hơn 0", "amount");
+        }
+
+        // AC S7-05: khoản thu tại cửa hàng phải kèm ảnh biên lai
+        if (!StringUtils.hasText(request.getReceiptImageBase64()) && !isHttpUrl(request.getReceiptImageUrl())) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "RECEIPT_IMAGE_REQUIRED",
+                    "Vui lòng chụp hoặc chọn ảnh biên lai thu tiền tại cửa hàng", "receiptImageBase64");
         }
 
         LocalDate today = LocalDate.now(clock);
@@ -495,8 +553,7 @@ public class PaymentService {
 
         LocalDateTime now = LocalDateTime.now(clock);
         String collectorName = actor != null && StringUtils.hasText(actor.getFullName()) ? actor.getFullName() : "Nhân viên kinh doanh";
-        String imageUrl = StringUtils.hasText(request.getReceiptImageUrl()) ? request.getReceiptImageUrl()
-                : (StringUtils.hasText(request.getReceiptImageBase64()) ? request.getReceiptImageBase64() : null);
+        String imageUrl = storeRouteReceiptImage(request);
 
         String payerName = StringUtils.hasText(request.getPayerName())
                 ? request.getPayerName().trim()
@@ -695,7 +752,7 @@ public class PaymentService {
                     r.getPaymentMethod(),
                     r.getPaymentDate(),
                     r.getNote(),
-                    r.getReceiptImageUrl(),
+                    receiptImageUrl(r),
                     r.getStatus(),
                     r.getCreatedAt(),
                     r.getConfirmedAt(),
@@ -800,7 +857,7 @@ public class PaymentService {
                 r.getCollectorId(),
                 r.getNote(),
                 r.getStatus(),
-                r.getReceiptImageUrl(),
+                receiptImageUrl(r),
                 r.getConfirmedAt(),
                 r.getConfirmedByUsername(),
                 r.getRejectedAt(),
