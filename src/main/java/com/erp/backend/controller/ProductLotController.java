@@ -49,7 +49,7 @@ public class ProductLotController {
             @Parameter(description = "Ngưỡng cảnh báo sắp hết hạn (ngày, mặc định 30)") @RequestParam(required = false, defaultValue = "30") Integer nearExpiryDays,
             @Parameter(description = "Số trang (bắt đầu từ 0)") @RequestParam(defaultValue = "0") int page,
             @Parameter(description = "Số bản ghi mỗi trang") @RequestParam(defaultValue = "20") int size,
-            @Parameter(description = "Sắp xếp theo trường (vd: expiredDate,asc)") @RequestParam(defaultValue = "expiredDate,asc") String sort,
+            @Parameter(description = "Sắp xếp theo trường (vd: id,desc)") @RequestParam(defaultValue = "id,desc") String sort,
             @AuthenticationPrincipal UserDetailsImpl actor) {
 
         String[] sortParts = sort.split(",");

@@ -96,7 +96,7 @@ public class WarehouseController {
     }
 
     @PostMapping("/api/warehouses/{warehouseId}/locations")
-    @PreAuthorize("hasAnyRole('ADMIN', 'WH_MANAGER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'WH_MANAGER', 'WAREHOUSE')")
     public ResponseEntity<WarehouseLocationResponse> createLocation(@PathVariable Long warehouseId,
                                                                     @Valid @RequestBody WarehouseLocationCreateRequest request,
                                                                     @AuthenticationPrincipal UserDetailsImpl actor) {
@@ -105,7 +105,7 @@ public class WarehouseController {
     }
 
     @PutMapping("/api/warehouses/{warehouseId}/locations/{locationId}")
-    @PreAuthorize("hasAnyRole('ADMIN', 'WH_MANAGER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'WH_MANAGER', 'WAREHOUSE')")
     public WarehouseLocationResponse updateLocation(@PathVariable Long warehouseId,
                                                     @PathVariable Long locationId,
                                                     @Valid @RequestBody WarehouseLocationUpdateRequest request,
@@ -114,7 +114,7 @@ public class WarehouseController {
     }
 
     @DeleteMapping("/api/warehouses/{warehouseId}/locations/{locationId}")
-    @PreAuthorize("hasAnyRole('ADMIN', 'WH_MANAGER')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'WH_MANAGER', 'WAREHOUSE')")
     public ResponseEntity<Void> deleteLocation(@PathVariable Long warehouseId,
                                                @PathVariable Long locationId,
                                                @RequestParam(required = false) String reason,
