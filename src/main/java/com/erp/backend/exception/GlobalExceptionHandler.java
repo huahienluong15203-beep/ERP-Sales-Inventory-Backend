@@ -91,7 +91,12 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ApiError> handleGeneric(Exception ex) {
+    public ResponseEntity<ApiError> handleGeneric(Exception ex) throws Exception {
+        if (ex instanceof org.springframework.security.access.AccessDeniedException
+                || ex instanceof org.springframework.security.authorization.AuthorizationDeniedException
+                || ex instanceof org.springframework.security.core.AuthenticationException) {
+            throw ex;
+        }
         ex.printStackTrace();
         String msg = ex.getMessage() != null ? ex.getMessage() : ex.toString();
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
