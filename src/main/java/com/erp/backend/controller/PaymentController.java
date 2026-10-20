@@ -145,6 +145,20 @@ public class PaymentController {
     }
 
     /**
+     * S7-02: Lập bút toán điều chỉnh cho phiếu thu đã ghi nhận.
+     * Quy tắc kế toán: Đã ghi nhận thì không xoá, chỉ lập bút toán điều chỉnh.
+     */
+    @PostMapping("/{id}/adjust")
+    @PreAuthorize("hasAnyRole('ACCOUNTANT', 'ADMIN')")
+    public ResponseEntity<PaymentReceiptResponse> adjustReceipt(
+            @PathVariable Long id,
+            @Valid @RequestBody com.erp.backend.dto.payment.PaymentAdjustmentRequest request,
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        PaymentReceiptResponse response = paymentService.adjustReceipt(id, request, actor);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
      * S7-05: Bảng đối chiếu tiền thu theo từng nhân viên và từng ngày.
      */
     @GetMapping("/reconciliation")

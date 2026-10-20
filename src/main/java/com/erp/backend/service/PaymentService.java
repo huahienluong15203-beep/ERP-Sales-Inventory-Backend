@@ -628,6 +628,84 @@ public class PaymentService {
     }
 
     /**
+     * S7-02: Lập bút toán điều chỉnh cho phiếu thu đã ghi nhận.
+     * Quy tắc nghiệp vụ kế toán: Đã ghi nhận thì không xoá, chỉ lập bút toán điều chỉnh.
+     * Hoàn tác số tiền cấn trừ trên các hoá đơn liên quan và cập nhật trạng thái phiếu thu thành VOIDED.
+     */
+    @Transactional
+    public PaymentReceiptResponse adjustReceipt(Long receiptId, PaymentAdjustmentRequest request, UserDetailsImpl actor) {
+        if (!CustomerAccess.hasFullAccess(actor) || isOnlySalesManager(actor)) {
+            throw BusinessException.conflict("ADJUSTMENT_ACCOUNTANT_ONLY",
+                    "Chỉ kế toán công nợ hoặc quản trị viên mới có quyền lập bút toán điều chỉnh", null);
+        }
+
+        PaymentReceipt receipt = paymentReceiptRepository.findById(receiptId)
+                .orElseThrow(() -> BusinessException.notFound("Không tìm thấy phiếu thu cần lập bút toán điều chỉnh"));
+
+        if (PaymentReceipt.STATUS_VOIDED.equals(receipt.getStatus())) {
+            throw BusinessException.badRequest("ALREADY_VOIDED", "Phiếu thu này đã được lập bút toán điều chỉnh trước đó");
+        }
+
+        if (PaymentReceipt.STATUS_REJECTED.equals(receipt.getStatus())) {
+            throw BusinessException.badRequest("CANNOT_ADJUST_REJECTED", "Khoản thu đã bị từ chối, không thể lập bút toán điều chỉnh");
+        }
+
+        String reason = (request != null && StringUtils.hasText(request.getReason()))
+                ? request.getReason().trim()
+                : "Lập bút toán điều chỉnh hoàn tác phiếu thu";
+
+        LocalDateTime now = LocalDateTime.now(clock);
+
+        // Nếu phiếu đã CONFIRMED (đã cấn trừ công nợ): Hoàn tác lại công nợ trên các hoá đơn
+        if (PaymentReceipt.STATUS_CONFIRMED.equals(receipt.getStatus())) {
+            List<PaymentAllocation> allocations = receipt.getAllocations();
+            if (allocations != null && !allocations.isEmpty()) {
+                for (PaymentAllocation alloc : allocations) {
+                    Invoice inv = alloc.getInvoice();
+                    if (inv != null && alloc.getAllocatedAmount() != null && alloc.getAllocatedAmount().compareTo(BigDecimal.ZERO) > 0) {
+                        inv.revertPayment(alloc.getAllocatedAmount());
+                        invoiceRepository.save(inv);
+                    }
+                }
+            }
+        }
+
+        String oldStatus = receipt.getStatus();
+        receipt.setStatus(PaymentReceipt.STATUS_VOIDED);
+        receipt.setAdjustedAt(now);
+        receipt.setAdjustedByUsername(actor != null ? actor.getUsername() : null);
+        receipt.setAdjustedById(actor != null ? actor.getId() : null);
+        receipt.setAdjustmentReason(reason);
+        if (!StringUtils.hasText(receipt.getRejectionReason())) {
+            receipt.setRejectionReason("Bút toán điều chỉnh: " + reason);
+        }
+
+        PaymentReceipt saved = paymentReceiptRepository.save(receipt);
+
+        try {
+            if (saved.getCustomer() != null) {
+                creditFlagService.reevaluate(saved.getCustomer().getId(), "PAYMENT_ADJUSTMENT");
+            }
+        } catch (Exception e) {
+            log.warn("Lỗi khi đánh giá lại cờ công nợ sau khi điều chỉnh phiếu thu: {}", e.getMessage());
+        }
+
+        auditLogService.record(
+                AuditModule.INVOICE,
+                "ADJUST_PAYMENT_RECEIPT",
+                "PAYMENT_RECEIPT",
+                saved.getId(),
+                saved.getCode(),
+                oldStatus,
+                PaymentReceipt.STATUS_VOIDED,
+                "Lập bút toán điều chỉnh hoàn tác phiếu thu " + saved.getCode() + ". Lý do: " + reason,
+                actor
+        );
+
+        return toReceiptResponse(saved);
+    }
+
+    /**
      * S7-05: Bảng đối chiếu tiền thu theo từng nhân viên và từng ngày (hoặc kỳ).
      */
     @Transactional(readOnly = true)
