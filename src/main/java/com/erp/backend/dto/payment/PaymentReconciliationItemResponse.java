@@ -22,5 +22,8 @@ public record PaymentReconciliationItemResponse(
         String confirmedByUsername,
         LocalDateTime rejectedAt,
         String rejectedByUsername,
-        String rejectionReason) {
+        String rejectionReason,
+        Long collectorId,
+        String collectorName,
+        String collectorUsername) {
 }
