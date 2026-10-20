@@ -176,11 +176,11 @@ class StockMovementServiceTest {
         assertThat(content.get(1).balanceAfter()).isEqualByComparingTo("250");
         assertThat(content.get(1).docCode()).isEqualTo("PNK-202610-001");
 
-        // Sắp theo thời gian tăng dần rồi id
+        // Sắp theo thời gian mới nhất lên trước (DESC) rồi id
         ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
         verify(movementRepository).findAll(any(Specification.class), pageable.capture());
-        assertThat(pageable.getValue().getSort().getOrderFor("movementAt").isAscending()).isTrue();
-        assertThat(pageable.getValue().getSort().getOrderFor("id").isAscending()).isTrue();
+        assertThat(pageable.getValue().getSort().getOrderFor("movementAt").isDescending()).isTrue();
+        assertThat(pageable.getValue().getSort().getOrderFor("id").isDescending()).isTrue();
     }
 
     @Test

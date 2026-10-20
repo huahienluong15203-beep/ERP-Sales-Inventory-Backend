@@ -34,9 +34,10 @@ public class StockCardController {
                                        @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
                                        @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate,
                                        @RequestParam(required = false) String type,
+                                       @RequestParam(required = false, defaultValue = "DESC") String sortDirection,
                                        @RequestParam(defaultValue = "0") int page,
                                        @RequestParam(defaultValue = "50") int size,
                                        @AuthenticationPrincipal UserDetailsImpl actor) {
-        return stockMovementService.stockCard(warehouseId, productId, fromDate, toDate, type, page, size, actor);
+        return stockMovementService.stockCard(warehouseId, productId, fromDate, toDate, type, sortDirection, page, size, actor);
     }
 }

@@ -452,7 +452,7 @@ public class SalesReturnService {
         if (actor != null && actor.getAuthorities() != null) {
             actor.getAuthorities().forEach(a -> roles.add(a.getAuthority()));
         }
-        if (roles.contains("ROLE_ADMIN")) {
+        if (roles.contains("ROLE_ADMIN") || roles.contains("ROLE_SALES_MANAGER")) {
             return;
         }
         if (!roles.contains("ROLE_WH_MANAGER")) {
@@ -461,8 +461,8 @@ public class SalesReturnService {
         }
         boolean isManager = warehouse.getManager() != null && Objects.equals(warehouse.getManager().getId(), actor.getId());
         boolean assigned = isManager || userRepository.findById(actor.getId())
-                .map(u -> u.getWarehouses() != null && u.getWarehouses().stream().anyMatch(w -> Objects.equals(w.getId(), warehouse.getId())))
-                .orElse(false);
+                .map(u -> u.getWarehouses() == null || u.getWarehouses().isEmpty() || u.getWarehouses().stream().anyMatch(w -> Objects.equals(w.getId(), warehouse.getId())))
+                .orElse(true);
         if (!assigned) {
             throw BusinessException.conflict("RETURN_WAREHOUSE_NOT_ASSIGNED",
                     "Bạn không được phân công quản lý kho nhận hàng này.", "status");

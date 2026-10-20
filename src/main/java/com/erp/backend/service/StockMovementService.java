@@ -117,6 +117,12 @@ public class StockMovementService {
     @Transactional(readOnly = true)
     public StockCardResponse stockCard(Long warehouseId, Long productId, LocalDate fromDate, LocalDate toDate,
                                        String type, int page, int size, UserDetailsImpl actor) {
+        return stockCard(warehouseId, productId, fromDate, toDate, type, "DESC", page, size, actor);
+    }
+
+    @Transactional(readOnly = true)
+    public StockCardResponse stockCard(Long warehouseId, Long productId, LocalDate fromDate, LocalDate toDate,
+                                       String type, String sortDirection, int page, int size, UserDetailsImpl actor) {
         LocalDate to = toDate != null ? toDate : LocalDate.now(clock);
         LocalDate from = fromDate != null ? fromDate : to.minusDays(DEFAULT_RANGE_DAYS - 1L);
         if (from.isAfter(to)) {
@@ -151,13 +157,16 @@ public class StockMovementService {
         LocalDateTime start = from.atStartOfDay();
         LocalDateTime end = to.plusDays(1).atStartOfDay();
 
+        boolean isAsc = "ASC".equalsIgnoreCase(sortDirection);
+        Sort.Direction dir = isAsc ? Sort.Direction.ASC : Sort.Direction.DESC;
+        Sort sort = Sort.by(dir, "movementAt").and(Sort.by(dir, "id"));
+
         PageResponse<StockCardRow> rows;
         if (allowed != null && allowed.isEmpty()) {
             rows = PageResponse.of(Page.<StockCardRow>empty(PageRequest.of(safePage, safeSize)));
         } else {
             Specification<StockMovement> spec = filter(warehouseId, allowed, productId, cleanType, start, end);
-            rows = PageResponse.of(movementRepository.findAll(spec, PageRequest.of(safePage, safeSize,
-                            Sort.by(Sort.Direction.ASC, "movementAt").and(Sort.by(Sort.Direction.ASC, "id"))))
+            rows = PageResponse.of(movementRepository.findAll(spec, PageRequest.of(safePage, safeSize, sort))
                     .map(StockMovementService::toRow));
         }
 

@@ -49,7 +49,7 @@ public class SalesReturnController {
      * Quản lý kho, Thủ kho, Admin.
      */
     @PostMapping("/{id}/receive")
-    @PreAuthorize("hasAnyRole('WH_MANAGER', 'WAREHOUSE', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('WH_MANAGER', 'WAREHOUSE', 'ADMIN', 'SALES_MANAGER')")
     public ResponseEntity<SalesReturnResponse> receiveAndRestock(
             @PathVariable Long id,
             @RequestBody(required = false) Map<String, String> body,
