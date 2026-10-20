@@ -23,7 +23,7 @@ public interface SalesTargetRepository extends JpaRepository<SalesTarget, Long> 
 
     boolean existsByPeriodMonthAndTargetKey(LocalDate periodMonth, String targetKey);
 
-    @Query("select t from SalesTarget t left join fetch t.salesRep left join fetch t.region "
+    @Query("select distinct t from SalesTarget t left join fetch t.salesRep rep left join fetch rep.regions left join fetch t.region "
             + "where t.periodMonth = :period order by t.targetType, t.id")
     List<SalesTarget> findByPeriod(@Param("period") LocalDate period);
 

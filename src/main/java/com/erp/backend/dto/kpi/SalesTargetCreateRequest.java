@@ -31,6 +31,8 @@ public class SalesTargetCreateRequest {
 
     private Long regionId;
 
+    private String region;
+
     @NotNull(message = "Vui lòng nhập chỉ tiêu doanh số")
     private BigDecimal targetAmount;
 

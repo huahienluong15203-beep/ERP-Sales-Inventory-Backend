@@ -28,6 +28,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * S8-04: Chỉ tiêu doanh số tháng theo NV kinh doanh và theo khu vực.
@@ -76,6 +77,7 @@ public class SalesTargetService {
                 regionIds.add(t.getRegion().getId());
             }
         }
+
         Map<Long, BigDecimal> byRep = repIds.isEmpty() ? new HashMap<>() : toMap(targetRepository.sumSalesByRep(
                 SALES_STATUSES, ym.atDay(1).atStartOfDay(), ym.plusMonths(1).atDay(1).atStartOfDay(), repIds));
         Map<Long, BigDecimal> byRegion = regionIds.isEmpty() ? new HashMap<>() : toMap(targetRepository.sumSalesByRegion(
@@ -158,11 +160,20 @@ public class SalesTargetService {
             }
             refId = rep.getId();
         } else {
+            if (req.getRegionId() == null && StringUtils.hasText(req.getRegion())) {
+                String cleanName = req.getRegion().replace("Khu vực ", "").trim();
+                region = regionRepository.findByNameIgnoreCase(cleanName).orElse(null);
+                if (region != null) {
+                    req.setRegionId(region.getId());
+                }
+            }
             if (req.getRegionId() == null) {
                 throw new BusinessException(HttpStatus.BAD_REQUEST, "REGION_REQUIRED", "Vui lòng chọn khu vực", "regionId");
             }
-            region = regionRepository.findById(req.getRegionId())
-                    .orElseThrow(() -> BusinessException.notFound("Không tìm thấy khu vực"));
+            if (region == null) {
+                region = regionRepository.findById(req.getRegionId())
+                        .orElseThrow(() -> BusinessException.notFound("Không tìm thấy khu vực"));
+            }
             if (!"ACTIVE".equalsIgnoreCase(region.getStatus())) {
                 throw new BusinessException(HttpStatus.BAD_REQUEST, "REGION_INACTIVE", "Khu vực đang ngừng hoạt động", "regionId");
             }
@@ -171,7 +182,7 @@ public class SalesTargetService {
         String key = SalesTarget.keyOf(type, refId);
         if (targetRepository.existsByPeriodMonthAndTargetKey(ym.atDay(1), key)) {
             throw BusinessException.conflict("TARGET_EXISTS",
-                    "Tháng " + ym.format(PERIOD_FORMAT) + " đã có chỉ tiêu cho đối tượng này, hãy sửa chỉ tiêu cũ", "period");
+                    "Đã tồn tại chỉ tiêu cho đối tượng này trong kỳ " + ym.format(PERIOD_FORMAT), null);
         }
         SalesTarget saved = targetRepository.save(SalesTarget.builder()
                 .periodMonth(ym.atDay(1))
@@ -199,8 +210,8 @@ public class SalesTargetService {
         String note = cleanText(req.getNote(), "note");
         SalesTarget t = targetRepository.findByIdForUpdate(id)
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy chỉ tiêu"));
-        assertOpen(YearMonth.from(t.getPeriodMonth()));
 
+        assertOpen(YearMonth.from(t.getPeriodMonth()));
         String before = plain(t.getTargetAmount()) + (t.getNote() != null ? " | " + t.getNote() : "");
         t.setTargetAmount(amount);
         t.setNote(note);
@@ -283,7 +294,7 @@ public class SalesTargetService {
     private static String requireReason(String reason) {
         String r = reason != null ? reason.trim() : "";
         if (!StringUtils.hasText(r)) {
-            throw new BusinessException(HttpStatus.BAD_REQUEST, "REASON_REQUIRED", "Bắt buộc nhập lý do", "reason");
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "REASON_REQUIRED", "Bắt buộc nhập lý do điều chỉnh", "reason");
         }
         if (r.length() > MAX_TEXT) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "REASON_TOO_LONG", "Lý do tối đa " + MAX_TEXT + " ký tự", "reason");
@@ -328,16 +339,44 @@ public class SalesTargetService {
     }
 
     private SalesTargetResponse toResponse(SalesTarget t, BigDecimal actual, boolean locked) {
-        return new SalesTargetResponse(t.getId(), t.getPeriodMonth().format(PERIOD_FORMAT), t.getTargetType(),
+        String repCode = t.getSalesRep() != null ? t.getSalesRep().getUsername() : null;
+        String repName = t.getSalesRep() != null ? t.getSalesRep().getFullName() : null;
+        Long regionId = t.getRegion() != null ? t.getRegion().getId() : null;
+        String regionName = t.getRegion() != null ? t.getRegion().getName() : null;
+
+        if (SalesTarget.TYPE_REP.equals(t.getTargetType()) && t.getSalesRep() != null) {
+            if (regionName == null && t.getSalesRep().getRegions() != null && !t.getSalesRep().getRegions().isEmpty()) {
+                regionName = t.getSalesRep().getRegions().stream()
+                        .map(Region::getName)
+                        .sorted()
+                        .collect(Collectors.joining(", "));
+            }
+        }
+
+        BigDecimal act = actual != null ? money(actual) : BigDecimal.ZERO;
+        BigDecimal pct = percent(act, t.getTargetAmount());
+        if (pct == null) {
+            pct = BigDecimal.ZERO;
+        }
+        BigDecimal rem = remaining(act, t.getTargetAmount());
+
+        return new SalesTargetResponse(
+                t.getId(),
+                t.getPeriodMonth().format(PERIOD_FORMAT),
+                t.getTargetType(),
                 t.getSalesRep() != null ? t.getSalesRep().getId() : null,
-                t.getSalesRep() != null ? t.getSalesRep().getFullName() : null,
-                t.getRegion() != null ? t.getRegion().getId() : null,
-                t.getRegion() != null ? t.getRegion().getName() : null,
+                repCode,
+                repName,
+                regionId,
+                regionName,
                 t.getTargetAmount(),
-                actual != null ? money(actual) : null,
-                actual != null ? percent(actual, t.getTargetAmount()) : null,
-                actual != null ? remaining(actual, t.getTargetAmount()) : null,
-                locked, t.getNote(), t.getUpdatedAt(), t.getUpdatedByUsername());
+                act,
+                pct,
+                rem,
+                locked,
+                t.getNote(),
+                t.getUpdatedAt(),
+                t.getUpdatedByUsername());
     }
 
     /** % hoàn thành 1 số lẻ; chưa có chỉ tiêu -> null. */
