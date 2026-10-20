@@ -38,4 +38,8 @@ public interface PickingListRepository extends JpaRepository<PickingList, Long>,
             "WHERE plo.order.id IN :orderIds AND plo.pickingList.status IN :statuses")
     List<Long> findOrderIdsInActivePickingList(@Param("orderIds") Collection<Long> orderIds,
                                               @Param("statuses") Collection<String> statuses);
+    @Query("SELECT plo.pickingList FROM PickingListOrder plo " +
+            "WHERE plo.order.id = :orderId AND plo.pickingList.status IN :statuses ORDER BY plo.pickingList.id DESC")
+    List<PickingList> findPickingListsByOrderId(@Param("orderId") Long orderId,
+                                                @Param("statuses") Collection<String> statuses);
 }

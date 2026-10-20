@@ -51,6 +51,7 @@ public class DeliveryTripService {
     private final InventoryService inventoryService;
     private final StockLedgerService stockLedgerService;
     private final AuditLogService auditLogService;
+    private final OrderStatusService orderStatusService;
 
     Clock clock = Clock.system(VN_ZONE);
 
@@ -88,9 +89,9 @@ public class DeliveryTripService {
         }
         Warehouse warehouse = null;
         for (SalesOrder o : orders) {
-            if (!SalesOrder.STATUS_DISPATCHED.equals(o.getStatus())) {
+            if (!SalesOrder.STATUS_DISPATCHED.equals(o.getStatus()) && !SalesOrder.STATUS_PICKING.equals(o.getStatus())) {
                 throw BusinessException.conflict("ORDER_NOT_DISPATCHED",
-                        "Đơn " + o.getCode() + " chưa xuất kho hoặc đã giao xong (trạng thái " + o.getStatus() + ")", "orderIds");
+                        "Đơn " + o.getCode() + " chưa xuất kho hoặc chưa hoàn tất soạn hàng (trạng thái " + o.getStatus() + ")", "orderIds");
             }
             if (o.getDeliveryTrip() != null) {
                 throw BusinessException.conflict("ORDER_ALREADY_ON_TRIP",
@@ -121,6 +122,20 @@ public class DeliveryTripService {
                 .note(note)
                 .createdByUsername(actor != null ? actor.getUsername() : null)
                 .build());
+
+        // Nếu đơn hàng còn ở trạng thái PICKING (đã soạn xong chờ xếp xe), tự động xuất kho & trừ tồn lô
+        boolean hasPicking = false;
+        for (SalesOrder o : orders) {
+            if (SalesOrder.STATUS_PICKING.equals(o.getStatus())) {
+                orderStatusService.transitionStatus(o.getId(), SalesOrder.STATUS_DISPATCHED,
+                        "Tự động xuất kho khi xếp chuyến giao hàng " + trip.getCode(), null, actor);
+                hasPicking = true;
+            }
+        }
+        if (hasPicking) {
+            orders = orderRepository.findAllById(ids);
+        }
+
         Map<Long, Integer> sequenceMap = new HashMap<>();
         if (req.getOrderIds() != null) {
             for (int i = 0; i < req.getOrderIds().size(); i++) {
@@ -355,7 +370,8 @@ public class DeliveryTripService {
                     "Bạn không được phân công kho chỉ định", null);
         }
 
-        List<SalesOrder> candidates = orderRepository.findCandidateOrdersWithDetails(SalesOrder.STATUS_DISPATCHED);
+        List<SalesOrder> candidates = orderRepository.findCandidateOrdersWithDetailsIn(
+                List.of(SalesOrder.STATUS_DISPATCHED, SalesOrder.STATUS_PICKING));
 
         // Lọc theo kho và quyền kho
         candidates = candidates.stream()
@@ -372,7 +388,7 @@ public class DeliveryTripService {
                     .toList();
         }
 
-        // Lọc theo từ khóa tìm kiếm (mã đơn, khách hàng, địa chỉ, người nhận, số điện thoại)
+        // Lọc theo từ khóa tìm kiếm (mã đơn, khách hàng, địa chỉ, người nhận, số điện thoại, khu vực, quận/huyện, tỉnh/thành)
         if (StringUtils.hasText(search)) {
             String kw = search.trim().toLowerCase(Locale.ROOT);
             candidates = candidates.stream().filter(o -> {
@@ -386,7 +402,13 @@ public class DeliveryTripService {
                 String phone = a != null && a.getReceiverPhone() != null ? a.getReceiverPhone().toLowerCase(Locale.ROOT)
                         : (c != null && c.getPhone() != null ? c.getPhone().toLowerCase(Locale.ROOT) : "");
                 String rName = a != null && a.getReceiverName() != null ? a.getReceiverName().toLowerCase(Locale.ROOT) : "";
-                return code.contains(kw) || cCode.contains(kw) || cName.contains(kw) || addr.contains(kw) || phone.contains(kw) || rName.contains(kw);
+                Region r = c != null ? c.getRegion() : null;
+                String regName = r != null && r.getName() != null ? r.getName().toLowerCase(Locale.ROOT) : "";
+                String district = extractDistrict(addr, regName).toLowerCase(Locale.ROOT);
+                String province = extractProvince(addr, regName).toLowerCase(Locale.ROOT);
+                return code.contains(kw) || cCode.contains(kw) || cName.contains(kw) || addr.contains(kw)
+                        || phone.contains(kw) || rName.contains(kw)
+                        || regName.contains(kw) || district.contains(kw) || province.contains(kw);
             }).toList();
         }
 

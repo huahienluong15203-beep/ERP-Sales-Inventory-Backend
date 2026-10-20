@@ -21,6 +21,8 @@ public class PickingItemUpdateRequest {
     @Schema(description = "Số lượng thực tế thủ kho đã lấy được")
     private BigDecimal pickedQuantity;
 
+    @com.fasterxml.jackson.annotation.JsonProperty("isPicked")
+    @com.fasterxml.jackson.annotation.JsonAlias({"isCompleted", "picked"})
     @Schema(description = "Đánh dấu đã hoàn thành lấy dòng hàng này (true/false)")
     private Boolean isPicked;
 

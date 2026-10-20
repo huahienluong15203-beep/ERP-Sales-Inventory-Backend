@@ -281,6 +281,21 @@ public class PickingListService {
         return mapToResponse(pickingList);
     }
 
+    /**
+     * Tìm phiếu soạn hàng đang hoạt động chứa đơn hàng cụ thể.
+     */
+    @Transactional(readOnly = true)
+    public PickingListResponse getPickingListByOrderId(Long orderId, UserDetailsImpl actor) {
+        List<PickingList> lists = pickingListRepository.findPickingListsByOrderId(
+                orderId, List.of(PickingList.STATUS_ASSIGNED, PickingList.STATUS_IN_PROGRESS, PickingList.STATUS_COMPLETED));
+        if (lists.isEmpty()) {
+            return null;
+        }
+        PickingList p = lists.get(0);
+        assertWarehouseAccess(p.getWarehouse() != null ? p.getWarehouse().getId() : null, actor);
+        return mapToResponse(p);
+    }
+
     // =========================================================================
     // 4. CẬP NHẬT TIẾN ĐỘ SOẠN HÀNG & RÀNG BUỘC SOẠN THIẾU (S6-03)
     // =========================================================================
@@ -616,7 +631,7 @@ public class PickingListService {
             if (!SalesOrder.STATUS_APPROVED.equals(o.getStatus()) && !SalesOrder.STATUS_PICKING.equals(o.getStatus())) {
                 throw BusinessException.badRequest("INVALID_ORDER_STATUS",
                         "Đơn hàng " + o.getCode() + " đang ở trạng thái " + o.getStatus()
-                                + ". Chỉ có thể soạn hàng cho đơn đã duyệt (APPROVED).");
+                                + ". Chỉ có thể soạn hàng cho đơn đã duyệt");
             }
         }
 

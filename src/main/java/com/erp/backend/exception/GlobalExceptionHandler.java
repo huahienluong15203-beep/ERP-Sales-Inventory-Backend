@@ -89,4 +89,12 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiError.of("MALFORMED_JSON", "Dữ liệu JSON gửi lên không đúng định dạng.", Map.of("error", "Định dạng JSON không hợp lệ")));
     }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ApiError> handleGeneric(Exception ex) {
+        ex.printStackTrace();
+        String msg = ex.getMessage() != null ? ex.getMessage() : ex.toString();
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ApiError.of("INTERNAL_ERROR", msg, Map.of("class", ex.getClass().getName())));
+    }
 }

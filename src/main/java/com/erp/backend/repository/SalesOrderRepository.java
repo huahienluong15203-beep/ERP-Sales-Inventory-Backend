@@ -189,6 +189,11 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, Long>, J
             + "where o.status = :status and o.deliveryTrip is null order by o.id asc")
     List<SalesOrder> findCandidateOrdersWithDetails(@Param("status") String status);
 
+    @Query("select o from SalesOrder o join fetch o.customer c left join fetch o.deliveryAddress a "
+            + "left join fetch c.region r left join fetch o.reservedWarehouse w "
+            + "where o.status in :statuses and o.deliveryTrip is null order by o.id asc")
+    List<SalesOrder> findCandidateOrdersWithDetailsIn(@Param("statuses") Collection<String> statuses);
+
     /** S6-05: mã các đơn nợ hàng tách ra từ đơn :parentId (theo thứ tự tạo). */
     @Query("select o.code from SalesOrder o where o.parentOrder.id = :parentId order by o.id")
     List<String> findBackorderCodes(@Param("parentId") Long parentId);

@@ -80,6 +80,9 @@ public class ReferenceDataInitializer implements CommandLineRunner {
     }
 
     private void seedInventories() {
+        if (inventoryRepository.count() > 0) {
+            return;
+        }
         List<Warehouse> warehouses = warehouseRepository.findAll();
         List<Product> products = productRepository.findAll();
 

@@ -37,6 +37,8 @@ public class PickingProgressUpdateRequest {
         @jakarta.validation.constraints.DecimalMin(value = "0", message = "Số lượng thực soạn không được âm")
         private BigDecimal pickedQuantity;
 
+        @com.fasterxml.jackson.annotation.JsonProperty("isPicked")
+        @com.fasterxml.jackson.annotation.JsonAlias({"isCompleted", "picked"})
         private Boolean isPicked;
 
         private String shortageReason;
