@@ -75,7 +75,9 @@ public class InventoryAgingReportService {
 
         // TC807-11: Validate tham số kiểu dữ liệu & giá trị hợp lệ
         Long requestedWhId = parseAndValidateLong(warehouseIdStr, "Mã kho");
-        Long filterCatId = parseAndValidateLong(categoryIdStr, "Mã nhóm hàng");
+        Set<Long> allowedCatIds = new HashSet<>();
+        Set<String> allowedCatNames = new HashSet<>();
+        resolveCategoryFilter(categoryIdStr, allowedCatIds, allowedCatNames);
         String validatedBracket = validateAgingBracket(agingBracketFilter);
 
         // TC807-14: Kiểm tra IDOR quyền kho của nhân viên kho
@@ -132,10 +134,14 @@ public class InventoryAgingReportService {
                 continue;
             }
 
-            // Lọc theo nhóm hàng nếu có
             ProductCategory cat = product.getProductCategory();
-            if (filterCatId != null) {
-                if (cat == null || !filterCatId.equals(cat.getId())) {
+            // Lọc theo nhóm hàng nếu có (hỗ trợ phân cấp cây nhóm hàng và danh mục theo tên/id)
+            if (!allowedCatIds.isEmpty() || !allowedCatNames.isEmpty()) {
+                Long catId = cat != null ? cat.getId() : null;
+                String catName = cat != null ? cat.getName() : product.getCategory();
+                boolean matches = (catId != null && allowedCatIds.contains(catId))
+                        || (catName != null && allowedCatNames.contains(catName.trim().toLowerCase()));
+                if (!matches) {
                     continue;
                 }
             }
@@ -683,5 +689,56 @@ public class InventoryAgingReportService {
             throw BusinessException.badRequest("INVALID_PARAM", "Nhóm tuổi hàng không hợp lệ: " + bracket);
         }
         return b;
+    }
+
+    /**
+     * Phân giải bộ lọc nhóm hàng theo ID hoặc tên, mở rộng toàn bộ cây con nếu là nhóm/ngành cha.
+     */
+    private void resolveCategoryFilter(String categoryIdStr, Set<Long> allowedIdsOut, Set<String> allowedNamesOut) {
+        if (!StringUtils.hasText(categoryIdStr) || "ALL".equalsIgnoreCase(categoryIdStr.trim())) {
+            return;
+        }
+        String catSearch = categoryIdStr.trim();
+        List<ProductCategory> allCats = categoryRepository.findAll();
+        ProductCategory targetCat = null;
+
+        try {
+            Long id = Long.parseLong(catSearch);
+            targetCat = allCats.stream().filter(c -> c.getId().equals(id)).findFirst().orElse(null);
+            if (targetCat == null) {
+                allowedIdsOut.add(id);
+                return;
+            }
+        } catch (NumberFormatException e) {
+            targetCat = allCats.stream()
+                    .filter(c -> c.getName().equalsIgnoreCase(catSearch) || c.getCode().equalsIgnoreCase(catSearch))
+                    .findFirst()
+                    .orElse(null);
+            if (targetCat == null) {
+                throw BusinessException.badRequest("INVALID_PARAM", "Mã nhóm hàng không hợp lệ: " + catSearch);
+            }
+        }
+
+        if (targetCat != null) {
+            Map<Long, List<ProductCategory>> childrenMap = new HashMap<>();
+            for (ProductCategory c : allCats) {
+                if (c.getParent() != null && c.getParent().getId() != null) {
+                    childrenMap.computeIfAbsent(c.getParent().getId(), k -> new ArrayList<>()).add(c);
+                }
+            }
+            Deque<ProductCategory> queue = new ArrayDeque<>();
+            queue.add(targetCat);
+            while (!queue.isEmpty()) {
+                ProductCategory curr = queue.poll();
+                allowedIdsOut.add(curr.getId());
+                if (curr.getName() != null) {
+                    allowedNamesOut.add(curr.getName().trim().toLowerCase());
+                }
+                List<ProductCategory> children = childrenMap.get(curr.getId());
+                if (children != null) {
+                    queue.addAll(children);
+                }
+            }
+        }
     }
 }

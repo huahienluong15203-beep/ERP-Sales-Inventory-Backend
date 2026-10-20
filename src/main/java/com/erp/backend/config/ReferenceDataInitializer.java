@@ -65,6 +65,9 @@ public class ReferenceDataInitializer implements CommandLineRunner {
 
         // Gắn kho mẫu cho các tài khoản nhân sự kho nếu chưa được gán
         seedUserWarehouseAssignments();
+
+        // Khởi tạo và đồng bộ dữ liệu mẫu luân chuyển kho & tuổi hàng (S8-07)
+        seedAgingTestData();
     }
 
     private void seedWarehouse(String code, String name, String address) {
@@ -184,6 +187,44 @@ public class ReferenceDataInitializer implements CommandLineRunner {
             }
         } catch (Exception e) {
             log.warn("Không thể tự động gắn kho mặc định qua SQL: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Khởi tạo dữ liệu mẫu đa dạng cho báo cáo luân chuyển kho & tuổi hàng (S8-07)
+     * Đảm bảo có đầy đủ các nhóm: Nhanh (<=30 ngày), Bình thường (31-60 ngày),
+     * Chậm luân chuyển (61-90 ngày), và Chôn vốn / Vốn đọng nguy hiểm (>90 ngày).
+     */
+    private void seedAgingTestData() {
+        try {
+            // Cập nhật ngày tạo của một số lô hàng để tạo đa dạng nhóm tuổi hàng
+            jdbcTemplate.update("UPDATE product_lots SET created_at = NOW() - INTERVAL '105 days', manufacture_date = CURRENT_DATE - INTERVAL '120 days' WHERE id = 5 OR (product_id = 3 AND warehouse_id = 1)");
+            jdbcTemplate.update("UPDATE product_lots SET created_at = NOW() - INTERVAL '125 days', manufacture_date = CURRENT_DATE - INTERVAL '140 days' WHERE id = 3 OR (product_id = 2 AND warehouse_id = 4)");
+            jdbcTemplate.update("UPDATE product_lots SET created_at = NOW() - INTERVAL '72 days', manufacture_date = CURRENT_DATE - INTERVAL '90 days' WHERE id = 6 OR (product_id = 3 AND warehouse_id = 3)");
+            jdbcTemplate.update("UPDATE product_lots SET created_at = NOW() - INTERVAL '85 days', manufacture_date = CURRENT_DATE - INTERVAL '100 days' WHERE id = 8 OR (product_id = 6 AND warehouse_id = 4)");
+            jdbcTemplate.update("UPDATE product_lots SET created_at = NOW() - INTERVAL '45 days', manufacture_date = CURRENT_DATE - INTERVAL '60 days' WHERE id = 1 OR (product_id = 2 AND warehouse_id = 2)");
+            jdbcTemplate.update("UPDATE product_lots SET created_at = NOW() - INTERVAL '50 days', manufacture_date = CURRENT_DATE - INTERVAL '65 days' WHERE id = 4 OR (product_id = 3 AND warehouse_id = 5)");
+
+            // Cập nhật tồn kho và thẻ kho cho các SKU không quản lý lô
+            // 1. SP-COCA-330 (id=1) tại Kho Miền Trung (id=4): Chôn vốn (>90 ngày, 110 ngày)
+            jdbcTemplate.update("UPDATE inventories SET created_at = NOW() - INTERVAL '110 days', updated_at = NOW() - INTERVAL '110 days' WHERE product_id = 1 AND warehouse_id = 4");
+            jdbcTemplate.update("UPDATE stock_movements SET movement_at = NOW() - INTERVAL '110 days' WHERE product_id = 1 AND warehouse_id = 4");
+
+            // 2. SP-AQUAFINA-500 (id=4) tại Kho Miền Trung (id=4): Chậm luân chuyển (61-90 ngày, 78 ngày)
+            jdbcTemplate.update("UPDATE inventories SET created_at = NOW() - INTERVAL '78 days', updated_at = NOW() - INTERVAL '78 days' WHERE product_id = 4 AND warehouse_id = 4");
+            jdbcTemplate.update("UPDATE stock_movements SET movement_at = NOW() - INTERVAL '78 days' WHERE product_id = 4 AND warehouse_id = 4");
+
+            // 3. SP-RED-BULL-250 (id=5) tại Kho Tổng Hà Nội (id=1): Bình thường (31-60 ngày, 40 ngày)
+            jdbcTemplate.update("UPDATE inventories SET created_at = NOW() - INTERVAL '40 days', updated_at = NOW() - INTERVAL '40 days' WHERE product_id = 5 AND warehouse_id = 1");
+            jdbcTemplate.update("UPDATE stock_movements SET movement_at = NOW() - INTERVAL '40 days' WHERE product_id = 5 AND warehouse_id = 1");
+
+            // 4. SP-PEPSI-330 (id=2) tại Kho Tổng Miền Bắc (id=3): Chậm luân chuyển (61-90 ngày, 68 ngày)
+            jdbcTemplate.update("UPDATE inventories SET created_at = NOW() - INTERVAL '68 days', updated_at = NOW() - INTERVAL '68 days' WHERE product_id = 2 AND warehouse_id = 3");
+            jdbcTemplate.update("UPDATE stock_movements SET movement_at = NOW() - INTERVAL '68 days' WHERE product_id = 2 AND warehouse_id = 3");
+
+            log.info("Khởi tạo và đồng bộ dữ liệu mẫu luân chuyển kho & tuổi hàng (S8-07) thành công.");
+        } catch (Exception e) {
+            log.warn("Không thể seed dữ liệu aging test: {}", e.getMessage());
         }
     }
 }
