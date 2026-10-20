@@ -323,20 +323,28 @@ public class PickingListService {
                             + ") cho mặt hàng '" + item.getProductName() + "'.");
         }
 
-        // RÀNG BUỘC S6-03: Soạn thiếu bắt buộc nhập lý do
-        if (pickedQty.compareTo(requestedQty) < 0) {
+        // RÀNG BUỘC S6-03: Soạn thiếu bắt buộc nhập lý do khi đánh dấu hoàn thành dòng hàng
+        if (Boolean.TRUE.equals(request.getIsPicked()) && pickedQty.compareTo(requestedQty) < 0) {
             if (!StringUtils.hasText(request.getShortageReason()) || request.getShortageReason().trim().length() < 5) {
                 throw BusinessException.badRequest("SHORTAGE_REASON_REQUIRED",
                         "Số lượng thực soạn (" + pickedQty + ") nhỏ hơn số lượng yêu cầu (" + requestedQty
                                 + ") cho mặt hàng '" + item.getProductName() + "'. Bắt buộc nhập lý do soạn thiếu (tối thiểu 5 ký tự).");
             }
             item.setShortageReason(request.getShortageReason().trim());
+        } else if (pickedQty.compareTo(requestedQty) >= 0) {
+            item.setShortageReason(null);
+        } else if (StringUtils.hasText(request.getShortageReason())) {
+            item.setShortageReason(request.getShortageReason().trim());
         } else {
             item.setShortageReason(null);
         }
 
         item.setPickedQuantity(pickedQty);
-        item.setIsPicked(Boolean.TRUE.equals(request.getIsPicked()) || pickedQty.compareTo(BigDecimal.ZERO) > 0);
+        if (request.getIsPicked() != null) {
+            item.setIsPicked(request.getIsPicked());
+        } else {
+            item.setIsPicked(pickedQty.compareTo(requestedQty) >= 0);
+        }
         if (StringUtils.hasText(request.getActualBatchNumber())) {
             validateAndApplyBatchNumber(item, pickingList.getWarehouse(), request.getActualBatchNumber(), request.getLotChangeReason());
         }
@@ -397,19 +405,28 @@ public class PickingListService {
                                 + " / " + item.getRequestedQuantity() + ").");
             }
 
-            if (picked.compareTo(item.getRequestedQuantity()) < 0) {
+            // RÀNG BUỘC S6-03: Soạn thiếu bắt buộc nhập lý do khi đánh dấu hoàn thành dòng hàng
+            if (Boolean.TRUE.equals(progress.getIsPicked()) && picked.compareTo(item.getRequestedQuantity()) < 0) {
                 if (!StringUtils.hasText(progress.getShortageReason()) || progress.getShortageReason().trim().length() < 5) {
                     throw BusinessException.badRequest("SHORTAGE_REASON_REQUIRED",
                             "Mặt hàng '" + item.getProductName() + "' soạn thiếu (" + picked + " / "
                                     + item.getRequestedQuantity() + "). Bắt buộc nhập lý do soạn thiếu (tối thiểu 5 ký tự).");
                 }
                 item.setShortageReason(progress.getShortageReason().trim());
+            } else if (picked.compareTo(item.getRequestedQuantity()) >= 0) {
+                item.setShortageReason(null);
+            } else if (StringUtils.hasText(progress.getShortageReason())) {
+                item.setShortageReason(progress.getShortageReason().trim());
             } else {
                 item.setShortageReason(null);
             }
 
             item.setPickedQuantity(picked);
-            item.setIsPicked(Boolean.TRUE.equals(progress.getIsPicked()) || picked.compareTo(BigDecimal.ZERO) > 0);
+            if (progress.getIsPicked() != null) {
+                item.setIsPicked(progress.getIsPicked());
+            } else {
+                item.setIsPicked(picked.compareTo(item.getRequestedQuantity()) >= 0);
+            }
             if (StringUtils.hasText(progress.getActualBatchNumber())) {
                 validateAndApplyBatchNumber(item, pickingList.getWarehouse(), progress.getActualBatchNumber(), progress.getLotChangeReason());
             }
