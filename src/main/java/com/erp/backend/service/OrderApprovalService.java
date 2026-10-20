@@ -15,6 +15,7 @@ import com.erp.backend.security.UserDetailsImpl;
 import jakarta.persistence.criteria.Join;
 import jakarta.persistence.criteria.Predicate;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
@@ -124,7 +125,7 @@ public class OrderApprovalService {
             order.setCreditExceededPercent(credit.creditLimit() != null && credit.creditLimit().signum() > 0
                     ? credit.exceededAmount().multiply(HUNDRED).divide(credit.creditLimit(), 2, RoundingMode.HALF_UP)
                     : null);
-        } else {
+        } else if (credit != null) {
             order.setCreditExceededAmount(null);
             order.setCreditExceededPercent(null);
         }
@@ -132,9 +133,19 @@ public class OrderApprovalService {
         OrderDraftService.updateBelowFloorViolations(order);
     }
 
+    /** Cập nhật lại các vi phạm hạn mức công nợ theo số liệu mới nhất của đại lý */
+    void refreshViolations(SalesOrder order) {
+        if (order.getCustomer() != null && creditService != null) {
+            CreditStatusResponse credit = creditService.evaluate(order.getCustomer(), order.getTotalAmount());
+            if (credit != null) {
+                applyViolations(order, credit);
+            }
+        }
+    }
+
     // ======================= DUYỆT =======================
 
-    @Transactional(readOnly = true)
+    @Transactional
     public PageResponse<PendingOrderResponse> pending(String keyword, int page, int size, UserDetailsImpl actor) {
         int safePage = Math.max(page, 0);
         int safeSize = size <= 0 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
@@ -156,8 +167,10 @@ public class OrderApprovalService {
             return cb.and(ps.toArray(new Predicate[0]));
         };
         // Đơn chờ lâu nhất lên đầu
-        return PageResponse.of(orderRepository.findAll(spec, PageRequest.of(safePage, safeSize,
-                        Sort.by(Sort.Direction.ASC, "submittedAt").and(Sort.by("id").ascending())))
+        Page<SalesOrder> pageResult = orderRepository.findAll(spec, PageRequest.of(safePage, safeSize,
+                Sort.by(Sort.Direction.ASC, "submittedAt").and(Sort.by("id").ascending())));
+        pageResult.getContent().forEach(this::refreshViolations);
+        return PageResponse.of(pageResult
                 .map(o -> new PendingOrderResponse(o.getId(), o.getCode(), o.getCustomer().getId(),
                         o.getCustomer().getCode(), o.getCustomer().getName(), o.getLines().size(), o.getTotalAmount(),
                         o.getSubmittedByUsername(), o.getSubmittedAt(), OrderApprovalReasons.of(o), o.getDesiredDeliveryDate())));
@@ -171,6 +184,7 @@ public class OrderApprovalService {
     @Transactional
     public OrderResponse approve(Long id, String comment, LocalDate confirmedDeliveryDate, UserDetailsImpl actor) {
         SalesOrder order = lockPending(id, actor);
+        refreshViolations(order);
         assertCanDecide(order, actor);
         String note = trimComment(comment, false);
         if (confirmedDeliveryDate != null) {
@@ -190,6 +204,7 @@ public class OrderApprovalService {
     public OrderResponse reject(Long id, String comment, UserDetailsImpl actor) {
         String note = trimComment(comment, true);
         SalesOrder order = lockPending(id, actor);
+        refreshViolations(order);
         assertCanDecide(order, actor);
         // S4-03: Giải phóng hàng giữ chỗ khi đơn hàng bị từ chối
         inventoryService.releaseReservedStock(order);
@@ -203,6 +218,7 @@ public class OrderApprovalService {
     public OrderResponse returnForEdit(Long id, String comment, UserDetailsImpl actor) {
         String note = trimComment(comment, true);
         SalesOrder order = lockPending(id, actor);
+        refreshViolations(order);
         assertCanDecide(order, actor);
         // S4-03: Giải phóng hàng giữ chỗ khi đơn được trả lại để sửa
         inventoryService.releaseReservedStock(order);
@@ -250,12 +266,12 @@ public class OrderApprovalService {
     }
 
     /**
-     * S4-10: QL kinh doanh quyết định mọi đơn chờ duyệt. NV kinh doanh chỉ xác nhận đơn đại lý tự đặt qua cổng
+     * S4-10: QL kinh doanh & Admin quyết định mọi đơn chờ duyệt. NV kinh doanh chỉ xác nhận đơn đại lý tự đặt qua cổng
      * của đại lý mình phụ trách (đã kiểm ở lockPending) và đơn đó không vượt hạn mức / không dưới giá sàn.
      * Trả 409 (không dùng 403 vì Frontend tự đăng xuất khi gặp 403).
      */
     static void assertCanDecide(SalesOrder order, UserDetailsImpl actor) {
-        if (hasRole(actor, "ROLE_SALES_MANAGER")) {
+        if (hasRole(actor, "ROLE_SALES_MANAGER") || hasRole(actor, "ROLE_ADMIN")) {
             return;
         }
         if (!SalesOrder.SOURCE_PORTAL.equals(order.getSource())) {

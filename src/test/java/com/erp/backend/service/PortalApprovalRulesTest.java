@@ -65,6 +65,8 @@ class PortalApprovalRulesTest {
                 .hasFieldOrPropertyWithValue("code", "ORDER_NEEDS_MANAGER");
         assertThatCode(() -> OrderApprovalService.assertCanDecide(o, actor(3, "ROLE_SALES_MANAGER")))
                 .doesNotThrowAnyException();
+        assertThatCode(() -> OrderApprovalService.assertCanDecide(o, actor(1, "ROLE_ADMIN")))
+                .doesNotThrowAnyException();
     }
 
     @Test

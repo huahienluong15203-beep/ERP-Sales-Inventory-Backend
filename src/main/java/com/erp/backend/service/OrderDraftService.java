@@ -788,10 +788,22 @@ public class OrderDraftService {
 
         int shortageLineCount = (int) lines.stream().filter(line -> Boolean.TRUE.equals(line.isShortage())).count();
         boolean hasShortage = shortageLineCount > 0;
-
-        // Đơn đã duyệt thì tiền đơn đã nằm trong công nợ hiện tại, chỉ tính cho đơn nháp
-        CreditStatusResponse credit = SalesOrder.STATUS_DRAFT.equals(o.getStatus())
+        // Đơn đã duyệt thì tiền đơn đã nằm trong công nợ hiện tại, chỉ tính cho đơn nháp hoặc chờ duyệt
+        boolean isDraft = SalesOrder.STATUS_DRAFT.equals(o.getStatus());
+        boolean isPending = SalesOrder.STATUS_PENDING_APPROVAL.equals(o.getStatus());
+        CreditStatusResponse credit = (isDraft || isPending) && creditService != null
                 ? creditService.evaluate(c, o.getTotalAmount()) : null;
+        if (isPending && credit != null) {
+            if (credit.exceedsLimit()) {
+                o.setCreditExceededAmount(credit.exceededAmount());
+                o.setCreditExceededPercent(credit.creditLimit() != null && credit.creditLimit().signum() > 0
+                        ? credit.exceededAmount().multiply(new BigDecimal("100")).divide(credit.creditLimit(), 2, RoundingMode.HALF_UP)
+                        : null);
+            } else {
+                o.setCreditExceededAmount(null);
+                o.setCreditExceededPercent(null);
+            }
+        }
         return new OrderResponse(o.getId(), o.getCode(), o.getStatus(), c.getId(), c.getCode(), c.getName(),
                 c.getCustomerGroup().name(), c.getCustomerGroup().getLabel(),
                 a == null ? null : new OrderResponse.DeliveryAddressInfo(a.getId(), a.getLabel(), a.getAddress(),

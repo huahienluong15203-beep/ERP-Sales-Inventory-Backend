@@ -61,6 +61,7 @@ class OrderApprovalServiceTest {
         order.addLine(line(new BigDecimal("10000"), new BigDecimal("9000"), "50", "500000"));
         lenient().when(orderRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(order));
         lenient().when(orderRepository.saveAndFlush(any(SalesOrder.class))).thenAnswer(inv -> inv.getArgument(0));
+        lenient().when(creditService.evaluate(any(), any())).thenReturn(credit(false, "10000000", "0"));
     }
 
     private static SalesOrderLine line(BigDecimal unitPrice, BigDecimal floor, String baseQty, String net) {
