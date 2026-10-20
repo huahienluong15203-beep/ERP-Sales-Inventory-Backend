@@ -41,6 +41,7 @@ class DeliveryTripServiceTest {
     @Mock private InventoryService inventoryService;
     @Mock private StockLedgerService stockLedgerService;
     @Mock private AuditLogService auditLogService;
+    @Mock private OrderStatusService orderStatusService;
 
     @InjectMocks private DeliveryTripService service;
 
@@ -118,8 +119,8 @@ class DeliveryTripServiceTest {
     @Test
     @DisplayName("S6-07: Đơn chưa xuất / đã trên chuyến khác / khác kho -> chặn, không lập chuyến")
     void create_invalidOrders() {
-        SalesOrder picking = order(101, SalesOrder.STATUS_PICKING, hn);
-        when(orderRepository.findAllByIdForUpdate(List.of(101L))).thenReturn(List.of(picking));
+        SalesOrder approved = order(101, SalesOrder.STATUS_APPROVED, hn);
+        when(orderRepository.findAllByIdForUpdate(List.of(101L))).thenReturn(List.of(approved));
         assertThatThrownBy(() -> service.create(createReq(101L), whManager))
                 .hasFieldOrPropertyWithValue("code", "ORDER_NOT_DISPATCHED");
 
@@ -344,7 +345,7 @@ class DeliveryTripServiceTest {
                 .receiverPhone("0977333444")
                 .build());
 
-        when(orderRepository.findCandidateOrdersWithDetails(SalesOrder.STATUS_DISPATCHED))
+        when(orderRepository.findCandidateOrdersWithDetailsIn(any()))
                 .thenReturn(List.of(o1, o2));
         when(stockLedgerService.allowedWarehouseIds(whManager)).thenReturn(null);
 
@@ -372,7 +373,7 @@ class DeliveryTripServiceTest {
     void getCandidateOrders_warehouseIsolation() {
         SalesOrder oHn = order(201, SalesOrder.STATUS_DISPATCHED, hn);
         SalesOrder oHcm = order(202, SalesOrder.STATUS_DISPATCHED, hcm);
-        when(orderRepository.findCandidateOrdersWithDetails(SalesOrder.STATUS_DISPATCHED))
+        when(orderRepository.findCandidateOrdersWithDetailsIn(any()))
                 .thenReturn(List.of(oHn, oHcm));
         UserDetailsImpl staffHn = actor(20, "ROLE_WAREHOUSE");
         when(stockLedgerService.allowedWarehouseIds(staffHn)).thenReturn(Set.of(1L));

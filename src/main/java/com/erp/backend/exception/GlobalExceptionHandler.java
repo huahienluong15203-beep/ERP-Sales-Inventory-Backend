@@ -66,6 +66,12 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
     public ResponseEntity<ApiError> handleDataIntegrity(org.springframework.dao.DataIntegrityViolationException ex) {
+        // Dữ liệu vượt độ dài cột (PostgreSQL 22001) không phải "trùng dữ liệu": báo đúng để người dùng sửa lại
+        String cause = ex.getMostSpecificCause() != null ? ex.getMostSpecificCause().getMessage() : null;
+        if (cause != null && cause.toLowerCase(java.util.Locale.ROOT).contains("value too long")) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(ApiError.of("DATA_TOO_LONG", "Có trường dữ liệu dài quá mức cho phép. Vui lòng rút gọn nội dung rồi thử lại.", Map.of()));
+        }
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ApiError.of("DATA_CONFLICT", "Dữ liệu bị trùng hoặc vừa được người khác cập nhật. Vui lòng tải lại và thử lại.", Map.of()));
     }
@@ -82,5 +88,13 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> handleNotReadable(org.springframework.http.converter.HttpMessageNotReadableException ex) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiError.of("MALFORMED_JSON", "Dữ liệu JSON gửi lên không đúng định dạng.", Map.of("error", "Định dạng JSON không hợp lệ")));
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ApiError> handleGeneric(Exception ex) {
+        ex.printStackTrace();
+        String msg = ex.getMessage() != null ? ex.getMessage() : ex.toString();
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ApiError.of("INTERNAL_ERROR", msg, Map.of("class", ex.getClass().getName())));
     }
 }

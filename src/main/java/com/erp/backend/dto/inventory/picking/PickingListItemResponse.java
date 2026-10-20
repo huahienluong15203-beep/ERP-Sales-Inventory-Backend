@@ -38,6 +38,8 @@ public class PickingListItemResponse {
     // Tiến độ soạn hàng
     private BigDecimal requestedQuantity;
     private BigDecimal pickedQuantity;
+    @com.fasterxml.jackson.annotation.JsonProperty("isPicked")
+    @com.fasterxml.jackson.annotation.JsonAlias({"isCompleted", "picked"})
     private Boolean isPicked;
     private String shortageReason;
     private String notes;

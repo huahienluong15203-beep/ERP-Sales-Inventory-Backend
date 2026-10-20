@@ -164,6 +164,31 @@ public class Invoice {
     }
 
     /**
+     * S7-02: Hoàn tác cấn trừ thanh toán khi lập bút toán điều chỉnh.
+     */
+    public void revertPayment(BigDecimal amount) {
+        if (amount == null || amount.signum() <= 0) {
+            return;
+        }
+        if (this.paidAmount == null) {
+            this.paidAmount = BigDecimal.ZERO;
+        }
+        if (this.remainingAmount == null) {
+            this.remainingAmount = BigDecimal.ZERO;
+        }
+        this.paidAmount = this.paidAmount.subtract(amount).max(BigDecimal.ZERO);
+        BigDecimal maxRemaining = this.totalAmount != null ? this.totalAmount : this.remainingAmount.add(amount);
+        this.remainingAmount = this.remainingAmount.add(amount).min(maxRemaining);
+        if (this.remainingAmount.compareTo(BigDecimal.ZERO) <= 0) {
+            this.paymentStatus = PAYMENT_STATUS_PAID;
+        } else if (this.paidAmount.compareTo(BigDecimal.ZERO) > 0) {
+            this.paymentStatus = PAYMENT_STATUS_PARTIALLY_PAID;
+        } else {
+            this.paymentStatus = PAYMENT_STATUS_UNPAID;
+        }
+    }
+
+    /**
      * S7-08: Hạn thanh toán hoá đơn = Ngày phát hành + Số ngày nợ tối đa của đại lý (mặc định 30 ngày).
      */
     public LocalDate calculateDueDate() {

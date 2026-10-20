@@ -123,6 +123,18 @@ public class PaymentReceipt {
     @Column(name = "rejection_reason", length = 500)
     private String rejectionReason;
 
+    @Column(name = "adjusted_at")
+    private LocalDateTime adjustedAt;
+
+    @Column(name = "adjusted_by_username", length = 50)
+    private String adjustedByUsername;
+
+    @Column(name = "adjusted_by_id")
+    private Long adjustedById;
+
+    @Column(name = "adjustment_reason", length = 500)
+    private String adjustmentReason;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

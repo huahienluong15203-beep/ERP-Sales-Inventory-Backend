@@ -82,6 +82,17 @@ public class PaymentController {
         return ResponseEntity.ok(response);
     }
 
+    /** S7-05: Xem ảnh biên lai thu tiền tại tuyến (quyền như xem phiếu thu, không phục vụ công khai). */
+    @GetMapping("/{id}/image")
+    public ResponseEntity<byte[]> receiptImage(@PathVariable Long id, @AuthenticationPrincipal UserDetailsImpl actor) {
+        com.erp.backend.service.ReceiptImageStorageService.LoadedFile f = paymentService.getReceiptImage(id, actor);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(f.contentType()))
+                .header(org.springframework.http.HttpHeaders.CACHE_CONTROL, "private, no-store")
+                .header("X-Content-Type-Options", "nosniff")
+                .body(f.content());
+    }
+
     /**
      * S7-09: Mẫu in phiếu thu (HTML, 2 liên); in hoặc "Lưu dưới dạng PDF" từ trình duyệt.
      * ?autoprint=true tự mở hộp thoại in. Quyền như xem phiếu thu.
@@ -141,6 +152,20 @@ public class PaymentController {
             @Valid @RequestBody(required = false) com.erp.backend.dto.payment.PaymentRejectRequest request,
             @AuthenticationPrincipal UserDetailsImpl actor) {
         PaymentReceiptResponse response = paymentService.rejectRouteCash(id, request, actor);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * S7-02: Lập bút toán điều chỉnh cho phiếu thu đã ghi nhận.
+     * Quy tắc kế toán: Đã ghi nhận thì không xoá, chỉ lập bút toán điều chỉnh.
+     */
+    @PostMapping("/{id}/adjust")
+    @PreAuthorize("hasAnyRole('ACCOUNTANT', 'ADMIN')")
+    public ResponseEntity<PaymentReceiptResponse> adjustReceipt(
+            @PathVariable Long id,
+            @Valid @RequestBody com.erp.backend.dto.payment.PaymentAdjustmentRequest request,
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        PaymentReceiptResponse response = paymentService.adjustReceipt(id, request, actor);
         return ResponseEntity.ok(response);
     }
 

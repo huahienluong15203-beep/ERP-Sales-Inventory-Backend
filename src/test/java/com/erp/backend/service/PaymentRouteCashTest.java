@@ -54,6 +54,7 @@ class PaymentRouteCashTest {
     @Mock private CustomerRepository customerRepository;
     @Mock private CreditFlagService creditFlagService;
     @Mock private AuditLogService auditLogService;
+    @Mock private ReceiptImageStorageService receiptImageStorage;
 
     @InjectMocks private PaymentService service;
 
@@ -120,6 +121,77 @@ class PaymentRouteCashTest {
         assertThat(res.receiptImageUrl()).isEqualTo("https://erp-storage.com/receipts/rc_101.jpg");
         // Chưa cấn trừ hoá đơn nợ khi đang ở trạng thái Chờ nộp
         assertThat(res.allocations()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("S7-05: Thu tiền tại tuyến không kèm ảnh biên lai -> 400 RECEIPT_IMAGE_REQUIRED, không cấp số phiếu")
+    void submitRouteCash_withoutImage_rejected() {
+        RouteCashCollectionRequest req = RouteCashCollectionRequest.builder()
+                .customerId(8L)
+                .amount(new BigDecimal("100000"))
+                .paymentMethod("CASH")
+                .paymentDate(TODAY)
+                .build();
+
+        assertThatThrownBy(() -> service.submitRouteCash(req, salesRep))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    BusinessException be = (BusinessException) ex;
+                    assertThat(be.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(be.getCode()).isEqualTo("RECEIPT_IMAGE_REQUIRED");
+                });
+        verify(sequenceRepository, never()).findForUpdate(anyInt());
+        verify(paymentReceiptRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("S7-05: Ảnh base64 được lưu thành tệp, phiếu thu chỉ giữ tên tệp và trả đường dẫn API xem ảnh")
+    void submitRouteCash_base64Image_storedAsFile() {
+        when(customerRepository.findById(8L)).thenReturn(Optional.of(cust));
+        when(sequenceRepository.findForUpdate(2026)).thenReturn(Optional.of(PaymentSequence.builder().seqYear(2026).lastNumber(0L).build()));
+        when(receiptImageStorage.storeDataUrl("data:image/jpeg;base64,/9j/AAAA")).thenReturn("rc_1_abcd1234.jpg");
+        when(paymentReceiptRepository.save(any(PaymentReceipt.class))).thenAnswer(i -> {
+            PaymentReceipt r = i.getArgument(0);
+            r.setId(11L);
+            return r;
+        });
+
+        RouteCashCollectionRequest req = RouteCashCollectionRequest.builder()
+                .customerId(8L)
+                .amount(new BigDecimal("100000"))
+                .paymentMethod("CASH")
+                .paymentDate(TODAY)
+                .receiptImageBase64("data:image/jpeg;base64,/9j/AAAA")
+                .build();
+
+        PaymentReceiptResponse res = service.submitRouteCash(req, salesRep);
+
+        verify(paymentReceiptRepository).save(argThat(r -> "rc_1_abcd1234.jpg".equals(r.getReceiptImageUrl())));
+        assertThat(res.receiptImageUrl()).isEqualTo("/api/payments/11/image");
+    }
+
+    @Test
+    @DisplayName("S7-05: Dữ liệu ảnh cũ không hợp lệ (không phải tệp hệ thống, không phải http) -> không trả ra ngoài")
+    void receiptImageUrl_legacyInvalidValue_hidden() {
+        PaymentReceipt r = PaymentReceipt.builder().id(12L).receiptImageUrl("data:image/png;base64,iVBORw0KGgo").build();
+        assertThat(PaymentService.receiptImageUrl(r)).isNull();
+        r.setReceiptImageUrl("https://cdn.example.com/a.jpg");
+        assertThat(PaymentService.receiptImageUrl(r)).isEqualTo("https://cdn.example.com/a.jpg");
+        r.setReceiptImageUrl("rc_1_abcd1234.png");
+        assertThat(PaymentService.receiptImageUrl(r)).isEqualTo("/api/payments/12/image");
+    }
+
+    @Test
+    @DisplayName("S7-05: Xem ảnh biên lai của phiếu không có ảnh lưu trên hệ thống -> 404")
+    void getReceiptImage_noStoredFile_notFound() {
+        PaymentReceipt r = PaymentReceipt.builder().id(13L).code("PT2026-000013").customer(cust)
+                .receiptImageUrl("https://cdn.example.com/a.jpg").build();
+        when(paymentReceiptRepository.findById(13L)).thenReturn(Optional.of(r));
+
+        assertThatThrownBy(() -> service.getReceiptImage(13L, accountant))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+        verifyNoInteractions(receiptImageStorage);
     }
 
     @Test

@@ -3,6 +3,7 @@ package com.erp.backend.service;
 import com.erp.backend.dto.payment.PaymentAllocationItemRequest;
 import com.erp.backend.dto.payment.PaymentReceiptCreateRequest;
 import com.erp.backend.dto.payment.PaymentReceiptResponse;
+import com.erp.backend.dto.payment.PaymentAdjustmentRequest;
 import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.*;
@@ -432,5 +433,84 @@ class PaymentServiceTest {
         assertThat(collectors.get(0).getUsername()).isEqualTo("ketoan1");
         assertThat(collectors.get(0).getFullName()).isEqualTo("Nguyễn Văn Kế Toán");
         assertThat(collectors.get(0).getRole()).isEqualTo("ROLE_ACCOUNTANT");
+    }
+
+    @Test
+    @DisplayName("TC-ADJUST-01: Lập bút toán điều chỉnh hoàn tác phiếu thu thành công")
+    void adjustReceipt_success() {
+        Invoice inv = Invoice.builder()
+                .id(101L)
+                .code("HD2026-000001")
+                .customer(cust)
+                .totalAmount(new BigDecimal("1000000.00"))
+                .paidAmount(new BigDecimal("400000.00"))
+                .remainingAmount(new BigDecimal("600000.00"))
+                .paymentStatus(Invoice.PAYMENT_STATUS_PARTIALLY_PAID)
+                .build();
+
+        PaymentReceipt receipt = PaymentReceipt.builder()
+                .id(50L)
+                .code("PT2026-000050")
+                .customer(cust)
+                .customerCode(cust.getCode())
+                .customerName(cust.getName())
+                .amount(new BigDecimal("400000.00"))
+                .paymentMethod("BANK_TRANSFER")
+                .paymentDate(TODAY)
+                .collectorName("Kế toán")
+                .status(PaymentReceipt.STATUS_CONFIRMED)
+                .build();
+
+        PaymentAllocation alloc = PaymentAllocation.builder()
+                .id(1L)
+                .paymentReceipt(receipt)
+                .invoice(inv)
+                .invoiceCode(inv.getCode())
+                .allocatedAmount(new BigDecimal("400000.00"))
+                .invoiceTotal(inv.getTotalAmount())
+                .remainingBefore(new BigDecimal("1000000.00"))
+                .remainingAfter(new BigDecimal("600000.00"))
+                .build();
+
+        receipt.addAllocation(alloc);
+
+        when(paymentReceiptRepository.findById(50L)).thenReturn(Optional.of(receipt));
+        when(paymentReceiptRepository.save(any(PaymentReceipt.class))).thenAnswer(i -> i.getArgument(0));
+
+        PaymentAdjustmentRequest req = PaymentAdjustmentRequest.builder()
+                .reason("Khách hàng khiếu nại chuyển sai số tiền")
+                .build();
+
+        PaymentReceiptResponse res = service.adjustReceipt(50L, req, accountant);
+
+        assertThat(res.status()).isEqualTo(PaymentReceipt.STATUS_VOIDED);
+        assertThat(receipt.getStatus()).isEqualTo(PaymentReceipt.STATUS_VOIDED);
+        assertThat(receipt.getAdjustmentReason()).isEqualTo("Khách hàng khiếu nại chuyển sai số tiền");
+        // Kiểm tra nợ hoá đơn được hoàn tác về ban đầu
+        assertThat(inv.getPaidAmount()).isEqualByComparingTo("0.00");
+        assertThat(inv.getRemainingAmount()).isEqualByComparingTo("1000000.00");
+        assertThat(inv.getPaymentStatus()).isEqualTo(Invoice.PAYMENT_STATUS_UNPAID);
+        verify(invoiceRepository).save(inv);
+        verify(creditFlagService).reevaluate(cust.getId(), "PAYMENT_ADJUSTMENT");
+    }
+
+    @Test
+    @DisplayName("TC-ADJUST-02: Phiếu đã lập bút toán điều chỉnh không cho điều chỉnh lại")
+    void adjustReceipt_alreadyVoided_throwsBadRequest() {
+        PaymentReceipt receipt = PaymentReceipt.builder()
+                .id(51L)
+                .code("PT2026-000051")
+                .customer(cust)
+                .amount(new BigDecimal("500000.00"))
+                .status(PaymentReceipt.STATUS_VOIDED)
+                .build();
+
+        when(paymentReceiptRepository.findById(51L)).thenReturn(Optional.of(receipt));
+
+        PaymentAdjustmentRequest req = PaymentAdjustmentRequest.builder().reason("Điều chỉnh tiếp").build();
+
+        assertThatThrownBy(() -> service.adjustReceipt(51L, req, accountant))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "ALREADY_VOIDED");
     }
 }

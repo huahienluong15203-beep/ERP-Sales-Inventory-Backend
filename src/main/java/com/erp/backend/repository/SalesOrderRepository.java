@@ -32,22 +32,31 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, Long>, J
     boolean existsByCustomer_Id(Long customerId);
 
     /**
+     * Tiền nợ của 1 dòng đơn chưa xuất hoá đơn: đã ghi nhận giao thiếu thì chỉ tính phần THỰC GIAO
+     * (tiền hàng - chiết khấu chia theo tỉ lệ số giao / số xuất, giống InvoiceService.buildLines), còn lại tính đủ dòng.
+     * Trước đây cộng o.totalAmount nên đơn giao thiếu bị tính nợ theo số đặt cho tới khi lập hoá đơn.
+     */
+    String LINE_DEBT = "case when l.deliveredQuantity is not null and l.quantity > 0 and l.deliveredQuantity < l.quantity "
+            + "then (l.grossAmount - l.discountAmount) * l.deliveredQuantity / l.quantity "
+            + "else (l.grossAmount - l.discountAmount) end";
+
+    /**
      * S4-02 / S7-07: Tổng tiền các đơn đang tính vào công nợ nhưng CHƯA xuất hoá đơn.
      * Đơn đã có hoá đơn thì công nợ tính theo số còn nợ của hoá đơn (đã trừ tiền thu), xem InvoiceRepository.
      */
-    @Query("select coalesce(sum(o.totalAmount), 0) from SalesOrder o "
+    @Query("select coalesce(sum(" + LINE_DEBT + "), 0) from SalesOrderLine l join l.order o "
             + "where o.customer.id = :customerId and o.status in :statuses and o.invoiceId is null")
     BigDecimal sumTotalAmountByCustomerAndStatuses(@Param("customerId") Long customerId,
                                                    @Param("statuses") Collection<String> statuses);
 
     /** S4-02 / S7-07: Như trên (đơn chưa xuất hoá đơn) theo danh sách đại lý (nạp công nợ hàng loạt cho danh sách). */
-    @Query("select o.customer.id, coalesce(sum(o.totalAmount), 0) from SalesOrder o "
+    @Query("select o.customer.id, coalesce(sum(" + LINE_DEBT + "), 0) from SalesOrderLine l join l.order o "
             + "where o.customer.id in :customerIds and o.status in :statuses and o.invoiceId is null group by o.customer.id")
     List<Object[]> sumTotalAmountByCustomerIdsAndStatuses(@Param("customerIds") Collection<Long> customerIds,
                                                            @Param("statuses") Collection<String> statuses);
 
     /** S4-02 / S7-07: Tổng tiền các đơn nợ CHƯA xuất hoá đơn đã quá hạn (duyệt trước mốc dueBefore). */
-    @Query("select coalesce(sum(o.totalAmount), 0) from SalesOrder o "
+    @Query("select coalesce(sum(" + LINE_DEBT + "), 0) from SalesOrderLine l join l.order o "
             + "where o.customer.id = :customerId and o.status in :statuses and o.approvedAt < :dueBefore "
             + "and o.invoiceId is null")
     BigDecimal sumOverdueAmount(@Param("customerId") Long customerId,
@@ -179,6 +188,11 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, Long>, J
             + "left join fetch c.region r left join fetch o.reservedWarehouse w "
             + "where o.status = :status and o.deliveryTrip is null order by o.id asc")
     List<SalesOrder> findCandidateOrdersWithDetails(@Param("status") String status);
+
+    @Query("select o from SalesOrder o join fetch o.customer c left join fetch o.deliveryAddress a "
+            + "left join fetch c.region r left join fetch o.reservedWarehouse w "
+            + "where o.status in :statuses and o.deliveryTrip is null order by o.id asc")
+    List<SalesOrder> findCandidateOrdersWithDetailsIn(@Param("statuses") Collection<String> statuses);
 
     /** S6-05: mã các đơn nợ hàng tách ra từ đơn :parentId (theo thứ tự tạo). */
     @Query("select o.code from SalesOrder o where o.parentOrder.id = :parentId order by o.id")

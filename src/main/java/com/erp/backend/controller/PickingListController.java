@@ -106,6 +106,17 @@ public class PickingListController {
         return ResponseEntity.ok(pickingListService.getPickingListById(id, actor));
     }
 
+    @GetMapping("/by-order/{orderId}")
+    @Operation(summary = "Tìm phiếu soạn hàng của một đơn hàng",
+            description = "Trả về phiếu soạn hàng đang hoạt động (ASSIGNED, IN_PROGRESS, COMPLETED) chứa đơn hàng này.")
+    @PreAuthorize("hasAnyRole('WAREHOUSE', 'WH_MANAGER', 'ADMIN', 'ACCOUNTANT', 'SALES_MANAGER', 'SALES_REP')")
+    public ResponseEntity<PickingListResponse> getPickingListByOrderId(
+            @PathVariable Long orderId,
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        PickingListResponse response = pickingListService.getPickingListByOrderId(orderId, actor);
+        return response != null ? ResponseEntity.ok(response) : ResponseEntity.noContent().build();
+    }
+
     // =========================================================================
     // 3. TIẾN ĐỘ SOẠN HÀNG TRÊN DI ĐỘNG & RÀNG BUỘC SOẠN THIẾU
     // =========================================================================

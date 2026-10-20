@@ -18,8 +18,10 @@ public interface DebtAgingRepository extends Repository<Invoice, Long> {
 
     String INVOICE_ITEM = "select i.customer.id, i.invoiceDate, i.totalAmount, i.paidAmount, "
             + "coalesce(i.remainingAmount, i.totalAmount) from Invoice i ";
-    String ORDER_ITEM = "select o.customer.id, o.approvedAt, o.totalAmount from SalesOrder o "
-            + "where o.status in :statuses and o.invoiceId is null ";
+    /** Tiền nợ đơn chưa xuất hoá đơn tính theo số thực giao nếu đã giao thiếu (xem SalesOrderRepository.LINE_DEBT). */
+    String ORDER_ITEM = "select o.customer.id, o.approvedAt, sum(" + SalesOrderRepository.LINE_DEBT + ") "
+            + "from SalesOrderLine l join l.order o where o.status in :statuses and o.invoiceId is null ";
+    String ORDER_GROUP = " group by o.id, o.customer.id, o.approvedAt";
 
     @Query(INVOICE_ITEM)
     List<Object[]> invoiceItems();
@@ -27,10 +29,10 @@ public interface DebtAgingRepository extends Repository<Invoice, Long> {
     @Query(INVOICE_ITEM + "where i.customer.salesRep.id = :salesRepId")
     List<Object[]> invoiceItemsBySalesRep(@Param("salesRepId") Long salesRepId);
 
-    @Query(ORDER_ITEM)
+    @Query(ORDER_ITEM + ORDER_GROUP)
     List<Object[]> uninvoicedOrderItems(@Param("statuses") Collection<String> statuses);
 
-    @Query(ORDER_ITEM + "and o.customer.salesRep.id = :salesRepId")
+    @Query(ORDER_ITEM + "and o.customer.salesRep.id = :salesRepId" + ORDER_GROUP)
     List<Object[]> uninvoicedOrderItemsBySalesRep(@Param("statuses") Collection<String> statuses,
                                                   @Param("salesRepId") Long salesRepId);
 }
