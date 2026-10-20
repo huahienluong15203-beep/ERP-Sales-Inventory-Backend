@@ -17,6 +17,7 @@ public record AuditLogResponse(
         String actorUsername,
         String actorFullName,
         String actorAvatarUrl,
+        String actorRole,
         String oldValue,
         String newValue,
         String reason,

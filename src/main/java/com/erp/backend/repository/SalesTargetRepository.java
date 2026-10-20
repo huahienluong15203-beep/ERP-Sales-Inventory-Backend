@@ -33,10 +33,10 @@ public interface SalesTargetRepository extends JpaRepository<SalesTarget, Long> 
     @Query("select t from SalesTarget t where t.id = :id")
     Optional<SalesTarget> findByIdForUpdate(@Param("id") Long id);
 
-    /** [repId, tổng doanh số] trong [from, to) của các NV kinh doanh. */
-    @Query("select c.salesRep.id, coalesce(sum(o.totalAmount), 0) from SalesOrder o join o.customer c "
+    /** [repId, tổng doanh số] trong [from, to) của các NV kinh doanh (theo đại lý phụ trách hoặc người tạo đơn). */
+    @Query("select coalesce(c.salesRep.id, o.createdById), coalesce(sum(o.totalAmount), 0) from SalesOrder o join o.customer c "
             + "where o.status in :statuses and coalesce(o.approvedAt, o.createdAt) >= :from "
-            + "and coalesce(o.approvedAt, o.createdAt) < :to and c.salesRep.id in :repIds group by c.salesRep.id")
+            + "and coalesce(o.approvedAt, o.createdAt) < :to and coalesce(c.salesRep.id, o.createdById) in :repIds group by coalesce(c.salesRep.id, o.createdById)")
     List<Object[]> sumSalesByRep(@Param("statuses") Collection<String> statuses,
                                  @Param("from") LocalDateTime from,
                                  @Param("to") LocalDateTime to,
@@ -54,7 +54,7 @@ public interface SalesTargetRepository extends JpaRepository<SalesTarget, Long> 
     /** Doanh số 1 NV kinh doanh trong [from, to). */
     @Query("select coalesce(sum(o.totalAmount), 0) from SalesOrder o join o.customer c "
             + "where o.status in :statuses and coalesce(o.approvedAt, o.createdAt) >= :from "
-            + "and coalesce(o.approvedAt, o.createdAt) < :to and c.salesRep.id = :repId")
+            + "and coalesce(o.approvedAt, o.createdAt) < :to and (c.salesRep.id = :repId or o.createdById = :repId)")
     BigDecimal sumSalesOfRep(@Param("statuses") Collection<String> statuses,
                              @Param("from") LocalDateTime from,
                              @Param("to") LocalDateTime to,

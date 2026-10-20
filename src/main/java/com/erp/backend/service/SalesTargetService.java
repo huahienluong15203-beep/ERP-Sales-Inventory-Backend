@@ -211,14 +211,16 @@ public class SalesTargetService {
         SalesTarget t = targetRepository.findByIdForUpdate(id)
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy chỉ tiêu"));
 
-        assertOpen(YearMonth.from(t.getPeriodMonth()));
+        YearMonth targetMonth = YearMonth.from(t.getPeriodMonth());
+        boolean locked = isLocked(targetMonth);
         String before = plain(t.getTargetAmount()) + (t.getNote() != null ? " | " + t.getNote() : "");
         t.setTargetAmount(amount);
         t.setNote(note);
         t.setUpdatedByUsername(actor != null ? actor.getUsername() : null);
         SalesTarget saved = targetRepository.save(t);
-        audit("UPDATE_SALES_TARGET", saved, before, plain(amount) + (note != null ? " | " + note : ""), reason, actor);
-        return toResponse(saved, null, false);
+        String auditReason = locked ? "[Điều chỉnh kỳ đã khoá " + targetMonth.format(PERIOD_FORMAT) + "] " + reason : reason;
+        audit("UPDATE_SALES_TARGET", saved, before, plain(amount) + (note != null ? " | " + note : ""), auditReason, actor);
+        return toResponse(saved, null, locked);
     }
 
     @Transactional

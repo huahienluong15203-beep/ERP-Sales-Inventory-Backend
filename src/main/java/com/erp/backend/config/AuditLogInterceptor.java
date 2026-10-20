@@ -79,6 +79,7 @@ public class AuditLogInterceptor implements HandlerInterceptor {
                     .actorId(actor != null ? actor.getId() : null)
                     .actorUsername(actor != null ? actor.getUsername() : "anonymous")
                     .actorFullName(actor != null ? actor.getFullName() : "Anonymous User")
+                    .actorRole(AuditLogService.resolveRoleLabel(actor))
                     .reason("Thao tác HTTP " + method + " qua API")
                     .build();
 
