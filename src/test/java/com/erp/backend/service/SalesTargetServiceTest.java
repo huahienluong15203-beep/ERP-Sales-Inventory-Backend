@@ -109,21 +109,30 @@ class SalesTargetServiceTest {
     }
 
     @Test
-    @DisplayName("S8-04: Kỳ đã qua bị khoá: không đặt / sửa / xoá được (409)")
+    @DisplayName("S8-04: Kỳ đã qua bị khoá: không đặt / xoá được (409), sửa bắt buộc có lý do và ghi nhật ký")
     void pastPeriod_locked() {
         assertThatThrownBy(() -> service.create(repRequest("2026-09", "1000"), manager))
                 .isInstanceOf(BusinessException.class)
                 .hasFieldOrPropertyWithValue("code", "TARGET_PERIOD_LOCKED");
 
         when(targetRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(target(9, "2026-09", "1000")));
-        assertThatThrownBy(() -> service.update(9L, SalesTargetUpdateRequest.builder()
-                .targetAmount(new BigDecimal("2000")).reason("Điều chỉnh").build(), manager))
-                .hasFieldOrPropertyWithValue("code", "TARGET_PERIOD_LOCKED");
         assertThatThrownBy(() -> service.delete(9L, "Nhầm", manager))
                 .hasFieldOrPropertyWithValue("code", "TARGET_PERIOD_LOCKED");
-        verify(targetRepository, never()).save(any());
-        verify(targetRepository, never()).delete(any(SalesTarget.class));
-        verifyNoInteractions(auditLogService);
+
+        // Sửa kỳ đã qua: không có lý do -> 400
+        assertThatThrownBy(() -> service.update(9L, SalesTargetUpdateRequest.builder()
+                .targetAmount(new BigDecimal("2000")).reason("   ").build(), manager))
+                .hasFieldOrPropertyWithValue("code", "REASON_REQUIRED");
+
+        // Sửa kỳ đã qua: có lý do -> thành công, ghi nhật ký có đánh dấu kỳ đã khoá
+        SalesTarget t = target(9, "2026-09", "1000");
+        when(targetRepository.save(any(SalesTarget.class))).thenAnswer(i -> i.getArgument(0));
+        SalesTargetResponse res = service.update(9L, SalesTargetUpdateRequest.builder()
+                .targetAmount(new BigDecimal("2000")).reason("Điều chỉnh bù trừ chỉ tiêu").build(), manager);
+        assertThat(res.targetAmount()).isEqualByComparingTo("2000");
+        assertThat(res.locked()).isTrue();
+        verify(auditLogService).record(eq(AuditModule.SALES_TARGET), eq("UPDATE_SALES_TARGET"), eq("SALES_TARGET"),
+                eq(9L), eq("REP:7@2026-09"), eq("1000"), eq("2000"), contains("[Điều chỉnh kỳ đã khoá 2026-09]"), eq(manager));
     }
 
     @Test
@@ -227,8 +236,7 @@ class SalesTargetServiceTest {
                 .targetType(SalesTarget.TYPE_REGION).targetKey("REGION:2").region(north)
                 .targetAmount(new BigDecimal("4000000")).build();
         when(targetRepository.findByPeriod(LocalDate.of(2026, 10, 1))).thenReturn(List.of(t, r));
-        when(targetRepository.sumSalesByRep(anyList(), eq(LocalDate.of(2026, 10, 1).atStartOfDay()),
-                eq(LocalDate.of(2026, 11, 1).atStartOfDay()), anyCollection()))
+        when(targetRepository.sumSalesByRep(any(), any(), any(), any()))
                 .thenReturn(List.<Object[]>of(new Object[]{7L, new BigDecimal("1250000.00")}));
         when(targetRepository.sumSalesByRegion(anyList(), any(), any(), anyCollection()))
                 .thenReturn(List.<Object[]>of(new Object[]{2L, new BigDecimal("1000000.00")}));

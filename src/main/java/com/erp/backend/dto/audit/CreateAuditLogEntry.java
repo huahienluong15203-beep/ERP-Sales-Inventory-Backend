@@ -22,6 +22,7 @@ public class CreateAuditLogEntry {
     private String actorUsername;
     private String actorFullName;
     private String actorAvatarUrl;
+    private String actorRole;
     private String oldValue;
     private String newValue;
     private String reason;

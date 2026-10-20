@@ -12,7 +12,7 @@ class AuditLogCostMaskTest {
 
     private static AuditLogResponse log(String action) {
         return new AuditLogResponse(1L, "PRICING", "Giá", action, "PRODUCT", 9L, "SP-1", 2L, "sales_manager",
-                "QLKD", null, "10000", "12000", "Cập nhật giá vốn 10000 -> 12000", null, null, null, null,
+                "QLKD", null, "Quản lý kinh doanh", "10000", "12000", "Cập nhật giá vốn 10000 -> 12000", null, null, null, null,
                 LocalDateTime.now());
     }
 

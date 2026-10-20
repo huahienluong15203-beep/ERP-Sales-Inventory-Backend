@@ -12,6 +12,7 @@ public record SalesTargetResponse(
         String period,
         String targetType,
         Long salesRepId,
+        String salesRepCode,
         String salesRepName,
         Long regionId,
         String regionName,
@@ -23,4 +24,16 @@ public record SalesTargetResponse(
         String note,
         LocalDateTime updatedAt,
         String updatedByUsername) {
+
+    public String getRegion() {
+        return regionName;
+    }
+
+    public BigDecimal getCompletionRate() {
+        return achievementPercent;
+    }
+
+    public boolean isLocked() {
+        return locked;
+    }
 }
