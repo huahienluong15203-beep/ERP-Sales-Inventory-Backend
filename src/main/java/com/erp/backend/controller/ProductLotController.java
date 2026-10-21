@@ -89,7 +89,7 @@ public class ProductLotController {
 
     @PutMapping("/{id}")
     @Operation(summary = "Cập nhật thông tin lô hàng", description = "Cập nhật ngày sản xuất, hạn sử dụng, ghi chú hoặc khóa/mở khóa lô hàng (ACTIVE/LOCKED).")
-    @PreAuthorize("hasAnyRole('WH_MANAGER', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('WAREHOUSE', 'WH_MANAGER', 'ADMIN')")
     public ResponseEntity<ProductLotResponse> updateLot(
             @PathVariable Long id,
             @Valid @RequestBody ProductLotUpdateRequest request,
@@ -103,8 +103,8 @@ public class ProductLotController {
 
     @PatchMapping("/products/{productId}/batch-management")
     @Operation(summary = "Bật hoặc tắt quản lý lô theo từng SKU",
-            description = "Cho phép Quản lý kho, Quản trị viên bật/tắt cơ chế theo dõi lô và HSD cho một mã SKU cụ thể.")
-    @PreAuthorize("hasAnyRole('WH_MANAGER', 'ADMIN', 'SALES_MANAGER')")
+            description = "Cho phép Quản lý kho, Thủ kho, Quản trị viên bật/tắt cơ chế theo dõi lô và HSD cho một mã SKU cụ thể.")
+    @PreAuthorize("hasAnyRole('WAREHOUSE', 'WH_MANAGER', 'ADMIN', 'SALES_MANAGER')")
     public ResponseEntity<ProductResponse> toggleBatchManagement(
             @PathVariable Long productId,
             @Valid @RequestBody ProductBatchManagementUpdateRequest request,

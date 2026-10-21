@@ -222,8 +222,8 @@ public class ProductLotService {
      */
     @Transactional(rollbackFor = Exception.class)
     public ProductResponse toggleBatchManagement(Long productId, boolean enabled, UserDetailsImpl actor) {
-        if (!hasAnyRole(actor, "WH_MANAGER", "ADMIN", "SALES_MANAGER")) {
-            throw BusinessException.forbidden("ACCESS_DENIED", "Chỉ Quản lý kho, Quản lý bán hàng hoặc Quản trị viên mới có quyền bật/tắt quản lý lô");
+        if (!hasAnyRole(actor, "WAREHOUSE", "WH_MANAGER", "ADMIN", "SALES_MANAGER")) {
+            throw BusinessException.forbidden("ACCESS_DENIED", "Chỉ Quản lý kho, Thủ kho, Quản lý bán hàng hoặc Quản trị viên mới có quyền bật/tắt quản lý lô");
         }
 
         Product product = productRepository.findById(productId)
