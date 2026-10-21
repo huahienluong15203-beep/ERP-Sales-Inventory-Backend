@@ -79,6 +79,20 @@ public class AuthController {
         }
     }
 
+    // S1-02: Gia hạn phiên khi đang hoạt động (Frontend tự gọi khi token sắp hết hạn)
+    @PostMapping("/refresh")
+    public ResponseEntity<?> refreshSession(@AuthenticationPrincipal UserDetailsImpl userDetails) {
+        if (userDetails == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new MessageResponse("Phiên làm việc đã hết hạn. Vui lòng đăng nhập lại!"));
+        }
+        try {
+            return ResponseEntity.ok(authService.refreshSession(userDetails.getId()));
+        } catch (RuntimeException e) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(new MessageResponse(e.getMessage()));
+        }
+    }
+
     // 5. API ĐỔI MẬT KHẨU KHI ĐANG ĐĂNG NHẬP
     @PostMapping("/change-password")
     public ResponseEntity<?> changePassword(

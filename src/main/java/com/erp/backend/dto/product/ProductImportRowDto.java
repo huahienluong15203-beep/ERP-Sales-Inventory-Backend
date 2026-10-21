@@ -31,6 +31,21 @@ public class ProductImportRowDto {
     @Schema(description = "Nhóm hàng / Ngành hàng", example = "Đồ uống")
     private String category;
 
+    @Schema(description = "Ngành hàng (Cấp 1)", example = "Đồ uống")
+    private String department;
+
+    @Schema(description = "Phân nhóm (Cấp 3)", example = "Có ga")
+    private String subCategory;
+
+    @Schema(description = "Đường dẫn phân cấp trong cây", example = "Đồ uống > Nước giải khát > Có ga")
+    private String categoryPath;
+
+    @Schema(description = "Cấp bậc trong cây phân cấp", example = "3")
+    private Integer categoryLevel;
+
+    @Schema(description = "Đánh dấu sản phẩm được đổi cấp trong cây phân cấp khi ghi đè", example = "true")
+    private boolean levelChanged;
+
     @Schema(description = "Đơn vị tính cơ sở", example = "Lon")
     private String baseUnit;
 

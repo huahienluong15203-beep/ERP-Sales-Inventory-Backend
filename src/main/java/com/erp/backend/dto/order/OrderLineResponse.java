@@ -3,8 +3,16 @@ package com.erp.backend.dto.order;
 import java.math.BigDecimal;
 
 /**
- * S3-09: Dòng hàng đã tính tiền.
- * unitPrice: giá trên 1 đơn vị cơ sở; pricePerUnit: giá trên 1 đơn vị đã chọn (= unitPrice x hệ số).
+ * S3-09 / S4-01 / S4-03 / S5-01: Dòng hàng đã tính tiền kèm thông tin tồn kho và số lượng thực giao.
+ * unitPrice: giá trên 1 đơn vị cơ sở; pricePerUnit: giá trên 1 đơn vị đã chọn (= unitPrice x hệ số hoặc giá sửa thủ công).
+ * isCustomPrice: cờ đánh dấu đã sửa giá thủ công.
+ * isBelowFloor: cờ đánh dấu bán dưới giá sàn.
+ * isOverStock: cờ đánh dấu đặt vượt tồn khả dụng.
+ * maxAllowedQuantity: số lượng tối đa còn đặt được theo ĐVT đã chọn.
+ * deliveredQuantity: S5-01 số lượng thực tế đã giao cho đại lý.
+ * shortageQuantity: S5-01 số lượng giao thiếu nếu có.
+ * isShortage: S5-01 cờ phát hiện giao thiếu.
+ * shortageReason: S5-01 lý do giao thiếu.
  */
 public record OrderLineResponse(
         Long id,
@@ -24,5 +32,105 @@ public record OrderLineResponse(
         BigDecimal grossAmount,
         String discountPolicyCode,
         BigDecimal discountAmount,
-        BigDecimal netAmount) {
+        BigDecimal netAmount,
+        Boolean isCustomPrice,
+        Boolean isBelowFloor,
+        String warehouseCode,
+        String warehouseName,
+        BigDecimal physicalStock,
+        BigDecimal reservedStock,
+        BigDecimal availableStock,
+        Boolean isOverStock,
+        BigDecimal maxAllowedQuantity,
+        BigDecimal deliveredQuantity,
+        BigDecimal shortageQuantity,
+        Boolean isShortage,
+        String shortageReason,
+        String batchNumber,
+        String suggestedBatchNumber,
+        String lotChangeReason,
+        java.time.LocalDate lotExpiredDate) {
+
+    public OrderLineResponse(Long id, Integer lineNo, Long productId, String productSku,
+                             String productName, String unitName, BigDecimal conversionFactor,
+                             BigDecimal quantity, String baseUnit, BigDecimal baseQuantity,
+                             String priceListCode, BigDecimal unitPrice, BigDecimal pricePerUnit,
+                             BigDecimal floorPrice, BigDecimal grossAmount, String discountPolicyCode,
+                             BigDecimal discountAmount, BigDecimal netAmount,
+                             Boolean isCustomPrice, Boolean isBelowFloor,
+                             String warehouseCode, String warehouseName,
+                             BigDecimal physicalStock, BigDecimal reservedStock,
+                             BigDecimal availableStock, Boolean isOverStock,
+                             BigDecimal maxAllowedQuantity,
+                             BigDecimal deliveredQuantity,
+                             BigDecimal shortageQuantity,
+                             Boolean isShortage,
+                             String shortageReason) {
+        this(id, lineNo, productId, productSku, productName, unitName, conversionFactor,
+                quantity, baseUnit, baseQuantity, priceListCode, unitPrice, pricePerUnit,
+                floorPrice, grossAmount, discountPolicyCode, discountAmount, netAmount,
+                isCustomPrice, isBelowFloor, warehouseCode, warehouseName,
+                physicalStock, reservedStock, availableStock, isOverStock, maxAllowedQuantity,
+                deliveredQuantity, shortageQuantity, isShortage, shortageReason,
+                null, null, null, null);
+    }
+
+    public OrderLineResponse(Long id, Integer lineNo, Long productId, String productSku,
+                             String productName, String unitName, BigDecimal conversionFactor,
+                             BigDecimal quantity, String baseUnit, BigDecimal baseQuantity,
+                             String priceListCode, BigDecimal unitPrice, BigDecimal pricePerUnit,
+                             BigDecimal floorPrice, BigDecimal grossAmount, String discountPolicyCode,
+                             BigDecimal discountAmount, BigDecimal netAmount,
+                             Boolean isCustomPrice, Boolean isBelowFloor,
+                             String warehouseCode, String warehouseName,
+                             BigDecimal physicalStock, BigDecimal reservedStock,
+                             BigDecimal availableStock, Boolean isOverStock,
+                             BigDecimal maxAllowedQuantity) {
+        this(id, lineNo, productId, productSku, productName, unitName, conversionFactor,
+                quantity, baseUnit, baseQuantity, priceListCode, unitPrice, pricePerUnit,
+                floorPrice, grossAmount, discountPolicyCode, discountAmount, netAmount,
+                isCustomPrice, isBelowFloor, warehouseCode, warehouseName,
+                physicalStock, reservedStock, availableStock, isOverStock, maxAllowedQuantity,
+                null, BigDecimal.ZERO, false, null);
+    }
+
+    public OrderLineResponse(Long id, Integer lineNo, Long productId, String productSku,
+                             String productName, String unitName, BigDecimal conversionFactor,
+                             BigDecimal quantity, String baseUnit, BigDecimal baseQuantity,
+                             String priceListCode, BigDecimal unitPrice, BigDecimal pricePerUnit,
+                             BigDecimal floorPrice, BigDecimal grossAmount, String discountPolicyCode,
+                             BigDecimal discountAmount, BigDecimal netAmount,
+                             Boolean isCustomPrice, Boolean isBelowFloor) {
+        this(id, lineNo, productId, productSku, productName, unitName, conversionFactor,
+                quantity, baseUnit, baseQuantity, priceListCode, unitPrice, pricePerUnit,
+                floorPrice, grossAmount, discountPolicyCode, discountAmount, netAmount,
+                isCustomPrice, isBelowFloor, null, null, null, null, null, false, null,
+                null, BigDecimal.ZERO, false, null);
+    }
+
+    public OrderLineResponse(Long id, Integer lineNo, Long productId, String productSku,
+                             String productName, String unitName, BigDecimal conversionFactor,
+                             BigDecimal quantity, String baseUnit, BigDecimal baseQuantity,
+                             String priceListCode, BigDecimal unitPrice, BigDecimal pricePerUnit,
+                             BigDecimal floorPrice, BigDecimal grossAmount, String discountPolicyCode,
+                             BigDecimal discountAmount, BigDecimal netAmount) {
+        this(id, lineNo, productId, productSku, productName, unitName, conversionFactor,
+                quantity, baseUnit, baseQuantity, priceListCode, unitPrice, pricePerUnit,
+                floorPrice, grossAmount, discountPolicyCode, discountAmount, netAmount,
+                false, false, null, null, null, null, null, false, null,
+                null, BigDecimal.ZERO, false, null);
+    }
+
+    /**
+     * S5-01 / quy tắc 6: bản dành cho đại lý - bỏ giá sàn, cờ dưới giá sàn và tồn thực tế / giữ chỗ (thông tin nội bộ).
+     * Vẫn giữ tồn khả dụng để đại lý biết còn hàng hay không.
+     */
+    public OrderLineResponse forCustomer() {
+        return new OrderLineResponse(id, lineNo, productId, productSku, productName, unitName, conversionFactor,
+                quantity, baseUnit, baseQuantity, priceListCode, unitPrice, pricePerUnit,
+                null, grossAmount, discountPolicyCode, discountAmount, netAmount,
+                isCustomPrice, null, warehouseCode, warehouseName,
+                null, null, availableStock, isOverStock, maxAllowedQuantity,
+                deliveredQuantity, shortageQuantity, isShortage, shortageReason);
+    }
 }

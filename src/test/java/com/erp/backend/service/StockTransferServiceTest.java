@@ -1,0 +1,516 @@
+package com.erp.backend.service;
+
+import com.erp.backend.dto.inventory.transfer.*;
+import com.erp.backend.entity.*;
+import com.erp.backend.exception.BusinessException;
+import com.erp.backend.repository.*;
+import com.erp.backend.security.UserDetailsImpl;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.*;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class StockTransferServiceTest {
+
+    @Mock private StockTransferRepository stockTransferRepository;
+    @Mock private StockTransferLineRepository stockTransferLineRepository;
+    @Mock private ProductLotRepository productLotRepository;
+    @Mock private WarehouseRepository warehouseRepository;
+    @Mock private ProductRepository productRepository;
+    @Mock private InventoryRepository inventoryRepository;
+    @Mock private UserRepository userRepository;
+    @Mock private AuditLogService auditLogService;
+
+    @Mock private StockMovementService stockMovementService;
+
+    @InjectMocks private StockTransferService stockTransferService;
+
+    private UserDetailsImpl whStaffActor;
+    private Warehouse sourceWh;
+    private Warehouse destWh;
+    private Product sampleProduct;
+    private Inventory sourceInventory;
+
+    @BeforeEach
+    void setUp() {
+        whStaffActor = new UserDetailsImpl(
+                1L, "wh_staff", "Thủ Kho Miền Bắc", "wh@erp.com", "pass", true,
+                List.of(new SimpleGrantedAuthority("ROLE_WAREHOUSE"))
+        );
+
+        sourceWh = Warehouse.builder()
+                .id(1L)
+                .code("WH-MB01")
+                .name("Kho Tổng Miền Bắc")
+                .status("ACTIVE")
+                .build();
+
+        destWh = Warehouse.builder()
+                .id(2L)
+                .code("WH-MT01")
+                .name("Kho Miền Trung")
+                .status("ACTIVE")
+                .build();
+
+        sampleProduct = Product.builder()
+                .id(10L)
+                .sku("BEV-PEPSI-330")
+                .name("Nước ngọt Pepsi lon 330ml")
+                .baseUnit("Lon")
+                .status("ACTIVE")
+                .build();
+
+        sourceInventory = Inventory.builder()
+                .id(100L)
+                .warehouse(sourceWh)
+                .product(sampleProduct)
+                .physicalStock(BigDecimal.valueOf(500))
+                .reservedStock(BigDecimal.valueOf(50)) // Khả dụng = 450
+                .build();
+
+        // wh_staff được phân công cả kho đi và kho đến
+        User whUser = User.builder().id(1L).username("wh_staff")
+                .warehouses(new HashSet<>(Set.of(sourceWh, destWh))).build();
+        lenient().when(userRepository.findById(1L)).thenReturn(Optional.of(whUser));
+    }
+
+    @Test
+    @DisplayName("S5-07 AC1: Tạo phiếu chuyển kho nháp (DRAFT) thành công, kiểm tra tồn khả dụng hợp lệ")
+    void createTransfer_draft_success() {
+        when(warehouseRepository.findByCodeIgnoreCase("WH-MB01")).thenReturn(Optional.of(sourceWh));
+        when(warehouseRepository.findByCodeIgnoreCase("WH-MT01")).thenReturn(Optional.of(destWh));
+        when(productRepository.findById(10L)).thenReturn(Optional.of(sampleProduct));
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(1L, 10L)).thenReturn(Optional.of(sourceInventory));
+        when(stockTransferRepository.findCodesByPrefix(anyString())).thenReturn(Collections.emptyList());
+        when(stockTransferRepository.save(any(StockTransfer.class))).thenAnswer(inv -> {
+            StockTransfer t = inv.getArgument(0);
+            t.setId(101L);
+            return t;
+        });
+
+        sampleProduct.addUnitConversion(ProductUnitConversion.builder().id(5L).unitName("Thùng")
+                .conversionFactor(new BigDecimal("24")).status("ACTIVE").build());
+        CreateStockTransferLinePayload line = CreateStockTransferLinePayload.builder()
+                .productId(10L)
+                .unit("Thùng")
+                .transferQuantity(BigDecimal.valueOf(10))
+                .build();
+
+        CreateStockTransferPayload req = CreateStockTransferPayload.builder()
+                .sourceWarehouseCode("WH-MB01")
+                .destWarehouseCode("WH-MT01")
+                .transferDate("2026-10-10")
+                .status("DRAFT")
+                .lines(List.of(line))
+                .build();
+
+        StockTransferResponse res = stockTransferService.createTransfer(req, whStaffActor);
+
+        assertThat(res).isNotNull();
+        assertThat(res.getCode()).isEqualTo("TRF-202610-001");
+        assertThat(res.getStatus()).isEqualTo("DRAFT");
+        assertThat(res.getSourceWarehouseCode()).isEqualTo("WH-MB01");
+        assertThat(res.getDestWarehouseCode()).isEqualTo("WH-MT01");
+
+        // Chưa xuất kho nên tồn kho nguồn chưa bị trừ
+        assertThat(sourceInventory.getPhysicalStock()).isEqualByComparingTo(BigDecimal.valueOf(500));
+        // Dòng phiếu lưu theo ĐVT cơ sở: 10 Thùng x 24 = 240 Lon
+        assertThat(res.getLines().get(0).getUnit()).isEqualTo("Lon");
+        assertThat(res.getLines().get(0).getTransferQuantity()).isEqualByComparingTo("240");
+    }
+
+    @Test
+    @DisplayName("S5-07 (TC507-14): Lập và xuất ngay 2 Thùng -> kho đi trừ 48 Lon (quy đổi ĐVT cơ sở)")
+    void createTransfer_inTransit_convertsUnitToBase() {
+        sampleProduct.addUnitConversion(ProductUnitConversion.builder().id(5L).unitName("Thùng")
+                .conversionFactor(new BigDecimal("24")).status("ACTIVE").build());
+        when(warehouseRepository.findByCodeIgnoreCase("WH-MB01")).thenReturn(Optional.of(sourceWh));
+        when(warehouseRepository.findByCodeIgnoreCase("WH-MT01")).thenReturn(Optional.of(destWh));
+        when(productRepository.findById(10L)).thenReturn(Optional.of(sampleProduct));
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(1L, 10L)).thenReturn(Optional.of(sourceInventory));
+        when(stockTransferRepository.findCodesByPrefix(anyString())).thenReturn(Collections.emptyList());
+        when(stockTransferRepository.save(any(StockTransfer.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        CreateStockTransferPayload req = CreateStockTransferPayload.builder()
+                .sourceWarehouseCode("WH-MB01").destWarehouseCode("WH-MT01").transferDate("2026-10-12")
+                .status("IN_TRANSIT")
+                .lines(List.of(CreateStockTransferLinePayload.builder().productId(10L).unit("thùng")
+                        .transferQuantity(BigDecimal.valueOf(2)).build()))
+                .build();
+
+        stockTransferService.createTransfer(req, whStaffActor);
+
+        assertThat(sourceInventory.getPhysicalStock()).isEqualByComparingTo("452");
+        // S6-02: thẻ kho ghi Xuất chuyển kho -48 Lon (phiếu chưa có id lúc ghi -> gắn sau khi lưu)
+        verify(stockMovementService).record(eq(sourceInventory), eq(StockMovement.TYPE_TRANSFER_OUT), qtyEq("-48"),
+                eq(StockMovement.DOC_STOCK_TRANSFER), isNull(), anyString(), contains("WH-MT01"), eq(whStaffActor));
+        verify(stockMovementService).linkDocument(anyList(), any());
+    }
+
+    @Test
+    @DisplayName("S5-07: ĐVT không có trong danh mục của sản phẩm -> 400 INVALID_UNIT")
+    void createTransfer_unknownUnit_badRequest() {
+        when(warehouseRepository.findByCodeIgnoreCase("WH-MB01")).thenReturn(Optional.of(sourceWh));
+        when(warehouseRepository.findByCodeIgnoreCase("WH-MT01")).thenReturn(Optional.of(destWh));
+        when(productRepository.findById(10L)).thenReturn(Optional.of(sampleProduct));
+        when(stockTransferRepository.findCodesByPrefix(anyString())).thenReturn(Collections.emptyList());
+
+        CreateStockTransferPayload req = CreateStockTransferPayload.builder()
+                .sourceWarehouseCode("WH-MB01").destWarehouseCode("WH-MT01").transferDate("2026-10-12")
+                .lines(List.of(CreateStockTransferLinePayload.builder().productId(10L).unit("Két")
+                        .transferQuantity(BigDecimal.ONE).build()))
+                .build();
+
+        assertThatThrownBy(() -> stockTransferService.createTransfer(req, whStaffActor))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "INVALID_UNIT");
+    }
+
+    @Test
+    @DisplayName("S5-07 (TC507-15): Nhận nhiều hơn số đã chuyển -> 400, kho đến không được cộng")
+    void receiveTransfer_moreThanTransferred_badRequest() {
+        StockTransferLine line = StockTransferLine.builder().id(1L).product(sampleProduct)
+                .productSku(sampleProduct.getSku()).productName(sampleProduct.getName()).unit("Lon")
+                .transferQuantity(BigDecimal.valueOf(10)).build();
+        StockTransfer transfer = StockTransfer.builder().id(50L).code("TRF-202610-001").sourceWarehouse(sourceWh)
+                .destWarehouse(destWh).status(StockTransfer.STATUS_IN_TRANSIT)
+                .lines(new ArrayList<>(List.of(line))).build();
+        line.setStockTransfer(transfer);
+        when(stockTransferRepository.findByIdForUpdate(50L)).thenReturn(Optional.of(transfer));
+
+        ReceiveTransferPayload payload = ReceiveTransferPayload.builder()
+                .receivedLines(List.of(ReceiveTransferLineItem.builder().lineId("1")
+                        .receivedQuantity(BigDecimal.valueOf(12)).discrepancyReason("Thừa 2").build()))
+                .build();
+
+        assertThatThrownBy(() -> stockTransferService.receiveTransfer(50L, payload, whStaffActor))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "RECEIVED_EXCEEDS_TRANSFERRED");
+        verify(inventoryRepository, never()).save(any(Inventory.class));
+        assertThat(transfer.getStatus()).isEqualTo(StockTransfer.STATUS_IN_TRANSIT);
+    }
+
+    @Test
+    @DisplayName("S5-07: Kho nguồn và kho đích trùng nhau -> Báo lỗi SAME_WAREHOUSE")
+    void createTransfer_sameWarehouse_throwsException() {
+        CreateStockTransferPayload req = CreateStockTransferPayload.builder()
+                .sourceWarehouseCode("WH-MB01")
+                .destWarehouseCode("WH-MB01")
+                .transferDate("2026-10-10")
+                .lines(List.of())
+                .build();
+
+        assertThatThrownBy(() -> stockTransferService.createTransfer(req, whStaffActor))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Kho nguồn và kho đích không được trùng nhau");
+    }
+
+    @Test
+    @DisplayName("S5-07: Tồn khả dụng tại kho nguồn không đủ để điều chuyển -> Báo lỗi INSUFFICIENT_STOCK")
+    void createTransfer_insufficientStock_throwsException() {
+        when(warehouseRepository.findByCodeIgnoreCase("WH-MB01")).thenReturn(Optional.of(sourceWh));
+        when(warehouseRepository.findByCodeIgnoreCase("WH-MT01")).thenReturn(Optional.of(destWh));
+        when(productRepository.findById(10L)).thenReturn(Optional.of(sampleProduct));
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(1L, 10L)).thenReturn(Optional.of(sourceInventory));
+
+        // Khả dụng là 450, nhưng yêu cầu chuyển 600
+        CreateStockTransferLinePayload line = CreateStockTransferLinePayload.builder()
+                .productId(10L)
+                .transferQuantity(BigDecimal.valueOf(600))
+                .build();
+
+        CreateStockTransferPayload req = CreateStockTransferPayload.builder()
+                .sourceWarehouseCode("WH-MB01")
+                .destWarehouseCode("WH-MT01")
+                .transferDate("2026-10-10")
+                .lines(List.of(line))
+                .build();
+
+        assertThatThrownBy(() -> stockTransferService.createTransfer(req, whStaffActor))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Tồn khả dụng tại kho xuất không đủ");
+    }
+
+    @Test
+    @DisplayName("S5-07 AC2: Xuất kho (dispatch) -> Trừ tồn kho nguồn, ghi nhận Đang trên đường, CHƯA cộng kho đến")
+    void dispatchTransfer_success_subtractsSourceStock() {
+        StockTransferLine line = StockTransferLine.builder()
+                .id(1L)
+                .product(sampleProduct)
+                .productSku(sampleProduct.getSku())
+                .productName(sampleProduct.getName())
+                .unit("Lon")
+                .transferQuantity(BigDecimal.valueOf(100))
+                .build();
+
+        StockTransfer transfer = StockTransfer.builder()
+                .id(50L)
+                .code("TRF-202610-001")
+                .sourceWarehouse(sourceWh)
+                .destWarehouse(destWh)
+                .status(StockTransfer.STATUS_DRAFT)
+                .lines(new ArrayList<>(List.of(line)))
+                .build();
+        line.setStockTransfer(transfer);
+
+        when(stockTransferRepository.findByIdForUpdate(50L)).thenReturn(Optional.of(transfer));
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(1L, 10L)).thenReturn(Optional.of(sourceInventory));
+        when(stockTransferRepository.save(any(StockTransfer.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        StockTransferResponse res = stockTransferService.dispatchTransfer(50L, whStaffActor);
+
+        assertThat(res.getStatus()).isEqualTo(StockTransfer.STATUS_IN_TRANSIT);
+        assertThat(res.getDispatchedAt()).isNotNull();
+
+        // Tồn kho nguồn đã trừ: 500 - 100 = 400
+        assertThat(sourceInventory.getPhysicalStock()).isEqualByComparingTo(BigDecimal.valueOf(400));
+        verify(inventoryRepository).save(sourceInventory);
+
+        // Kho đích tuyệt đối CHƯA được cộng tồn (AC2)
+        verify(inventoryRepository, never()).findByWarehouseIdAndProductIdForUpdate(eq(2L), anyLong());
+        // TC507-16: nhật ký tồn kho trước / sau
+        verify(auditLogService).record(eq(AuditModule.INVENTORY), eq("TRANSFER_DISPATCH"), eq("INVENTORY"), eq(100L),
+                eq("WH-MB01:BEV-PEPSI-330"), eq("500"), eq("400"), contains("TRF-202610-001"), eq(whStaffActor));
+        // S6-02: thẻ kho
+        verify(stockMovementService).record(eq(sourceInventory), eq(StockMovement.TYPE_TRANSFER_OUT), qtyEq("-100"),
+                eq(StockMovement.DOC_STOCK_TRANSFER), eq(50L), eq("TRF-202610-001"), anyString(), eq(whStaffActor));
+    }
+
+    @Test
+    @DisplayName("S5-07 (Mai): Chuyển 40 của lô L1 -> lô L1 ở kho đi còn 60")
+    void dispatchTransfer_withBatch_deductsSourceLot() {
+        StockTransferLine line = StockTransferLine.builder().id(1L).product(sampleProduct)
+                .productSku(sampleProduct.getSku()).productName(sampleProduct.getName()).unit("Lon")
+                .transferQuantity(BigDecimal.valueOf(40)).batchNumber("L1").build();
+        StockTransfer transfer = StockTransfer.builder().id(51L).code("TRF-202610-002").sourceWarehouse(sourceWh)
+                .destWarehouse(destWh).status(StockTransfer.STATUS_DRAFT).lines(new ArrayList<>(List.of(line))).build();
+        line.setStockTransfer(transfer);
+        ProductLot lot = ProductLot.builder().id(9L).product(sampleProduct).warehouse(sourceWh).batchNumber("L1")
+                .quantity(BigDecimal.valueOf(100)).build();
+
+        when(stockTransferRepository.findByIdForUpdate(51L)).thenReturn(Optional.of(transfer));
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(1L, 10L)).thenReturn(Optional.of(sourceInventory));
+        when(productLotRepository.findByProduct_IdAndWarehouse_IdAndBatchNumber(10L, 1L, "L1")).thenReturn(Optional.of(lot));
+        when(stockTransferRepository.save(any(StockTransfer.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        stockTransferService.dispatchTransfer(51L, whStaffActor);
+
+        assertThat(lot.getQuantity()).isEqualByComparingTo("60");
+        verify(productLotRepository).save(lot);
+    }
+
+    @Test
+    @DisplayName("S5-07 (TC507-18): NV kho không được phân công kho đến -> không nhận hàng được (403), tồn không đổi")
+    void receiveTransfer_staffNotAssignedToDest_forbidden() {
+        User onlySource = User.builder().id(1L).username("wh_staff")
+                .warehouses(new HashSet<>(Set.of(sourceWh))).build();
+        when(userRepository.findById(1L)).thenReturn(Optional.of(onlySource));
+        StockTransferLine line = StockTransferLine.builder().id(1L).product(sampleProduct)
+                .productSku(sampleProduct.getSku()).productName(sampleProduct.getName()).unit("Lon")
+                .transferQuantity(BigDecimal.valueOf(10)).build();
+        StockTransfer transfer = StockTransfer.builder().id(50L).code("TRF-202610-001").sourceWarehouse(sourceWh)
+                .destWarehouse(destWh).status(StockTransfer.STATUS_IN_TRANSIT)
+                .lines(new ArrayList<>(List.of(line))).build();
+        when(stockTransferRepository.findByIdForUpdate(50L)).thenReturn(Optional.of(transfer));
+
+        assertThatThrownBy(() -> stockTransferService.receiveTransfer(50L, ReceiveTransferPayload.builder()
+                .receivedLines(List.of(ReceiveTransferLineItem.builder().lineId("1").receivedQuantity(BigDecimal.TEN).build()))
+                .build(), whStaffActor))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "TRANSFER_WAREHOUSE_NOT_ASSIGNED");
+        verifyNoInteractions(inventoryRepository, auditLogService);
+    }
+
+    @Test
+    @DisplayName("S5-07: Quản lý kho nhận hàng mọi kho, không cần phân công")
+    void receiveTransfer_whManager_anyWarehouse() {
+        UserDetailsImpl manager = new UserDetailsImpl(2L, "wh_manager", "QL kho", "m@erp.com", "pass", true,
+                List.of(new SimpleGrantedAuthority("ROLE_WH_MANAGER")));
+        StockTransferLine line = StockTransferLine.builder().id(1L).product(sampleProduct)
+                .productSku(sampleProduct.getSku()).productName(sampleProduct.getName()).unit("Lon")
+                .transferQuantity(BigDecimal.valueOf(10)).build();
+        StockTransfer transfer = StockTransfer.builder().id(50L).code("TRF-202610-001").sourceWarehouse(sourceWh)
+                .destWarehouse(destWh).status(StockTransfer.STATUS_IN_TRANSIT)
+                .lines(new ArrayList<>(List.of(line))).build();
+        Inventory destInventory = Inventory.builder().id(200L).warehouse(destWh).product(sampleProduct)
+                .physicalStock(BigDecimal.ZERO).reservedStock(BigDecimal.ZERO).build();
+        when(stockTransferRepository.findByIdForUpdate(50L)).thenReturn(Optional.of(transfer));
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(2L, 10L)).thenReturn(Optional.of(destInventory));
+        when(stockTransferRepository.save(any(StockTransfer.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        stockTransferService.receiveTransfer(50L, ReceiveTransferPayload.builder()
+                .receivedLines(List.of(ReceiveTransferLineItem.builder().lineId("1").receivedQuantity(BigDecimal.TEN).build()))
+                .build(), manager);
+
+        assertThat(destInventory.getPhysicalStock()).isEqualByComparingTo("10");
+        verify(auditLogService).record(eq(AuditModule.INVENTORY), eq("TRANSFER_RECEIVE"), eq("INVENTORY"), eq(200L),
+                eq("WH-MT01:BEV-PEPSI-330"), eq("0"), eq("10"), contains("TRF-202610-001"), eq(manager));
+        verify(userRepository, never()).findById(2L);
+    }
+
+    @Test
+    @DisplayName("S5-07 AC3: Kho đến xác nhận nhận đủ (COMPLETED) -> Tồn kho đến mới được cộng")
+    void receiveTransfer_completed_addsDestStock() {
+        StockTransferLine line = StockTransferLine.builder()
+                .id(1L)
+                .product(sampleProduct)
+                .productSku(sampleProduct.getSku())
+                .productName(sampleProduct.getName())
+                .unit("Lon")
+                .transferQuantity(BigDecimal.valueOf(100))
+                .build();
+
+        StockTransfer transfer = StockTransfer.builder()
+                .id(50L)
+                .code("TRF-202610-001")
+                .sourceWarehouse(sourceWh)
+                .destWarehouse(destWh)
+                .status(StockTransfer.STATUS_IN_TRANSIT)
+                .lines(new ArrayList<>(List.of(line)))
+                .build();
+        line.setStockTransfer(transfer);
+
+        Inventory destInventory = Inventory.builder()
+                .id(200L)
+                .warehouse(destWh)
+                .product(sampleProduct)
+                .physicalStock(BigDecimal.valueOf(20))
+                .reservedStock(BigDecimal.ZERO)
+                .build();
+
+        when(stockTransferRepository.findByIdForUpdate(50L)).thenReturn(Optional.of(transfer));
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(2L, 10L)).thenReturn(Optional.of(destInventory));
+        when(stockTransferRepository.save(any(StockTransfer.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        ReceiveTransferPayload payload = ReceiveTransferPayload.builder()
+                .transferId("50")
+                .receivedLines(List.of(
+                        ReceiveTransferLineItem.builder()
+                                .lineId("1")
+                                .receivedQuantity(BigDecimal.valueOf(100)) // Nhận đủ 100/100
+                                .build()
+                ))
+                .build();
+
+        StockTransferResponse res = stockTransferService.receiveTransfer(50L, payload, whStaffActor);
+
+        assertThat(res.getStatus()).isEqualTo(StockTransfer.STATUS_COMPLETED);
+        // Tồn kho đến được cộng: 20 + 100 = 120 (AC3)
+        assertThat(destInventory.getPhysicalStock()).isEqualByComparingTo(BigDecimal.valueOf(120));
+        verify(inventoryRepository).save(destInventory);
+    }
+
+    @Test
+    @DisplayName("S5-07 AC4: Nhận có chênh lệch nhưng thiếu lý do -> Báo lỗi DISCREPANCY_REASON_REQUIRED")
+    void receiveTransfer_withDiscrepancy_missingReason_throwsException() {
+        StockTransferLine line = StockTransferLine.builder()
+                .id(1L)
+                .product(sampleProduct)
+                .productSku(sampleProduct.getSku())
+                .productName(sampleProduct.getName())
+                .unit("Lon")
+                .transferQuantity(BigDecimal.valueOf(100))
+                .build();
+
+        StockTransfer transfer = StockTransfer.builder()
+                .id(50L)
+                .code("TRF-202610-001")
+                .sourceWarehouse(sourceWh)
+                .destWarehouse(destWh)
+                .status(StockTransfer.STATUS_IN_TRANSIT)
+                .lines(new ArrayList<>(List.of(line)))
+                .build();
+        line.setStockTransfer(transfer);
+
+        when(stockTransferRepository.findByIdForUpdate(50L)).thenReturn(Optional.of(transfer));
+
+        // Nhận 95/100 (thiếu 5 lon) nhưng không nhập lý do
+        ReceiveTransferPayload payload = ReceiveTransferPayload.builder()
+                .transferId("50")
+                .receivedLines(List.of(
+                        ReceiveTransferLineItem.builder()
+                                .lineId("1")
+                                .receivedQuantity(BigDecimal.valueOf(95))
+                                .discrepancyReason("") // Để trống lý do
+                                .build()
+                ))
+                .generalReason(null)
+                .build();
+
+        assertThatThrownBy(() -> stockTransferService.receiveTransfer(50L, payload, whStaffActor))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Bắt buộc nhập lý do chênh lệch");
+    }
+
+    @Test
+    @DisplayName("S5-07 AC4: Nhận có chênh lệch và có lý do -> Trạng thái DISCREPANCY_RESOLVED, cộng kho theo số thực nhận")
+    void receiveTransfer_withDiscrepancy_hasReason_success() {
+        StockTransferLine line = StockTransferLine.builder()
+                .id(1L)
+                .product(sampleProduct)
+                .productSku(sampleProduct.getSku())
+                .productName(sampleProduct.getName())
+                .unit("Lon")
+                .transferQuantity(BigDecimal.valueOf(100))
+                .build();
+
+        StockTransfer transfer = StockTransfer.builder()
+                .id(50L)
+                .code("TRF-202610-001")
+                .sourceWarehouse(sourceWh)
+                .destWarehouse(destWh)
+                .status(StockTransfer.STATUS_IN_TRANSIT)
+                .lines(new ArrayList<>(List.of(line)))
+                .build();
+        line.setStockTransfer(transfer);
+
+        Inventory destInventory = Inventory.builder()
+                .id(200L)
+                .warehouse(destWh)
+                .product(sampleProduct)
+                .physicalStock(BigDecimal.ZERO)
+                .build();
+
+        when(stockTransferRepository.findByIdForUpdate(50L)).thenReturn(Optional.of(transfer));
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(2L, 10L)).thenReturn(Optional.of(destInventory));
+        when(stockTransferRepository.save(any(StockTransfer.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        ReceiveTransferPayload payload = ReceiveTransferPayload.builder()
+                .transferId("50")
+                .receivedLines(List.of(
+                        ReceiveTransferLineItem.builder()
+                                .lineId("1")
+                                .receivedQuantity(BigDecimal.valueOf(95))
+                                .discrepancyReason("Bị vỡ 5 lon khi bốc dỡ xe")
+                                .build()
+                ))
+                .generalReason("Biên bản sự cố xe số 29H-882.19")
+                .build();
+
+        StockTransferResponse res = stockTransferService.receiveTransfer(50L, payload, whStaffActor);
+
+        assertThat(res.getStatus()).isEqualTo(StockTransfer.STATUS_DISCREPANCY_RESOLVED);
+        assertThat(res.getDiscrepancyGeneralReason()).isEqualTo("Biên bản sự cố xe số 29H-882.19");
+        // Tồn kho đến được cộng theo số lượng thực nhận (95 lon)
+        assertThat(destInventory.getPhysicalStock()).isEqualByComparingTo(BigDecimal.valueOf(95));
+    }
+
+    /** S6-02: so khớp số lượng thẻ kho theo giá trị (không phụ thuộc scale). */
+    private static BigDecimal qtyEq(String v) {
+        return argThat(q -> q != null && q.compareTo(new BigDecimal(v)) == 0);
+    }
+}

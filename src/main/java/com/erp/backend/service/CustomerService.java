@@ -17,14 +17,13 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
+import com.erp.backend.dto.portal.PortalAccountRequest;
 import com.erp.backend.config.AuditLogInterceptor;
 import com.erp.backend.entity.AuditModule;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 
 /**
  * S3-03: Quản lý hồ sơ đại lý.
@@ -48,6 +47,17 @@ public class CustomerService {
     private final UserRepository userRepository;
     private final AuditLogService auditLogService;
     private final CustomerDeliveryAddressRepository addressRepository;
+    private final PriceListRepository priceListRepository;
+    private final SalesOrderRepository orderRepository;
+    private final CustomerCreditService creditService;
+    private final WarehouseRepository warehouseRepository;
+    private final PortalAccountService portalAccountService;
+    private final InvoiceRepository invoiceRepository;
+    private final CreditNoteRepository creditNoteRepository;
+
+    /** S7-04: đại lý bị gắn cờ công nợ thì BLOCK = chặn tạo đơn mới, REQUIRE_APPROVAL = vẫn tạo nhưng chốt phải duyệt. */
+    @org.springframework.beans.factory.annotation.Value("${erp.credit.flag-action:REQUIRE_APPROVAL}")
+    String creditFlagAction = CreditFlagService.ACTION_REQUIRE_APPROVAL;
 
     // ======================= S3-08: TÌM KIẾM / XEM =======================
 
@@ -79,7 +89,29 @@ public class CustomerService {
                         transactionLocked),
                 PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by("id").descending())));
 
-        return PageResponse.of(result.map(this::toResponse));
+        List<Long> customerIds = result.getContent().stream().map(Customer::getId).toList();
+        Map<Long, Integer> deliveryCounts = new HashMap<>();
+        Map<Long, BigDecimal> debtMap = new HashMap<>();
+        if (!customerIds.isEmpty()) {
+            for (Object[] row : addressRepository.countByCustomerIdsAndStatus(customerIds, ACTIVE)) {
+                Long cid = (Long) row[0];
+                Long cnt = (Long) row[1];
+                deliveryCounts.put(cid, cnt != null ? cnt.intValue() : 0);
+            }
+            // S7-07: công nợ = đơn chưa xuất hoá đơn + số còn nợ trên hoá đơn (đã trừ tiền thu), như CustomerCreditService
+            addDebtRows(debtMap, orderRepository.sumTotalAmountByCustomerIdsAndStatuses(
+                    customerIds, SalesOrder.OUTSTANDING_DEBT_STATUSES));
+            addDebtRows(debtMap, invoiceRepository.sumOpenRemainingByCustomerIds(customerIds));
+            // S8-02: số dư có do giảm trừ trả hàng chưa đối trừ được -> trừ vào công nợ
+            subtractDebtRows(debtMap, creditNoteRepository.sumUnappliedByCustomerIds(customerIds));
+        }
+
+        Map<CustomerGroup, RefItem> priceListMap = resolveEffectivePriceLists();
+        return PageResponse.of(result.map(c -> toResponse(
+                c,
+                priceListMap.get(c.getCustomerGroup()),
+                deliveryCounts.getOrDefault(c.getId(), 0),
+                debtMap.getOrDefault(c.getId(), BigDecimal.ZERO))));
     }
 
     @Transactional(readOnly = true)
@@ -100,11 +132,46 @@ public class CustomerService {
         List<RefItem> regions = regionRepository.findByStatusOrderByNameAsc(ACTIVE).stream()
                 .map(r -> new RefItem(r.getId(), r.getCode(), r.getName()))
                 .toList();
-        List<RefItem> salesReps = userRepository
-                .findDistinctByRoles_NameAndStatusOrderByFullNameAsc(RoleName.ROLE_SALES_REP, ACTIVE).stream()
+
+        Map<Long, User> salesUsersMap = new LinkedHashMap<>();
+        for (User u : userRepository.findDistinctByRoles_NameInAndStatusOrderByFullNameAsc(
+                List.of(RoleName.ROLE_SALES_REP, RoleName.ROLE_SALES_MANAGER), ACTIVE)) {
+            if (u.getId() != null) {
+                salesUsersMap.put(u.getId(), u);
+            }
+        }
+        for (User u : customerRepository.findDistinctSalesRepsWithCustomers()) {
+            if (u != null && u.getId() != null && !salesUsersMap.containsKey(u.getId())) {
+                salesUsersMap.put(u.getId(), u);
+            }
+        }
+
+        List<RefItem> salesReps = salesUsersMap.values().stream()
+                .sorted(Comparator.comparing(User::getFullName, String.CASE_INSENSITIVE_ORDER))
                 .map(this::toUserRef)
                 .toList();
-        return new CustomerFormOptionsResponse(groups, statuses, regions, salesReps);
+
+        Map<CustomerGroup, RefItem> priceListMap = resolveEffectivePriceLists();
+        List<PriceListOptionResponse> priceLists = priceListMap.entrySet().stream()
+                .map(e -> new PriceListOptionResponse(
+                        e.getValue().id(),
+                        e.getValue().code(),
+                        e.getValue().name(),
+                        e.getKey().name(),
+                        e.getKey().getLabel()))
+                .toList();
+
+        List<RefItem> warehouses = warehouseRepository.findByStatusOrderByNameAsc(ACTIVE).stream()
+                .map(w -> new RefItem(w.getId(), w.getCode(), w.getName()))
+                .toList();
+
+        List<RefItem> portalUsers = userRepository
+                .findDistinctByRoles_NameAndStatusOrderByFullNameAsc(RoleName.ROLE_CUSTOMER, ACTIVE)
+                .stream()
+                .map(this::toUserRef)
+                .toList();
+
+        return new CustomerFormOptionsResponse(groups, statuses, regions, salesReps, priceLists, warehouses, portalUsers);
     }
 
     // ======================= S3-03: TẠO / SỬA HỒ SƠ =======================
@@ -138,6 +205,15 @@ public class CustomerService {
         if (salesRep != null) {
             recordHistory(saved, null, salesRep, CustomerAssignmentHistory.TYPE_CREATE, "Gán khi tạo đại lý", actor);
         }
+
+        if (req.getPortalUserId() != null) {
+            PortalAccountRequest portalReq = new PortalAccountRequest();
+            portalReq.setUserId(req.getPortalUserId());
+            portalReq.setReason("Gắn tài khoản cổng khi tạo đại lý");
+            portalAccountService.link(saved.getId(), portalReq, actor);
+            saved = findCustomer(saved.getId());
+        }
+
         return toResponse(saved);
     }
 
@@ -157,11 +233,22 @@ public class CustomerService {
         if (StringUtils.hasText(saved.getAddress())) {
             createOrUpdateDefaultDeliveryAddress(saved, saved.getAddress(), saved.getContactName(), saved.getPhone());
         }
+
+        boolean shouldChangePortalUser = Boolean.TRUE.equals(req.getChangePortalUser())
+                || (req.getPortalUserId() != null && (customer.getPortalUser() == null || !req.getPortalUserId().equals(customer.getPortalUser().getId())));
+        if (shouldChangePortalUser) {
+            PortalAccountRequest portalReq = new PortalAccountRequest();
+            portalReq.setUserId(req.getPortalUserId());
+            portalReq.setReason("Cập nhật tài khoản cổng đại lý");
+            portalAccountService.link(saved.getId(), portalReq, actor);
+            saved = findCustomer(saved.getId());
+        }
+
         return toResponse(saved);
     }
 
     /**
-     * Đại lý không xoá cứng: chỉ chuyển "Ngừng giao dịch" (bắt buộc lý do) hoặc "Đang giao dịch" trở lại.
+     * Ngừng giao dịch (bắt buộc lý do) hoặc giao dịch lại. Đại lý đã có giao dịch chỉ dùng cách này thay cho xoá.
      */
     @Transactional
     public CustomerResponse changeStatus(Long id, ChangeCustomerStatusRequest req, UserDetailsImpl actor) {
@@ -183,6 +270,54 @@ public class CustomerService {
         customer.setStatus(newStatus);
         customer.setStatusReason(INACTIVE.equals(newStatus) ? reason : null);
         return toResponse(customerRepository.save(customer));
+    }
+
+    /**
+     * Xoá hồ sơ đại lý (Admin, Kế toán công nợ).
+     * Quy tắc 8: đại lý đã phát sinh giao dịch (có đơn hàng, kể cả đơn nháp) thì KHÔNG xoá được,
+     * chỉ chuyển "Ngừng giao dịch" để giữ lịch sử. Đại lý chưa có giao dịch (vd tạo nhầm) thì xoá hẳn
+     * cùng điểm giao và lịch sử phân công, ghi nhật ký kèm lý do và thông tin trước khi xoá.
+     */
+    @Transactional
+    public void delete(Long id, DeleteCustomerRequest req, UserDetailsImpl actor) {
+        String reason = blankToNull(req != null ? req.getReason() : null);
+        if (reason == null) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, "REASON_REQUIRED",
+                    "Vui lòng nhập lý do xoá đại lý", "reason");
+        }
+
+        Customer customer = customerRepository.findByIdForUpdate(id)
+                .orElseThrow(() -> BusinessException.notFound("Không tìm thấy đại lý"));
+
+        if (orderRepository.existsByCustomer_Id(id)) {
+            throw new BusinessException(HttpStatus.CONFLICT, "CUSTOMER_HAS_TRANSACTIONS",
+                    "Đại lý " + customer.getCode() + " đã phát sinh đơn hàng nên không xoá được. "
+                            + "Hãy chuyển sang \"Ngừng giao dịch\" để giữ lịch sử.", null);
+        }
+
+        String oldValue = String.format("{\"code\":\"%s\",\"name\":\"%s\",\"taxCode\":\"%s\",\"customerGroup\":\"%s\"}",
+                jsonSafe(customer.getCode()), jsonSafe(customer.getName()), jsonSafe(customer.getTaxCode()),
+                customer.getCustomerGroup() != null ? customer.getCustomerGroup().name() : "");
+
+        addressRepository.deleteByCustomer_Id(id);
+        historyRepository.deleteByCustomer_Id(id);
+        customerRepository.delete(customer);
+
+        auditLogService.record(
+                AuditModule.CUSTOMER,
+                "DELETE_CUSTOMER",
+                "CUSTOMER",
+                id,
+                customer.getCode(),
+                oldValue,
+                null,
+                reason,
+                actor);
+        markAuditLogged();
+    }
+
+    private static String jsonSafe(String value) {
+        return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     // ======================= S3-05: HẠN MỨC CÔNG NỢ & SỐ NGÀY NỢ =======================
@@ -292,6 +427,17 @@ public class CustomerService {
      * S3-07 & S4-02: Kiểm tra đại lý có đủ điều kiện tạo đơn hàng mới hay không.
      * Chặn tạo đơn mới trên mọi nền tảng nếu bị khóa giao dịch hoặc ngừng hoạt động.
      */
+    /**
+     * Mục 12: bản dùng cho API - NV kinh doanh chỉ kiểm tra được đại lý mình phụ trách
+     * (trước đây gọi được với mọi id, lộ hạn mức / nợ quá hạn của đại lý người khác).
+     */
+    @Transactional(readOnly = true)
+    public OrderCreationCheckResponse checkOrderCreation(Long id, UserDetailsImpl actor) {
+        Customer customer = findCustomer(id);
+        CustomerAccess.checkCanAccess(actor, customer);
+        return checkOrderCreation(id);
+    }
+
     @Transactional(readOnly = true)
     public OrderCreationCheckResponse checkOrderCreation(Long id) {
         Customer customer = findCustomer(id);
@@ -317,15 +463,48 @@ public class CustomerService {
                     customer.getMaxDebtDays(),
                     false);
         }
+        // S7-04: đại lý bị hệ thống gắn cờ công nợ và cấu hình là chặn đơn mới
+        if (customer.isCreditFlaggedNow() && CreditFlagService.blocks(creditFlagAction)) {
+            return new OrderCreationCheckResponse(
+                    customer.getId(),
+                    customer.getCode(),
+                    customer.getName(),
+                    false,
+                    creditFlagMessage(customer) + " Chặn tạo đơn mới.",
+                    customer.getCreditLimit(),
+                    customer.getMaxDebtDays(),
+                    false);
+        }
+        // S4-02: có khoản nợ quá số ngày cho phép -> chặn tạo đơn mới
+        CreditStatusResponse credit = creditService.evaluate(customer, java.math.BigDecimal.ZERO);
+        if (credit != null && credit.overdue()) {
+            return new OrderCreationCheckResponse(
+                    customer.getId(),
+                    customer.getCode(),
+                    customer.getName(),
+                    false,
+                    credit.message(),
+                    customer.getCreditLimit(),
+                    customer.getMaxDebtDays(),
+                    false);
+        }
         return new OrderCreationCheckResponse(
                 customer.getId(),
                 customer.getCode(),
                 customer.getName(),
                 true,
-                null,
+                // S7-04: bị gắn cờ nhưng cấu hình "cần duyệt": vẫn tạo được đơn, báo trước là chốt sẽ phải duyệt
+                customer.isCreditFlaggedNow()
+                        ? creditFlagMessage(customer) + " Đơn mới khi chốt sẽ chuyển sang Chờ duyệt." : null,
                 customer.getCreditLimit(),
                 customer.getMaxDebtDays(),
                 false);
+    }
+
+    /** S7-04: thông báo đại lý đang bị gắn cờ công nợ kèm lý do. */
+    static String creditFlagMessage(Customer customer) {
+        return "Đại lý " + customer.getName() + " (" + customer.getCode() + ") đang bị cảnh báo công nợ"
+                + (customer.getCreditFlagReason() != null ? ": " + customer.getCreditFlagReason() : "") + ".";
     }
 
     /**
@@ -341,6 +520,13 @@ public class CustomerService {
             throw BusinessException.badRequest("CUSTOMER_INACTIVE",
                     "Đại lý " + customer.getName() + " (" + customer.getCode() + ") đã ngừng giao dịch.");
         }
+        // S7-04: đại lý bị gắn cờ công nợ + cấu hình BLOCK -> chặn đơn mới
+        if (customer.isCreditFlaggedNow() && CreditFlagService.blocks(creditFlagAction)) {
+            throw BusinessException.conflict("CUSTOMER_CREDIT_FLAGGED",
+                    creditFlagMessage(customer) + " Chặn tạo đơn mới.", "customerId");
+        }
+        // S4-02: nợ quá hạn -> chặn tạo đơn mới hoàn toàn
+        creditService.assertNoOverdueDebt(customer);
     }
 
     // ======================= S3-06: PHÂN CÔNG NGƯỜI PHỤ TRÁCH =======================
@@ -359,6 +545,18 @@ public class CustomerService {
         customer.setSalesRep(newRep);
         Customer saved = customerRepository.save(customer);
         recordHistory(saved, oldRep, newRep, CustomerAssignmentHistory.TYPE_ASSIGN, blankToNull(req.getReason()), actor);
+
+        auditLogService.record(
+                AuditModule.CUSTOMER,
+                "ASSIGN_SALES_REP",
+                "CUSTOMER",
+                saved.getId(),
+                saved.getCode(),
+                oldRep != null ? oldRep.getFullName() + " (@" + oldRep.getUsername() + ")" : "Chưa phân công",
+                newRep.getFullName() + " (@" + newRep.getUsername() + ")",
+                req.getReason() != null ? req.getReason() : "Điều chuyển người phụ trách",
+                actor);
+
         return toResponse(saved);
     }
 
@@ -405,6 +603,17 @@ public class CustomerService {
         customerRepository.saveAll(customers);
         historyRepository.saveAll(histories);
 
+        auditLogService.record(
+                AuditModule.CUSTOMER,
+                "TRANSFER_CUSTOMERS",
+                "CUSTOMER",
+                fromRep.getId(),
+                "NV-" + fromRep.getUsername(),
+                fromRep.getFullName() + " (" + customers.size() + " đại lý)",
+                toRep.getFullName() + " (" + customers.size() + " đại lý)",
+                reason,
+                actor);
+
         return new TransferCustomersResponse(customers.size(),
                 "Đã chuyển " + customers.size() + " đại lý từ " + fromRep.getFullName() + " sang " + toRep.getFullName());
     }
@@ -425,6 +634,57 @@ public class CustomerService {
                 .toList();
     }
 
+    /**
+     * Tra cứu lịch sử phân công và chuyển giao địa bàn toàn hệ thống kèm bộ lọc.
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<AssignmentHistoryItemResponse> searchAssignmentHistories(
+            String keyword,
+            Long customerId,
+            Long fromSalesRepId,
+            Long toSalesRepId,
+            String changeType,
+            LocalDateTime startDate,
+            LocalDateTime endDate,
+            int page,
+            int size,
+            UserDetailsImpl actor) {
+        Long restrictedId = CustomerAccess.restrictedSalesRepId(actor);
+
+        int safePage = Math.max(page, 0);
+        int safeSize = size <= 0 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
+
+        Page<CustomerAssignmentHistory> result = historyRepository.findAll(
+                CustomerAssignmentHistorySpecifications.search(
+                        keyword,
+                        customerId,
+                        fromSalesRepId,
+                        toSalesRepId,
+                        changeType,
+                        restrictedId,
+                        startDate,
+                        endDate),
+                PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "changedAt").and(Sort.by("id").descending())));
+
+        return PageResponse.of(result.map(h -> {
+            Customer c = h.getCustomer();
+            RefItem customerRef = c != null ? new RefItem(c.getId(), c.getCode(), c.getName()) : null;
+            RefItem regionRef = (c != null && c.getRegion() != null)
+                    ? new RefItem(c.getRegion().getId(), c.getRegion().getCode(), c.getRegion().getName())
+                    : null;
+            return new AssignmentHistoryItemResponse(
+                    h.getId(),
+                    h.getChangeType(),
+                    customerRef,
+                    regionRef,
+                    toUserRef(h.getFromSalesRep()),
+                    toUserRef(h.getToSalesRep()),
+                    toUserRef(h.getChangedBy()),
+                    h.getReason(),
+                    h.getChangedAt());
+        }));
+    }
+
     // ======================= HÀM PHỤ =======================
 
     private void applyProfile(Customer customer, CustomerProfileRequest req, String taxCode) {
@@ -443,17 +703,42 @@ public class CustomerService {
         customer.setEmail(email == null ? null : email.toLowerCase());
         customer.setAddress(blankToNull(req.getAddress()));
         customer.setNote(blankToNull(req.getNote()));
+
+        if (req.getDefaultWarehouseId() != null) {
+            Warehouse wh = warehouseRepository.findById(req.getDefaultWarehouseId())
+                    .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST, "WAREHOUSE_NOT_FOUND",
+                            "Kho phục vụ mặc định không tồn tại", "defaultWarehouseId"));
+            customer.setDefaultWarehouse(wh);
+        }
     }
 
-    /** Người phụ trách phải là nhân viên kinh doanh đang hoạt động. */
+    /** S5-03: Gán kho phục vụ mặc định cho đại lý */
+    @Transactional
+    public CustomerResponse assignDefaultWarehouse(Long id, Long warehouseId, UserDetailsImpl actor) {
+        Customer customer = findCustomer(id);
+        CustomerAccess.checkCanAccess(actor, customer);
+        if (warehouseId == null) {
+            customer.setDefaultWarehouse(null);
+        } else {
+            Warehouse wh = warehouseRepository.findById(warehouseId)
+                    .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST, "WAREHOUSE_NOT_FOUND",
+                            "Kho không tồn tại", "warehouseId"));
+            customer.setDefaultWarehouse(wh);
+        }
+        Customer saved = customerRepository.save(customer);
+        return toResponse(saved);
+    }
+
+    /** Người phụ trách phải thuộc bộ phận kinh doanh (nhân viên hoặc quản lý kinh doanh) và đang hoạt động. */
     User loadActiveSalesRep(Long userId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_SALES_REP",
                         "Không tìm thấy nhân viên kinh doanh", "salesRepId"));
-        boolean isSalesRep = user.getRoles().stream().anyMatch(r -> r.getName() == RoleName.ROLE_SALES_REP);
-        if (!isSalesRep) {
+        boolean isSalesStaff = user.getRoles().stream().anyMatch(r ->
+                r.getName() == RoleName.ROLE_SALES_REP || r.getName() == RoleName.ROLE_SALES_MANAGER);
+        if (!isSalesStaff) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_SALES_REP",
-                    user.getFullName() + " không phải nhân viên kinh doanh", "salesRepId");
+                    user.getFullName() + " không thuộc bộ phận kinh doanh", "salesRepId");
         }
         if (!ACTIVE.equalsIgnoreCase(user.getStatus())) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, "INVALID_SALES_REP",
@@ -482,8 +767,74 @@ public class CustomerService {
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy đại lý"));
     }
 
+    private static final java.time.ZoneId VN_ZONE = java.time.ZoneId.of("Asia/Ho_Chi_Minh");
+
+    private Map<CustomerGroup, RefItem> resolveEffectivePriceLists() {
+        if (priceListRepository == null) return Collections.emptyMap();
+        java.time.LocalDate today = java.time.LocalDate.now(VN_ZONE);
+        List<PriceList> effective = priceListRepository.findAllEffective(today);
+        Map<CustomerGroup, RefItem> map = new EnumMap<>(CustomerGroup.class);
+        for (PriceList p : effective) {
+            if (!map.containsKey(p.getCustomerGroup())) {
+                map.put(p.getCustomerGroup(), new RefItem(p.getId(), p.getCode(), p.getName()));
+            }
+        }
+        for (CustomerGroup g : CustomerGroup.values()) {
+            if (!map.containsKey(g)) {
+                List<PriceList> active = priceListRepository.findByCustomerGroupAndStatusOrderByStartDateDesc(g, ACTIVE);
+                if (!active.isEmpty()) {
+                    PriceList p = active.get(0);
+                    map.put(g, new RefItem(p.getId(), p.getCode(), p.getName()));
+                }
+            }
+        }
+        return map;
+    }
+
+    private RefItem resolvePriceListForGroup(CustomerGroup group) {
+        if (group == null || priceListRepository == null) return null;
+        return resolveEffectivePriceLists().get(group);
+    }
+
+    /**
+     * Công nợ hiện tại của 1 đại lý, cùng công thức với danh sách đại lý và CustomerCreditService:
+     * đơn đã duyệt chưa xuất hoá đơn + số còn nợ trên hoá đơn - giảm trừ chưa đối trừ (S8-02).
+     */
+    BigDecimal currentDebt(Long customerId) {
+        if (customerId == null) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal orders = orderRepository.sumTotalAmountByCustomerAndStatuses(
+                customerId, SalesOrder.OUTSTANDING_DEBT_STATUSES);
+        BigDecimal invoices = invoiceRepository.sumOpenRemainingByCustomer(customerId);
+        BigDecimal credit = creditNoteRepository.sumUnappliedByCustomer(customerId);
+        return nz(orders).add(nz(invoices)).subtract(nz(credit));
+    }
+
+    private static BigDecimal nz(BigDecimal v) {
+        return v != null ? v : BigDecimal.ZERO;
+    }
+
     CustomerResponse toResponse(Customer c) {
+        BigDecimal debt = currentDebt(c.getId());
+        return toResponse(c, resolvePriceListForGroup(c.getCustomerGroup()), null, debt);
+    }
+
+    CustomerResponse toResponse(Customer c, RefItem priceListRef) {
+        BigDecimal debt = currentDebt(c.getId());
+        int count = c.getId() != null ? (int) addressRepository.countByCustomer_IdAndStatus(c.getId(), ACTIVE) : 0;
+        return toResponse(c, priceListRef, count, debt);
+    }
+
+    CustomerResponse toResponse(Customer c, RefItem priceListRef, Integer deliveryPointCount) {
+        BigDecimal debt = currentDebt(c.getId());
+        return toResponse(c, priceListRef, deliveryPointCount, debt);
+    }
+
+    CustomerResponse toResponse(Customer c, RefItem priceListRef, Integer deliveryPointCount, BigDecimal currentDebt) {
         Region region = c.getRegion();
+        Warehouse defaultWh = c.getDefaultWarehouse();
+        RefItem defaultWhRef = defaultWh == null ? null : new RefItem(defaultWh.getId(), defaultWh.getCode(), defaultWh.getName());
         return new CustomerResponse(
                 c.getId(),
                 c.getCode(),
@@ -506,7 +857,12 @@ public class CustomerService {
                 c.getTransactionLockReason(),
                 c.getTransactionLockedAt(),
                 c.getCreatedAt(),
-                c.getUpdatedAt());
+                c.getUpdatedAt(),
+                priceListRef,
+                deliveryPointCount != null ? deliveryPointCount : 0,
+                defaultWhRef,
+                toUserRef(c.getPortalUser()),
+                currentDebt != null ? currentDebt : BigDecimal.ZERO);
     }
 
     private RefItem toUserRef(User u) {
@@ -560,5 +916,36 @@ public class CustomerService {
 
     private static String blankToNull(String value) {
         return StringUtils.hasText(value) ? value.trim() : null;
+    }
+
+    /** S8-02: Trừ các dòng [customerId, số tiền] khỏi bảng công nợ theo đại lý. */
+    private static void subtractDebtRows(Map<Long, BigDecimal> debtMap, List<Object[]> rows) {
+        if (rows == null) {
+            return;
+        }
+        List<Object[]> negated = new java.util.ArrayList<>();
+        for (Object[] row : rows) {
+            if (row != null && row.length >= 2 && row[1] != null) {
+                BigDecimal v = row[1] instanceof BigDecimal b ? b : new BigDecimal(row[1].toString());
+                negated.add(new Object[]{row[0], v.negate()});
+            }
+        }
+        addDebtRows(debtMap, negated);
+    }
+
+    /** Cộng các dòng [customerId, số tiền] vào bảng công nợ theo đại lý. */
+    private static void addDebtRows(Map<Long, BigDecimal> debtMap, List<Object[]> rows) {
+        if (rows == null) {
+            return;
+        }
+        for (Object[] row : rows) {
+            if (row != null && row.length >= 2 && row[0] instanceof Number) {
+                Long cid = ((Number) row[0]).longValue();
+                BigDecimal sum = row[1] instanceof BigDecimal
+                        ? (BigDecimal) row[1]
+                        : (row[1] != null ? new BigDecimal(row[1].toString()) : BigDecimal.ZERO);
+                debtMap.merge(cid, sum, BigDecimal::add);
+            }
+        }
     }
 }

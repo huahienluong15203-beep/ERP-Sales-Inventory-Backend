@@ -12,5 +12,7 @@ public interface RegionRepository extends JpaRepository<Region, Long> {
 
     java.util.Optional<Region> findByCodeIgnoreCase(String code);
 
+    java.util.Optional<Region> findByNameIgnoreCase(String name);
+
     List<Region> findByStatusOrderByNameAsc(String status);
 }

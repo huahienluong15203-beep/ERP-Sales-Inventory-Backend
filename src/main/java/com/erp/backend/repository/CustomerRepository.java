@@ -1,6 +1,7 @@
 package com.erp.backend.repository;
 
 import com.erp.backend.entity.Customer;
+import com.erp.backend.entity.User;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -31,6 +32,17 @@ public interface CustomerRepository extends JpaRepository<Customer, Long>, JpaSp
     @Query("select c from Customer c where c.id = :id")
     Optional<Customer> findByIdForUpdate(@Param("id") Long id);
 
+    /** S7-04: id các đại lý theo trạng thái (để quét cờ công nợ từng đại lý một). */
+    @Query("select c.id from Customer c where c.status = :status order by c.id asc")
+    List<Long> findIdsByStatus(@Param("status") String status);
+
+    /** S7-04: đại lý đang bị gắn cờ công nợ. */
+    @Query("select c from Customer c left join fetch c.salesRep where c.creditFlagged = true order by c.creditFlaggedAt asc, c.id asc")
+    List<Customer> findCreditFlagged();
+
+    /** S4-10: Đại lý gắn với tài khoản cổng đại lý đang đăng nhập. */
+    Optional<Customer> findByPortalUser_Id(Long userId);
+
     // S3-06: Chuyển giao hàng loạt
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select c from Customer c where c.salesRep.id = :salesRepId")
@@ -45,4 +57,20 @@ public interface CustomerRepository extends JpaRepository<Customer, Long>, JpaSp
     @Override
     @EntityGraph(attributePaths = {"region", "salesRep"})
     Page<Customer> findAll(Specification<Customer> spec, Pageable pageable);
+
+    @Query("select distinct c.salesRep from Customer c where c.salesRep is not null")
+    List<User> findDistinctSalesRepsWithCustomers();
+
+    long countBySalesRep_Id(Long salesRepId);
+
+    long countByCustomerGroup(com.erp.backend.entity.CustomerGroup customerGroup);
+
+    // S5-01: Tìm đại lý gắn với tài khoản người dùng
+    Optional<Customer> findByUser_Id(Long userId);
+
+    Optional<Customer> findByEmailIgnoreCase(String email);
+
+    Optional<Customer> findByPhone(String phone);
+
+    Optional<Customer> findByCodeIgnoreCase(String code);
 }

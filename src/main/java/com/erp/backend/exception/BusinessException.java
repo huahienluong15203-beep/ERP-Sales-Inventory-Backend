@@ -21,8 +21,16 @@ public class BusinessException extends RuntimeException {
         this.field = field;
     }
 
+    public BusinessException(HttpStatus status, String code, String message) {
+        this(status, code, message, null);
+    }
+
     public static BusinessException badRequest(String code, String message) {
         return new BusinessException(HttpStatus.BAD_REQUEST, code, message, null);
+    }
+
+    public static BusinessException badRequest(String message) {
+        return new BusinessException(HttpStatus.BAD_REQUEST, "BAD_REQUEST", message, null);
     }
 
     public static BusinessException conflict(String code, String message, String field) {

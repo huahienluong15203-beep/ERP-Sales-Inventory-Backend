@@ -14,6 +14,8 @@ public record DiscountPolicyResponse(
         String productName,
         Long categoryId,
         String categoryName,
+        String customerGroup,
+        String customerGroupLabel,
         String discountType,
         LocalDate startDate,
         LocalDate endDate,

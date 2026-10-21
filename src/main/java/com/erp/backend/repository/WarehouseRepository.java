@@ -10,7 +10,15 @@ import java.util.List;
 public interface WarehouseRepository extends JpaRepository<Warehouse, Long> {
     boolean existsByCode(String code);
 
+    boolean existsByCodeIgnoreCase(String code);
+
+    boolean existsByCodeIgnoreCaseAndIdNot(String code, Long id);
+
     java.util.Optional<Warehouse> findByCodeIgnoreCase(String code);
 
     List<Warehouse> findByStatusOrderByNameAsc(String status);
+
+    List<Warehouse> findByStatusIgnoreCaseOrderByNameAsc(String status);
+
+    List<Warehouse> findByNameContainingIgnoreCaseOrCodeContainingIgnoreCase(String name, String code);
 }

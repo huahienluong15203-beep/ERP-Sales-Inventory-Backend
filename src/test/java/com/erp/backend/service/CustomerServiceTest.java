@@ -1,12 +1,15 @@
 package com.erp.backend.service;
 
 import com.erp.backend.dto.customer.*;
+import com.erp.backend.dto.user.RefItem;
 import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.CustomerAssignmentHistoryRepository;
 import com.erp.backend.repository.CustomerDeliveryAddressRepository;
 import com.erp.backend.repository.CustomerRepository;
+import com.erp.backend.repository.PriceListRepository;
 import com.erp.backend.repository.RegionRepository;
+import com.erp.backend.repository.SalesOrderRepository;
 import com.erp.backend.repository.UserRepository;
 import com.erp.backend.security.UserDetailsImpl;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,6 +22,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
 
@@ -37,6 +41,13 @@ class CustomerServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private AuditLogService auditLogService;
     @Mock private CustomerDeliveryAddressRepository addressRepository;
+    @Mock private PriceListRepository priceListRepository;
+    @Mock private SalesOrderRepository orderRepository;
+    @Mock private CustomerCreditService creditService;
+    @Mock private com.erp.backend.repository.InvoiceRepository invoiceRepository;
+    @Mock private com.erp.backend.repository.CreditNoteRepository creditNoteRepository;
+    @Mock private com.erp.backend.repository.WarehouseRepository warehouseRepository;
+    @Mock private PortalAccountService portalAccountService;
 
     @InjectMocks private CustomerService service;
 
@@ -46,6 +57,7 @@ class CustomerServiceTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(warehouseRepository.findByStatusOrderByNameAsc(any())).thenReturn(List.of());
         lenient().when(customerRepository.save(any(Customer.class))).thenAnswer(inv -> inv.getArgument(0));
         lenient().when(regionRepository.findById(1L)).thenReturn(Optional.of(region(1, "ACTIVE")));
         lenient().when(userRepository.getReferenceById(anyLong()))
@@ -90,6 +102,80 @@ class CustomerServiceTest {
         verify(customerRepository).findAll(any(org.springframework.data.jpa.domain.Specification.class), pageable.capture());
         assertThat(pageable.getValue().getPageNumber()).isEqualTo(1);
         assertThat(pageable.getValue().getPageSize()).isEqualTo(20);
+    }
+
+    @Test
+    @DisplayName("S4-02: Tìm kiếm đại lý -> nạp đúng công nợ hiện tại từ đơn hàng")
+    void search_populatesCurrentDebtFromOrders() {
+        Customer c1 = customer(7, null);
+        when(customerRepository.findAll(any(org.springframework.data.jpa.domain.Specification.class),
+                any(org.springframework.data.domain.Pageable.class)))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(c1)));
+        when(orderRepository.sumTotalAmountByCustomerIdsAndStatuses(eq(List.of(7L)), eq(SalesOrder.OUTSTANDING_DEBT_STATUSES)))
+                .thenReturn(List.<Object[]>of(new Object[]{7L, new BigDecimal("40284000")}));
+
+        com.erp.backend.dto.user.PageResponse<CustomerResponse> res =
+                service.search(null, null, null, null, null, null, 0, 20, manager);
+
+        assertThat(res.content()).hasSize(1);
+        assertThat(res.content().get(0).currentDebt()).isEqualByComparingTo(new BigDecimal("40284000"));
+    }
+
+    @Test
+    @DisplayName("S7-07: Công nợ trong danh sách đại lý = đơn chưa xuất hoá đơn + số còn nợ trên hoá đơn (đã trừ tiền thu)")
+    void search_debtIncludesInvoiceRemaining() {
+        Customer c1 = customer(7, null);
+        Customer c2 = customer(8, null);
+        when(customerRepository.findAll(any(org.springframework.data.jpa.domain.Specification.class),
+                any(org.springframework.data.domain.Pageable.class)))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(c1, c2)));
+        when(orderRepository.sumTotalAmountByCustomerIdsAndStatuses(eq(List.of(7L, 8L)), eq(SalesOrder.OUTSTANDING_DEBT_STATUSES)))
+                .thenReturn(List.<Object[]>of(new Object[]{7L, new BigDecimal("1000000")}));
+        when(invoiceRepository.sumOpenRemainingByCustomerIds(List.of(7L, 8L)))
+                .thenReturn(List.<Object[]>of(new Object[]{7L, new BigDecimal("2500000")},
+                        new Object[]{8L, new BigDecimal("300000")}));
+
+        com.erp.backend.dto.user.PageResponse<CustomerResponse> res =
+                service.search(null, null, null, null, null, null, 0, 20, manager);
+
+        assertThat(res.content().get(0).currentDebt()).isEqualByComparingTo("3500000");
+        assertThat(res.content().get(1).currentDebt()).isEqualByComparingTo("300000");
+    }
+
+    @Test
+    @DisplayName("S8-02: Chi tiết đại lý trả cùng công nợ với danh sách (đơn chưa xuất HĐ + còn nợ hoá đơn - giảm trừ chưa đối trừ)")
+    void getById_debtSameAsList() {
+        Customer c = customer(7, null);
+        when(customerRepository.findById(7L)).thenReturn(java.util.Optional.of(c));
+        when(orderRepository.sumTotalAmountByCustomerAndStatuses(7L, SalesOrder.OUTSTANDING_DEBT_STATUSES))
+                .thenReturn(new BigDecimal("1000000"));
+        when(invoiceRepository.sumOpenRemainingByCustomer(7L)).thenReturn(new BigDecimal("2500000"));
+        when(creditNoteRepository.sumUnappliedByCustomer(7L)).thenReturn(new BigDecimal("200000"));
+
+        assertThat(service.getById(7L, manager).currentDebt()).isEqualByComparingTo("3300000");
+
+        when(customerRepository.findAll(any(org.springframework.data.jpa.domain.Specification.class),
+                any(org.springframework.data.domain.Pageable.class)))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(c)));
+        when(orderRepository.sumTotalAmountByCustomerIdsAndStatuses(eq(List.of(7L)), eq(SalesOrder.OUTSTANDING_DEBT_STATUSES)))
+                .thenReturn(List.<Object[]>of(new Object[]{7L, new BigDecimal("1000000")}));
+        when(invoiceRepository.sumOpenRemainingByCustomerIds(List.of(7L)))
+                .thenReturn(List.<Object[]>of(new Object[]{7L, new BigDecimal("2500000")}));
+        when(creditNoteRepository.sumUnappliedByCustomerIds(List.of(7L)))
+                .thenReturn(List.<Object[]>of(new Object[]{7L, new BigDecimal("200000")}));
+
+        assertThat(service.search(null, null, null, null, null, null, 0, 20, manager).content().get(0).currentDebt())
+                .isEqualByComparingTo("3300000");
+    }
+
+    @Test
+    @DisplayName("S8-02: Đơn đã lập hoá đơn 100.000 -> chi tiết đại lý vẫn báo nợ 100.000 (không về 0)")
+    void getById_invoicedOrderStillDebt() {
+        Customer c = customer(7, null);
+        when(customerRepository.findById(7L)).thenReturn(java.util.Optional.of(c));
+        when(invoiceRepository.sumOpenRemainingByCustomer(7L)).thenReturn(new BigDecimal("100000"));
+
+        assertThat(service.getById(7L, manager).currentDebt()).isEqualByComparingTo("100000");
     }
 
     // ======================= S3-03: TẠO / SỬA =======================
@@ -412,6 +498,51 @@ class CustomerServiceTest {
         verify(historyRepository, never()).saveAll(anyList());
     }
 
+    @Test
+    @DisplayName("S3-06: Chuyển giao sang Quản lý kinh doanh (ROLE_SALES_MANAGER) thành công")
+    void transfer_toSalesManager_success() {
+        User leaving = salesRep(7);
+        User salesManager = user(2, "ACTIVE", RoleName.ROLE_SALES_MANAGER);
+        Customer c1 = customer(1, leaving);
+        when(userRepository.findById(7L)).thenReturn(Optional.of(leaving));
+        when(userRepository.findById(2L)).thenReturn(Optional.of(salesManager));
+        when(customerRepository.findBySalesRepIdForUpdate(7L)).thenReturn(List.of(c1));
+
+        TransferCustomersRequest req = new TransferCustomersRequest();
+        req.setFromSalesRepId(7L);
+        req.setToSalesRepId(2L);
+        req.setReason("Bàn giao tạm cho quản lý");
+
+        TransferCustomersResponse res = service.transfer(req, manager);
+
+        assertThat(res.transferredCount()).isEqualTo(1);
+        assertThat(c1.getSalesRep()).isSameAs(salesManager);
+    }
+
+    @Test
+    @DisplayName("S3-06: getFormOptions bao gồm cả nhân viên kinh doanh và quản lý kinh doanh")
+    void getFormOptions_includesBothSalesRoles() {
+        User rep = user(4, "ACTIVE", RoleName.ROLE_SALES_REP);
+        rep.setFullName("Lê Văn Bán Hàng");
+        User mgr = user(2, "ACTIVE", RoleName.ROLE_SALES_MANAGER);
+        mgr.setFullName("Trần Quản Lý");
+        User leavingWithCustomers = user(7, "LOCKED", RoleName.ROLE_SALES_REP);
+        leavingWithCustomers.setFullName("Nguyễn Đã Nghỉ");
+
+        when(regionRepository.findByStatusOrderByNameAsc("ACTIVE")).thenReturn(List.of());
+        when(userRepository.findDistinctByRoles_NameInAndStatusOrderByFullNameAsc(
+                List.of(RoleName.ROLE_SALES_REP, RoleName.ROLE_SALES_MANAGER), "ACTIVE"))
+                .thenReturn(List.of(rep, mgr));
+        when(customerRepository.findDistinctSalesRepsWithCustomers())
+                .thenReturn(List.of(leavingWithCustomers));
+
+        CustomerFormOptionsResponse res = service.getFormOptions();
+
+        assertThat(res.salesReps()).hasSize(3);
+        assertThat(res.salesReps().stream().map(RefItem::name).toList())
+                .containsExactly("Lê Văn Bán Hàng", "Nguyễn Đã Nghỉ", "Trần Quản Lý");
+    }
+
     // ======================= S3-05: TESTS HẠN MỨC CÔNG NỢ =======================
 
     @Test
@@ -644,5 +775,151 @@ class CustomerServiceTest {
         assertThatThrownBy(() -> service.assertCanCreateOrder(c))
                 .isInstanceOf(BusinessException.class)
                 .extracting("code").isEqualTo("CUSTOMER_TRANSACTION_LOCKED");
+    }
+
+    @Test
+    @DisplayName("S4-02: Kiểm tra tạo đơn - Bị chặn khi đại lý có nợ quá hạn")
+    void checkOrderCreation_overdue_blocked() {
+        Customer c = customer(1L, null);
+        when(customerRepository.findById(1L)).thenReturn(Optional.of(c));
+        when(creditService.evaluate(eq(c), any())).thenReturn(new com.erp.backend.dto.customer.CreditStatusResponse(
+                1L, c.getCode(), c.getName(), java.math.BigDecimal.TEN, java.math.BigDecimal.ONE, java.math.BigDecimal.ONE,
+                java.math.BigDecimal.ZERO, java.math.BigDecimal.ONE, false, java.math.BigDecimal.ZERO, 30,
+                true, 1, java.math.BigDecimal.ONE, 5, true, "Đại lý có 1 khoản nợ quá hạn 5 ngày"));
+
+        OrderCreationCheckResponse res = service.checkOrderCreation(1L);
+
+        assertThat(res.allowed()).isFalse();
+        assertThat(res.blockReason()).contains("nợ quá hạn");
+    }
+
+    @Test
+    @DisplayName("S4-02: assertCanCreateOrder chặn khi đại lý có nợ quá hạn")
+    void assertCanCreateOrder_overdue_throws() {
+        Customer c = customer(1L, null);
+        doThrow(BusinessException.conflict("CUSTOMER_DEBT_OVERDUE", "Nợ quá hạn", "customerId"))
+                .when(creditService).assertNoOverdueDebt(c);
+
+        assertThatThrownBy(() -> service.assertCanCreateOrder(c))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("CUSTOMER_DEBT_OVERDUE");
+    }
+
+    // ======================= S7-04: CỜ CẢNH BÁO CÔNG NỢ =======================
+
+    private static Customer flagged(Customer c) {
+        c.setCreditFlagged(true);
+        c.setCreditFlagReason("Có 1 khoản nợ quá hạn 12 ngày");
+        return c;
+    }
+
+    @Test
+    @DisplayName("S7-04: Cấu hình BLOCK -> đại lý bị gắn cờ không tạo được đơn mới")
+    void assertCanCreateOrder_flagged_block() {
+        service.creditFlagAction = "BLOCK";
+        Customer c = flagged(customer(1L, null));
+
+        assertThatThrownBy(() -> service.assertCanCreateOrder(c))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("CUSTOMER_CREDIT_FLAGGED");
+        verify(creditService, never()).assertNoOverdueDebt(any());
+    }
+
+    @Test
+    @DisplayName("S7-04: Cấu hình REQUIRE_APPROVAL (mặc định) -> vẫn tạo được đơn, kiểm tra tạo đơn báo trước sẽ phải duyệt")
+    void flagged_requireApproval_allowedWithNotice() {
+        service.creditFlagAction = "REQUIRE_APPROVAL";
+        Customer c = flagged(customer(1L, null));
+        when(customerRepository.findById(1L)).thenReturn(Optional.of(c));
+
+        service.assertCanCreateOrder(c);
+        OrderCreationCheckResponse res = service.checkOrderCreation(1L);
+
+        assertThat(res.allowed()).isTrue();
+        assertThat(res.blockReason()).contains("cảnh báo công nợ").contains("quá hạn 12 ngày").contains("Chờ duyệt");
+    }
+
+    @Test
+    @DisplayName("S7-04: Cấu hình BLOCK -> kiểm tra tạo đơn trả về không được tạo kèm lý do cờ")
+    void checkOrderCreation_flagged_block() {
+        service.creditFlagAction = "block";
+        Customer c = flagged(customer(1L, null));
+        when(customerRepository.findById(1L)).thenReturn(Optional.of(c));
+
+        OrderCreationCheckResponse res = service.checkOrderCreation(1L);
+
+        assertThat(res.allowed()).isFalse();
+        assertThat(res.blockReason()).contains("cảnh báo công nợ").contains("Chặn tạo đơn mới");
+    }
+
+    // ======================= XOÁ HỒ SƠ ĐẠI LÝ =======================
+
+    private static DeleteCustomerRequest deleteReq(String reason) {
+        DeleteCustomerRequest r = new DeleteCustomerRequest();
+        r.setReason(reason);
+        return r;
+    }
+
+    @Test
+    @DisplayName("Xoá đại lý: thiếu lý do -> 400, không xoá gì")
+    void delete_withoutReason_rejected() {
+        assertThatThrownBy(() -> service.delete(1L, deleteReq("  "), accountant))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("REASON_REQUIRED");
+        verify(customerRepository, never()).delete(any(Customer.class));
+    }
+
+    @Test
+    @DisplayName("Xoá đại lý đã có đơn hàng -> 409, giữ nguyên hồ sơ (quy tắc 8)")
+    void delete_withOrders_conflict() {
+        when(customerRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(customer(1, null)));
+        when(orderRepository.existsByCustomer_Id(1L)).thenReturn(true);
+
+        assertThatThrownBy(() -> service.delete(1L, deleteReq("Tạo nhầm"), accountant))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> {
+                    assertThat(((BusinessException) e).getCode()).isEqualTo("CUSTOMER_HAS_TRANSACTIONS");
+                    assertThat(((BusinessException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                });
+        verify(customerRepository, never()).delete(any(Customer.class));
+        verify(addressRepository, never()).deleteByCustomer_Id(anyLong());
+    }
+
+    @Test
+    @DisplayName("Xoá đại lý chưa có giao dịch -> xoá điểm giao, lịch sử phân công, hồ sơ và ghi nhật ký")
+    void delete_noTransactions_deletedAndAudited() {
+        Customer c = customer(1, null);
+        when(customerRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(c));
+        when(orderRepository.existsByCustomer_Id(1L)).thenReturn(false);
+
+        service.delete(1L, deleteReq("Tạo nhầm hồ sơ"), accountant);
+
+        verify(addressRepository).deleteByCustomer_Id(1L);
+        verify(historyRepository).deleteByCustomer_Id(1L);
+        verify(customerRepository).delete(c);
+        verify(auditLogService).record(eq(AuditModule.CUSTOMER), eq("DELETE_CUSTOMER"), eq("CUSTOMER"), eq(1L),
+                eq(c.getCode()), contains(c.getCode()), isNull(), eq("Tạo nhầm hồ sơ"), eq(accountant));
+    }
+
+    @Test
+    @DisplayName("Xoá đại lý không tồn tại -> 404")
+    void delete_notFound() {
+        when(customerRepository.findByIdForUpdate(99L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.delete(99L, deleteReq("x"), accountant))
+                .isInstanceOf(BusinessException.class)
+                .extracting("status").isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("Mục 12: NV kinh doanh kiểm tra tạo đơn của đại lý người khác -> 404, không lộ hạn mức")
+    void checkOrderCreation_otherRepsCustomer_notFound() {
+        Customer c = customer(1L, salesRep(50L));
+        when(customerRepository.findById(1L)).thenReturn(Optional.of(c));
+        UserDetailsImpl otherRep = actor(51L, "ROLE_SALES_REP");
+
+        assertThatThrownBy(() -> service.checkOrderCreation(1L, otherRep))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("CUSTOMER_NOT_FOUND");
     }
 }

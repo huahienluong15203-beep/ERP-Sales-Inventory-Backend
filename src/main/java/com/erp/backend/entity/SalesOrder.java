@@ -14,6 +14,9 @@ import java.util.List;
 /**
  * S3-09: Đơn hàng bán cho đại lý. Sprint này mới có trạng thái DRAFT (đơn nháp, lưu và mở lại gõ tiếp).
  * Chốt đơn, giữ tồn, kiểm tra công nợ làm ở Sprint 4.
+ * S4-02: đơn đã duyệt (APPROVED) được tính vào công nợ hiện tại của đại lý, tính hạn nợ từ approvedAt.
+ * S4-05: chốt đơn DRAFT -> APPROVED (không vi phạm) hoặc PENDING_APPROVAL (vượt hạn mức / dưới giá sàn);
+ *        QL kinh doanh Duyệt -> APPROVED, Từ chối -> REJECTED, Trả lại sửa -> DRAFT.
  */
 @Entity
 @Table(name = "sales_orders")
@@ -26,6 +29,37 @@ import java.util.List;
 public class SalesOrder {
 
     public static final String STATUS_DRAFT = "DRAFT";
+    public static final String STATUS_PENDING_APPROVAL = "PENDING_APPROVAL";
+    public static final String STATUS_APPROVED = "APPROVED";
+    public static final String STATUS_PICKING = "PICKING";
+    public static final String STATUS_DISPATCHED = "DISPATCHED";
+    public static final String STATUS_DELIVERED = "DELIVERED";
+    public static final String STATUS_CLOSED = "CLOSED";
+    public static final String STATUS_CANCELLED = "CANCELLED";
+    public static final String STATUS_REJECTED = "REJECTED";
+    // S6-08: giao không thành công (đại lý không nhận), hàng đã nhập lại kho
+    public static final String STATUS_DELIVERY_FAILED = "DELIVERY_FAILED";
+
+    // S4-10: nguồn tạo đơn: nhân viên gõ đơn hay đại lý tự đặt qua cổng đại lý
+    public static final String SOURCE_STAFF = "STAFF";
+    public static final String SOURCE_PORTAL = "PORTAL";
+
+    // S5-06: trạng thái giữ chỗ tồn của đơn (null = đơn cũ trước S5-06, coi như đang giữ nếu đơn ở trạng thái giữ chỗ)
+    public static final String RESERVATION_RESERVED = "RESERVED";
+    public static final String RESERVATION_RELEASED = "RELEASED";
+    public static final String RESERVATION_DISPATCHED = "DISPATCHED";
+
+    /** Hình thức thanh toán: Mua nợ gối đầu (CREDIT) hoặc Thanh toán khi nhận hàng (COD). */
+    public static final String PAYMENT_METHOD_CREDIT = "CREDIT";
+    public static final String PAYMENT_METHOD_COD = "COD";
+
+    /**
+     * S4-02: Trạng thái đơn đang tính vào công nợ của đại lý.
+     * Chưa có hoá đơn / phiếu thu nên tạm coi đơn đã duyệt đến trước khi đóng là đang nợ; có module công nợ thì sửa ở đây.
+     */
+    public static final List<String> OUTSTANDING_DEBT_STATUSES = List.of(
+            STATUS_APPROVED, STATUS_PICKING, STATUS_DISPATCHED, STATUS_DELIVERED, STATUS_CLOSED
+    );
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -56,6 +90,10 @@ public class SalesOrder {
     @Column(length = 500)
     private String note;
 
+    @Column(name = "payment_method", length = 30)
+    @Builder.Default
+    private String paymentMethod = PAYMENT_METHOD_CREDIT;
+
     // Tổng tiền hàng (trước chiết khấu), tổng chiết khấu, tổng phải thu (VND)
     @Column(nullable = false, precision = 18, scale = 2)
     @Builder.Default
@@ -69,11 +107,163 @@ public class SalesOrder {
     @Builder.Default
     private BigDecimal totalAmount = BigDecimal.ZERO;
 
+    // S4-02: thời điểm đơn được duyệt, dùng làm ngày bắt đầu tính hạn nợ (maxDebtDays của đại lý)
+    @Column(name = "approved_at")
+    private LocalDateTime approvedAt;
+
+    // S4-05: người duyệt (null nếu đơn tự duyệt vì không vi phạm)
+    @Column(name = "approved_by_id")
+    private Long approvedById;
+
+    @Column(name = "approved_by_username", length = 50)
+    private String approvedByUsername;
+
+    // S4-05: lần chốt đơn gần nhất
+    @Column(name = "submitted_at")
+    private LocalDateTime submittedAt;
+
+    @Column(name = "submitted_by_username", length = 50)
+    private String submittedByUsername;
+
+    // S4-05: ý kiến gần nhất của người duyệt (lý do Từ chối / Trả lại sửa) để NV kinh doanh xem và sửa
+    @Column(name = "last_approval_comment", length = 500)
+    private String lastApprovalComment;
+
+    // S4-10: đơn đại lý tự đặt (PORTAL) luôn chờ nhân viên phụ trách xác nhận.
+    // columnDefinition có DEFAULT để ddl-auto=update thêm cột được trên bảng đã có dữ liệu
+    @Column(name = "source", length = 20, columnDefinition = "varchar(20) default 'STAFF'")
+    @Builder.Default
+    private String source = SOURCE_STAFF;
+
+    // S5-06: kho đã giữ chỗ (nhả / xuất đúng kho này, kể cả khi đại lý đổi khu vực sau đó)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "reserved_warehouse_id")
+    private Warehouse reservedWarehouse;
+
+    @Column(name = "reservation_status", length = 20)
+    private String reservationStatus;
+
+    @Column(name = "reserved_at")
+    private LocalDateTime reservedAt;
+
+    // S5-06: quá hạn mà đơn chưa soạn hàng thì hệ thống tự nhả tồn và huỷ đơn
+    @Column(name = "reservation_expires_at")
+    private LocalDateTime reservationExpiresAt;
+
+    // S4-06: Lý do huỷ đơn và thông tin người huỷ
+    @Column(name = "cancel_reason", length = 500)
+    private String cancelReason;
+
+    @Column(name = "cancelled_at")
+    private LocalDateTime cancelledAt;
+
+    @Column(name = "cancelled_by_id")
+    private Long cancelledById;
+
+    @Column(name = "cancelled_by_username", length = 50)
+    private String cancelledByUsername;
+
+    // S4-05: mức vi phạm tính lúc chốt đơn (null = không vi phạm)
+    @Column(name = "credit_exceeded_amount", precision = 18, scale = 2)
+    private BigDecimal creditExceededAmount;
+
+    @Column(name = "credit_exceeded_percent", precision = 9, scale = 2)
+    private BigDecimal creditExceededPercent;
+
+    // S7-04: lúc chốt, đại lý đang bị gắn cờ công nợ (cấu hình "chuyển cần duyệt") -> đơn phải được duyệt
+    @Column(name = "credit_flagged_at_submit")
+    private Boolean creditFlaggedAtSubmit;
+
+    @Column(name = "credit_flag_reason", length = 500)
+    private String creditFlagReason;
+
+    @Column(name = "below_floor_line_count")
+    private Integer belowFloorLineCount;
+
+    // Tổng tiền thiếu so với giá sàn của các dòng bán dưới giá sàn
+    @Column(name = "below_floor_amount", precision = 18, scale = 2)
+    private BigDecimal belowFloorAmount;
+
+    // % thấp hơn giá sàn của dòng vi phạm nặng nhất
+    @Column(name = "below_floor_max_percent", precision = 9, scale = 2)
+    private BigDecimal belowFloorMaxPercent;
+
     @Column(name = "created_by_id")
     private Long createdById;
 
     @Column(name = "created_by_username", length = 50)
     private String createdByUsername;
+
+    // S6-05: xuất kho (có thể xuất thiếu): thời điểm, người xác nhận, ghi chú / lý do xuất thiếu
+    @Column(name = "dispatched_at")
+    private LocalDateTime dispatchedAt;
+
+    @Column(name = "dispatched_by_username", length = 50)
+    private String dispatchedByUsername;
+
+    @Column(name = "dispatch_note", length = 500)
+    private String dispatchNote;
+
+    // S6-07: chuyến giao đang chở đơn này (null = chưa xếp chuyến)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "delivery_trip_id")
+    private DeliveryTrip deliveryTrip;
+
+    // S6-06: Thứ tự điểm giao trên chuyến (1, 2, 3...)
+    @Column(name = "delivery_stop_sequence")
+    private Integer deliveryStopSequence;
+
+    // S6-07: thời điểm phần hàng giao không được đã nhập lại kho (null = chưa nhập lại / chưa phát sinh)
+    @Column(name = "stock_returned_at")
+    private LocalDateTime stockReturnedAt;
+
+    // S6-05: đơn nợ hàng (phần còn thiếu khi xuất kho được tách sang đơn này để giao lần sau)
+    @Column(name = "is_backorder")
+    private Boolean backorder;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "parent_order_id")
+    private SalesOrder parentOrder;
+
+    @Column(name = "parent_order_code", length = 30)
+    private String parentOrderCode;
+
+    // S6-08: xác nhận giao hàng: người nhận, thời điểm giao thực tế, ảnh biên bản có chữ ký
+    @Column(name = "receiver_name", length = 100)
+    private String receiverName;
+
+    @Column(name = "delivered_at")
+    private LocalDateTime deliveredAt;
+
+    @Column(name = "delivery_confirmed_at")
+    private LocalDateTime deliveryConfirmedAt;
+
+    @Column(name = "delivery_confirmed_by_username", length = 50)
+    private String deliveryConfirmedByUsername;
+
+    /** Tên tệp ảnh biên bản giao hàng trong thư mục lưu trữ riêng (không phục vụ tĩnh, xem qua API có kiểm quyền). */
+    @Column(name = "delivery_proof_file", length = 120)
+    private String deliveryProofFile;
+
+    @Column(name = "delivery_proof_content_type", length = 30)
+    private String deliveryProofContentType;
+
+    @Column(name = "delivery_proof_uploaded_at")
+    private LocalDateTime deliveryProofUploadedAt;
+
+    // S6-08: giao không thành công
+    @Column(name = "delivery_failed_reason", length = 500)
+    private String deliveryFailedReason;
+
+    @Column(name = "delivery_failed_at")
+    private LocalDateTime deliveryFailedAt;
+
+    // S7-01: hoá đơn đã lập cho phần thực giao của đơn (null = chưa lập)
+    @Column(name = "invoice_id")
+    private Long invoiceId;
+
+    @Column(name = "invoice_code", length = 30)
+    private String invoiceCode;
 
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("lineNo ASC")
@@ -87,6 +277,11 @@ public class SalesOrder {
     @UpdateTimestamp
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    /** S6-05: đơn nợ hàng tách ra từ lần xuất thiếu của đơn khác. */
+    public boolean isBackorderOrder() {
+        return Boolean.TRUE.equals(backorder);
+    }
 
     public void addLine(SalesOrderLine line) {
         line.setOrder(this);

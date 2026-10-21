@@ -14,4 +14,12 @@ public interface CustomerDeliveryAddressRepository extends JpaRepository<Custome
     List<CustomerDeliveryAddress> findByCustomer_IdAndStatusOrderByDefaultAddressDescIdAsc(Long customerId, String status);
 
     Optional<CustomerDeliveryAddress> findByIdAndCustomer_Id(Long id, Long customerId);
+
+    /** Dọn điểm giao khi xoá hồ sơ đại lý chưa phát sinh giao dịch. */
+    void deleteByCustomer_Id(Long customerId);
+
+    long countByCustomer_IdAndStatus(Long customerId, String status);
+
+    @org.springframework.data.jpa.repository.Query("SELECT a.customer.id, COUNT(a) FROM CustomerDeliveryAddress a WHERE a.customer.id IN :customerIds AND a.status = :status GROUP BY a.customer.id")
+    List<Object[]> countByCustomerIdsAndStatus(@org.springframework.data.repository.query.Param("customerIds") java.util.Collection<Long> customerIds, @org.springframework.data.repository.query.Param("status") String status);
 }

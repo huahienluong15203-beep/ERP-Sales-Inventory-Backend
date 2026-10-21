@@ -58,6 +58,11 @@ public class DiscountPolicy {
     @Column(name = "discount_type", nullable = false, length = 20)
     private String discountType;
 
+    // DEALER_LEVEL_1 | DEALER_LEVEL_2 | RETAIL | null (áp dụng cho tất cả nhóm đại lý)
+    @Enumerated(EnumType.STRING)
+    @Column(name = "customer_group", length = 30)
+    private CustomerGroup customerGroup;
+
     @Column(name = "start_date", nullable = false)
     private LocalDate startDate;
 

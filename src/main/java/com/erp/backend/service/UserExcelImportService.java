@@ -138,7 +138,7 @@ public class UserExcelImportService {
                     "   - ROLE_WH_MANAGER: Quản lý kho (BẮT BUỘC gắn với ít nhất một mã kho hợp lệ)",
                     "   - ROLE_ACCOUNTANT: Kế toán công nợ",
                     "   - ROLE_CUSTOMER: Đại lý",
-                    "6. Ràng buộc kho (S1-09): Tài khoản thuộc vai trò Nhân viên kho hoặc Quản lý kho bắt buộc phải nhập Mã kho.",
+                    "6. Ràng buộc kho: Tài khoản thuộc vai trò Nhân viên kho hoặc Quản lý kho bắt buộc phải nhập Mã kho.",
                     "7. Dòng có lỗi sẽ tự động được hệ thống đánh dấu và bỏ qua, các dòng hợp lệ vẫn sẽ được nhập thành công."
             );
 
@@ -438,7 +438,7 @@ public class UserExcelImportService {
                 }
 
                 if (hasWarehouseRole && warehouseCodes.isEmpty()) {
-                    errors.add("Vai trò Nhân viên kho / Quản lý kho bắt buộc phải gắn với ít nhất một mã kho hợp lệ (S1-09).");
+                    errors.add("Vai trò Nhân viên kho / Quản lý kho bắt buộc phải gắn với ít nhất một mã kho hợp lệ.");
                 }
 
                 // 7. Kiểm tra Địa bàn

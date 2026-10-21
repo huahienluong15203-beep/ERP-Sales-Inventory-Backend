@@ -10,7 +10,8 @@ import java.time.LocalDateTime;
 /**
  * S3-03: Hồ sơ đại lý (khách hàng mua sỉ).
  * - Mã đại lý là duy nhất, không đổi sau khi tạo.
- * - Không xoá cứng: chỉ chuyển trạng thái INACTIVE (ngừng giao dịch).
+ * - Đã phát sinh giao dịch thì không xoá cứng, chỉ chuyển INACTIVE (ngừng giao dịch);
+ *   chưa có giao dịch (vd tạo nhầm) thì Admin / Kế toán xoá được (CustomerService.delete).
  * S3-06: Mỗi đại lý có một nhân viên kinh doanh phụ trách chính (salesRep).
  */
 @Entity
@@ -50,6 +51,16 @@ public class Customer {
     @JoinColumn(name = "sales_rep_id")
     private User salesRep;
 
+    // S5-01: Tài khoản đăng nhập tương ứng của đại lý (vai trò ROLE_CUSTOMER)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id")
+    private User user;
+
+    // S5-03: Kho phục vụ mặc định của đại lý
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "default_warehouse_id")
+    private Warehouse defaultWarehouse;
+
     @Column(name = "contact_name", length = 100)
     private String contactName;
 
@@ -85,6 +96,11 @@ public class Customer {
     @Builder.Default
     private Integer maxDebtDays = 30;
 
+    // S4-10: Tài khoản đăng nhập cổng đại lý (vai trò CUSTOMER) gắn với đại lý này. Mỗi tài khoản chỉ gắn 1 đại lý.
+    @OneToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "portal_user_id", unique = true)
+    private User portalUser;
+
     // S3-07: Khóa giao dịch đại lý (chặn tạo đơn mới trên mọi nền tảng khi có rủi ro công nợ).
     // columnDefinition có DEFAULT để ddl-auto=update thêm cột được trên bảng đã có dữ liệu
     @Column(name = "transaction_locked", nullable = false, columnDefinition = "boolean default false")
@@ -99,6 +115,21 @@ public class Customer {
     @Column(name = "transaction_locked_at")
     private LocalDateTime transactionLockedAt;
 
+    // S7-04: Cờ cảnh báo công nợ do hệ thống tự gắn (vượt hạn mức hoặc có khoản nợ quá hạn), đánh giá lại mỗi ngày.
+    @Column(name = "credit_flagged", nullable = false, columnDefinition = "boolean default false")
+    @Builder.Default
+    private Boolean creditFlagged = false;
+
+    @Column(name = "credit_flag_reason", length = 500)
+    private String creditFlagReason;
+
+    @Column(name = "credit_flagged_at")
+    private LocalDateTime creditFlaggedAt;
+
+    // S7-04: lần đánh giá cờ công nợ gần nhất
+    @Column(name = "credit_checked_at")
+    private LocalDateTime creditCheckedAt;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
@@ -106,6 +137,11 @@ public class Customer {
     @UpdateTimestamp
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    /** S7-04: đại lý đang bị gắn cờ cảnh báo công nợ. */
+    public boolean isCreditFlaggedNow() {
+        return Boolean.TRUE.equals(creditFlagged);
+    }
 
     public boolean isTransactionLocked() {
         return Boolean.TRUE.equals(transactionLocked);

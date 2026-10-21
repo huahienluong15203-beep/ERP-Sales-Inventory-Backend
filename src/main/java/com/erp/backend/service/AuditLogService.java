@@ -5,6 +5,9 @@ import com.erp.backend.dto.audit.CreateAuditLogEntry;
 import com.erp.backend.dto.user.PageResponse;
 import com.erp.backend.entity.AuditLog;
 import com.erp.backend.entity.AuditModule;
+import com.erp.backend.entity.Role;
+import com.erp.backend.entity.RoleName;
+import com.erp.backend.entity.User;
 import com.erp.backend.exception.BusinessException;
 import com.erp.backend.repository.AuditLogRepository;
 import com.erp.backend.repository.AuditLogSpecifications;
@@ -16,6 +19,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,6 +28,8 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.time.LocalDateTime;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * S2-04: Quản lý và ghi nhận nhật ký thao tác hệ thống.
@@ -72,16 +78,23 @@ public class AuditLogService {
         }
 
         String actorAvatar = entry.getActorAvatarUrl();
-        if (!StringUtils.hasText(actorAvatar) && userRepository != null) {
+        String actorRole = entry.getActorRole();
+        if ((!StringUtils.hasText(actorAvatar) || !StringUtils.hasText(actorRole)) && userRepository != null) {
+            User found = null;
             if (entry.getActorId() != null) {
-                actorAvatar = userRepository.findById(entry.getActorId())
-                        .map(u -> StringUtils.hasText(u.getAvatarThumbnailUrl()) ? u.getAvatarThumbnailUrl() : u.getAvatarUrl())
-                        .orElse(null);
+                found = userRepository.findById(entry.getActorId()).orElse(null);
             } else if (StringUtils.hasText(entry.getActorUsername())) {
-                actorAvatar = userRepository.findByUsername(entry.getActorUsername())
-                        .map(u -> StringUtils.hasText(u.getAvatarThumbnailUrl()) ? u.getAvatarThumbnailUrl() : u.getAvatarUrl())
-                        .orElse(null);
+                found = userRepository.findByUsername(entry.getActorUsername()).orElse(null);
             }
+            if (!StringUtils.hasText(actorAvatar) && found != null) {
+                actorAvatar = StringUtils.hasText(found.getAvatarThumbnailUrl()) ? found.getAvatarThumbnailUrl() : found.getAvatarUrl();
+            }
+            if (!StringUtils.hasText(actorRole)) {
+                actorRole = resolveRoleLabel(entry.getActorUsername(), found);
+            }
+        }
+        if (!StringUtils.hasText(actorRole)) {
+            actorRole = resolveRoleLabel(entry.getActorUsername(), null);
         }
 
         AuditLog auditLog = AuditLog.builder()
@@ -94,6 +107,7 @@ public class AuditLogService {
                 .actorUsername(entry.getActorUsername())
                 .actorFullName(entry.getActorFullName())
                 .actorAvatarUrl(actorAvatar)
+                .actorRole(actorRole)
                 .oldValue(entry.getOldValue())
                 .newValue(entry.getNewValue())
                 .reason(entry.getReason())
@@ -104,9 +118,9 @@ public class AuditLogService {
                 .build();
 
         AuditLog saved = auditLogRepository.save(auditLog);
-        log.info("AUDIT LOG [{}] Action={} Target={}:{} Actor={} Reason={}",
+        log.info("AUDIT LOG [{}] Action={} Target={}:{} Actor={} ({}) Reason={}",
                 saved.getModule(), saved.getAction(), saved.getTargetType(),
-                saved.getTargetCode(), saved.getActorUsername(), saved.getReason());
+                saved.getTargetCode(), saved.getActorUsername(), saved.getActorRole(), saved.getReason());
         return saved;
     }
 
@@ -129,6 +143,7 @@ public class AuditLogService {
                 .actorId(actor != null ? actor.getId() : null)
                 .actorUsername(actor != null ? actor.getUsername() : null)
                 .actorFullName(actor != null ? actor.getFullName() : null)
+                .actorRole(resolveRoleLabel(actor))
                 .build();
         return record(entry);
     }
@@ -153,35 +168,52 @@ public class AuditLogService {
             String action,
             int page,
             int size) {
+        // Tự động hoán đổi nếu ngày bắt đầu lớn hơn ngày kết thúc để tránh lỗi truy vấn rỗng sai logic
+        LocalDateTime effectiveStart = startDate;
+        LocalDateTime effectiveEnd = endDate;
+        if (effectiveStart != null && effectiveEnd != null && effectiveStart.isAfter(effectiveEnd)) {
+            LocalDateTime temp = effectiveStart;
+            effectiveStart = effectiveEnd;
+            effectiveEnd = temp;
+        }
+
         int safePage = Math.max(page, 0);
         int safeSize = size <= 0 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
 
         Page<AuditLog> result = auditLogRepository.findAll(
-                AuditLogSpecifications.filter(keyword, module, targetType, actorId, startDate, endDate, action),
+                AuditLogSpecifications.filter(keyword, module, targetType, actorId, effectiveStart, effectiveEnd, action),
                 PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by("id").descending())));
 
-        return PageResponse.of(result.map(this::toResponse));
+        boolean canViewCost = viewerCanSeeCostPrice();
+        return PageResponse.of(result.map(a -> maskCostIfNeeded(toResponse(a), canViewCost)));
     }
 
     @Transactional(readOnly = true)
     public AuditLogResponse getById(Long id) {
         AuditLog log = auditLogRepository.findById(id)
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy bản ghi nhật ký hệ thống"));
-        return toResponse(log);
+        return maskCostIfNeeded(toResponse(log), viewerCanSeeCostPrice());
     }
 
     public AuditLogResponse toResponse(AuditLog a) {
         String avatarUrl = a.getActorAvatarUrl();
-        if (!StringUtils.hasText(avatarUrl) && userRepository != null) {
+        String role = a.getActorRole();
+        if ((!StringUtils.hasText(avatarUrl) || !StringUtils.hasText(role)) && userRepository != null) {
+            User found = null;
             if (a.getActorId() != null) {
-                avatarUrl = userRepository.findById(a.getActorId())
-                        .map(u -> StringUtils.hasText(u.getAvatarThumbnailUrl()) ? u.getAvatarThumbnailUrl() : u.getAvatarUrl())
-                        .orElse(null);
+                found = userRepository.findById(a.getActorId()).orElse(null);
             } else if (StringUtils.hasText(a.getActorUsername())) {
-                avatarUrl = userRepository.findByUsername(a.getActorUsername())
-                        .map(u -> StringUtils.hasText(u.getAvatarThumbnailUrl()) ? u.getAvatarThumbnailUrl() : u.getAvatarUrl())
-                        .orElse(null);
+                found = userRepository.findByUsername(a.getActorUsername()).orElse(null);
             }
+            if (!StringUtils.hasText(avatarUrl) && found != null) {
+                avatarUrl = StringUtils.hasText(found.getAvatarThumbnailUrl()) ? found.getAvatarThumbnailUrl() : found.getAvatarUrl();
+            }
+            if (!StringUtils.hasText(role)) {
+                role = resolveRoleLabel(a.getActorUsername(), found);
+            }
+        }
+        if (!StringUtils.hasText(role)) {
+            role = resolveRoleLabel(a.getActorUsername(), null);
         }
 
         return new AuditLogResponse(
@@ -196,6 +228,7 @@ public class AuditLogService {
                 a.getActorUsername(),
                 a.getActorFullName(),
                 avatarUrl,
+                role,
                 a.getOldValue(),
                 a.getNewValue(),
                 a.getReason(),
@@ -204,6 +237,78 @@ public class AuditLogService {
                 a.getHttpMethod(),
                 a.getRequestUri(),
                 a.getCreatedAt());
+    }
+
+    static final String HIDDEN_VALUE = "••••••";
+
+    /**
+     * S1-05 / quy tắc 6: giá vốn chỉ QL kinh doanh (và Admin, giống màn sản phẩm) được xem.
+     * QL kho, Kế toán xem nhật ký thì giá trị trước / sau của thao tác giá vốn bị che.
+     */
+    static AuditLogResponse maskCostIfNeeded(AuditLogResponse r, boolean canViewCost) {
+        if (canViewCost || r.action() == null || !r.action().toUpperCase().contains("COST")) {
+            return r;
+        }
+        return new AuditLogResponse(r.id(), r.module(), r.moduleLabel(), r.action(), r.targetType(), r.targetId(),
+                r.targetCode(), r.actorId(), r.actorUsername(), r.actorFullName(), r.actorAvatarUrl(), r.actorRole(),
+                r.oldValue() == null ? null : HIDDEN_VALUE,
+                r.newValue() == null ? null : HIDDEN_VALUE,
+                "Thay đổi giá vốn (giá trị chỉ Quản lý kinh doanh được xem)",
+                r.ipAddress(), r.userAgent(), r.httpMethod(), r.requestUri(), r.createdAt());
+    }
+
+    public static String resolveRoleLabel(String username, User user) {
+        if (user != null && user.getRoles() != null && !user.getRoles().isEmpty()) {
+            Set<RoleName> roleNames = user.getRoles().stream()
+                    .map(Role::getName)
+                    .collect(Collectors.toSet());
+            if (roleNames.contains(RoleName.ROLE_ADMIN)) return "Quản trị hệ thống";
+            if (roleNames.contains(RoleName.ROLE_SALES_MANAGER)) return "Quản lý kinh doanh";
+            if (roleNames.contains(RoleName.ROLE_WH_MANAGER)) return "Quản lý kho";
+            if (roleNames.contains(RoleName.ROLE_ACCOUNTANT)) return "Kế toán";
+            if (roleNames.contains(RoleName.ROLE_SALES_REP)) return "Nhân viên kinh doanh";
+            if (roleNames.contains(RoleName.ROLE_WAREHOUSE)) return "Thủ kho";
+            if (roleNames.contains(RoleName.ROLE_CUSTOMER)) return "Đại lý";
+        }
+        if (StringUtils.hasText(username)) {
+            String u = username.toLowerCase();
+            if (u.contains("admin")) return "Quản trị hệ thống";
+            if (u.contains("manager") || u.contains("sales_mgr")) return "Quản lý kinh doanh";
+            if (u.contains("rep") || u.contains("sales")) return "Nhân viên kinh doanh";
+            if (u.contains("acc") || u.contains("accountant")) return "Kế toán";
+            if (u.contains("wh_manager")) return "Quản lý kho";
+            if (u.contains("wh") || u.contains("warehouse")) return "Thủ kho";
+            if (u.contains("customer") || u.contains("cust") || u.contains("daily")) return "Đại lý";
+        }
+        return "Nhân sự";
+    }
+
+    public static String resolveRoleLabel(UserDetailsImpl actor) {
+        if (actor == null) return "Hệ thống";
+        if (actor.getAuthorities() != null && !actor.getAuthorities().isEmpty()) {
+            Set<String> auths = actor.getAuthorities().stream()
+                    .map(GrantedAuthority::getAuthority)
+                    .collect(Collectors.toSet());
+            if (auths.contains("ROLE_ADMIN")) return "Quản trị hệ thống";
+            if (auths.contains("ROLE_SALES_MANAGER")) return "Quản lý kinh doanh";
+            if (auths.contains("ROLE_WH_MANAGER")) return "Quản lý kho";
+            if (auths.contains("ROLE_ACCOUNTANT")) return "Kế toán";
+            if (auths.contains("ROLE_SALES_REP")) return "Nhân viên kinh doanh";
+            if (auths.contains("ROLE_WAREHOUSE")) return "Thủ kho";
+            if (auths.contains("ROLE_CUSTOMER")) return "Đại lý";
+        }
+        return resolveRoleLabel(actor.getUsername(), null);
+    }
+
+    private static boolean viewerCanSeeCostPrice() {
+        try {
+            org.springframework.security.core.Authentication auth =
+                    org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+            return auth != null && auth.getAuthorities() != null && auth.getAuthorities().stream()
+                    .anyMatch(a -> "ROLE_SALES_MANAGER".equals(a.getAuthority()) || "ROLE_ADMIN".equals(a.getAuthority()));
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private static HttpServletRequest getCurrentHttpRequest() {

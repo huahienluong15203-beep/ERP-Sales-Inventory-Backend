@@ -3,6 +3,8 @@ package com.erp.backend.service;
 import com.erp.backend.dto.pricing.*;
 import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
+import com.erp.backend.repository.CustomerRepository;
+import com.erp.backend.repository.PriceHistoryRepository;
 import com.erp.backend.repository.PriceListItemRepository;
 import com.erp.backend.repository.PriceListRepository;
 import com.erp.backend.repository.ProductRepository;
@@ -39,6 +41,9 @@ class PriceListServiceTest {
     @Mock private ProductRepository productRepository;
     @Mock private AuditLogService auditLogService;
     @Mock private PriceHistoryService priceHistoryService;
+    @Mock private PriceHistoryRepository priceHistoryRepository;
+    @Mock private CustomerRepository customerRepository;
+    @Mock private com.erp.backend.repository.SalesOrderLineRepository orderLineRepository;
 
     @InjectMocks private PriceListService service;
 
@@ -356,13 +361,115 @@ class PriceListServiceTest {
     @Test
     @DisplayName("S2-10: Thống kê tính trên toàn bộ dữ liệu, không theo trang")
     void stats_countsAll() {
-        when(priceListRepository.count()).thenReturn(7L);
+        when(priceListRepository.countByStatusNot("DELETED")).thenReturn(7L);
         when(priceListRepository.countByStatus("ACTIVE")).thenReturn(5L);
-        when(priceListRepository.countByCustomerGroup(CustomerGroup.DEALER_LEVEL_1)).thenReturn(3L);
-        when(priceListRepository.countByCustomerGroup(CustomerGroup.DEALER_LEVEL_2)).thenReturn(2L);
-        when(priceListRepository.countByCustomerGroup(CustomerGroup.RETAIL)).thenReturn(2L);
+        when(priceListRepository.countByCustomerGroupAndStatusNot(CustomerGroup.DEALER_LEVEL_1, "DELETED")).thenReturn(3L);
+        when(priceListRepository.countByCustomerGroupAndStatusNot(CustomerGroup.DEALER_LEVEL_2, "DELETED")).thenReturn(2L);
+        when(priceListRepository.countByCustomerGroupAndStatusNot(CustomerGroup.RETAIL, "DELETED")).thenReturn(2L);
         when(priceListRepository.countByHasOrdersTrue()).thenReturn(1L);
 
         assertThat(service.stats()).isEqualTo(new PriceListStatsResponse(7, 5, 3, 2, 2, 1));
+    }
+
+    @Test
+    @DisplayName("S2-10: Xoá bảng giá chưa phát sinh đơn hàng (không phải bảng duy nhất có đại lý) -> Thành công")
+    void delete_success() {
+        PriceList list = PriceList.builder()
+                .id(5L)
+                .code("BG-TEST-DEL")
+                .name("Bảng giá test xoá")
+                .customerGroup(CustomerGroup.DEALER_LEVEL_1)
+                .startDate(LocalDate.of(2026, 10, 1))
+                .status("INACTIVE")
+                .hasOrders(false)
+                .items(new ArrayList<>())
+                .build();
+        when(priceListRepository.findByIdForUpdate(5L)).thenReturn(Optional.of(list));
+
+        service.delete(5L, manager);
+
+        // S3-02: xoá mềm, KHÔNG xoá lịch sử giá
+        verify(priceHistoryRepository, never()).deleteByPriceList(any());
+        verify(priceListRepository, never()).delete(any(PriceList.class));
+        verify(orderLineRepository).clearPriceListReference(5L);
+        assertThat(list.getStatus()).isEqualTo("DELETED");
+        assertThat(list.getCode()).isEqualTo("BG-TEST-DEL-XOA-5");
+        verify(auditLogService).record(eq(AuditModule.PRICING), eq("DELETE_PRICE_LIST"), eq("PRICE_LIST"),
+                eq(5L), eq("BG-TEST-DEL"), anyString(), isNull(), anyString(), eq(manager));
+    }
+
+    @Test
+    @DisplayName("S2-10: Xoá bảng giá hiệu lực duy nhất của nhóm đang có đại lý -> Báo lỗi 409 Conflict")
+    void delete_lastActivePriceList_withCustomers_conflict() {
+        PriceList list = PriceList.builder()
+                .id(5L)
+                .code("BG-ONLY-ONE")
+                .name("Bảng giá duy nhất")
+                .customerGroup(CustomerGroup.DEALER_LEVEL_1)
+                .startDate(LocalDate.of(2026, 10, 1))
+                .status("ACTIVE")
+                .hasOrders(false)
+                .items(new ArrayList<>())
+                .build();
+        when(priceListRepository.findByIdForUpdate(5L)).thenReturn(Optional.of(list));
+        when(priceListRepository.findEffectiveByCustomerGroup(eq(CustomerGroup.DEALER_LEVEL_1), any())).thenReturn(List.of(list));
+        when(customerRepository.countByCustomerGroup(CustomerGroup.DEALER_LEVEL_1)).thenReturn(3L);
+
+        assertThatThrownBy(() -> service.delete(5L, manager))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Không thể xoá bảng giá hiệu lực duy nhất của nhóm")
+                .hasMessageContaining("3 đại lý");
+
+        verify(priceListRepository, never()).delete(any(PriceList.class));
+    }
+
+    @Test
+    @DisplayName("S2-10: Xoá bảng giá đã phát sinh đơn hàng -> Báo lỗi 409 Conflict")
+    void delete_hasOrders_conflict() {
+        PriceList list = PriceList.builder()
+                .id(6L)
+                .code("BG-HAS-ORDER")
+                .name("Bảng giá có đơn")
+                .customerGroup(CustomerGroup.DEALER_LEVEL_1)
+                .startDate(LocalDate.of(2026, 10, 1))
+                .hasOrders(true)
+                .items(new ArrayList<>())
+                .build();
+        when(priceListRepository.findByIdForUpdate(6L)).thenReturn(Optional.of(list));
+
+        assertThatThrownBy(() -> service.delete(6L, manager))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Không thể xoá bảng giá đã phát sinh đơn hàng");
+
+        verify(priceListRepository, never()).delete(any(PriceList.class));
+    }
+
+    @Test
+    @DisplayName("S2-10: Xoá bảng giá không tồn tại -> Báo lỗi 404")
+    void delete_notFound() {
+        when(priceListRepository.findByIdForUpdate(999L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.delete(999L, manager))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Không tìm thấy");
+    }
+
+    @Test
+    @DisplayName("S2-10: Tạo bảng giá cùng nhóm trùng thời gian hiệu lực với bảng đang bật -> 409")
+    void create_overlappingPeriod_conflict() {
+        PriceList existingList = PriceList.builder().id(9L).code("BG-A").customerGroup(CustomerGroup.DEALER_LEVEL_1)
+                .startDate(LocalDate.of(2026, 10, 1)).status("ACTIVE").build();
+        when(priceListRepository.findOverlapping(eq(CustomerGroup.DEALER_LEVEL_1), eq(LocalDate.of(2026, 10, 1)), any(), isNull()))
+                .thenReturn(List.of(existingList));
+        PriceListRequest req = new PriceListRequest();
+        req.setCode("BG-B");
+        req.setName("Bảng giá B");
+        req.setCustomerGroup("DEALER_LEVEL_1");
+        req.setStartDate(LocalDate.of(2026, 10, 1));
+
+        assertThatThrownBy(() -> service.create(req, manager))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("PRICE_LIST_PERIOD_OVERLAP");
+        verify(priceListRepository, never()).save(any());
     }
 }

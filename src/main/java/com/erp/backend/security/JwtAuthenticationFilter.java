@@ -46,8 +46,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 // 3. Lấy thông tin user và quyền từ Database
                 UserDetails userDetails = userDetailsService.loadUserByUsername(username);
 
+                User dbUser = userRepository.findByUsername(username).orElse(null);
+                // S1-01: tạm khoá 15 phút do người khác nhập sai mật khẩu (có lockUntil) chỉ chặn ĐĂNG NHẬP MỚI,
+                // không đá người đang làm việc. Chỉ khoá do Admin (LOCKED, không có lockUntil) mới thu hồi phiên ngay.
+                boolean adminLocked = dbUser != null
+                        && "LOCKED".equalsIgnoreCase(dbUser.getStatus()) && dbUser.getLockUntil() == null;
+
                 // 4. Reloading current account state invalidates existing JWTs after an admin lock.
-                if (!userDetails.isEnabled() || !userDetails.isAccountNonLocked()) {
+                if (!userDetails.isEnabled() || adminLocked) {
                     logger.warn("Tài khoản '{}' đã bị khoá hoặc vô hiệu hoá bởi Quản trị viên.", username);
                     response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                     response.setContentType("application/json;charset=UTF-8");
@@ -55,14 +61,6 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     return;
                 }
 
-                User dbUser = userRepository.findByUsername(username).orElse(null);
-                if (dbUser != null && ("LOCKED".equalsIgnoreCase(dbUser.getStatus()) || (dbUser.getLockUntil() != null && dbUser.getLockUntil().isAfter(java.time.LocalDateTime.now())))) {
-                    logger.warn("Tài khoản '{}' trạng thái trong DB đang bị khoá.", username);
-                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                    response.setContentType("application/json;charset=UTF-8");
-                    response.getWriter().write("{\"status\":401,\"error\":\"Unauthorized\",\"message\":\"Tài khoản của bạn đã bị khoá bởi Quản trị viên. Phiên làm việc đã bị thu hồi!\",\"code\":\"ACCOUNT_LOCKED\"}");
-                    return;
-                }
 
                 // 5. Kiểm tra Đơn phiên làm việc (Single Active Session): 1 nick chỉ 1 phiên duy nhất
                 if (dbUser != null) {
@@ -87,7 +85,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     //    Token issuedAt phải SAU thời điểm đổi mật khẩu gần nhất.
                     boolean tokenIsValid = true;
                     Date issuedAt = jwtUtils.getIssuedAtFromToken(jwt);
-                    if (issuedAt != null && dbUser != null && dbUser.getPasswordChangedAt() != null) {
+                    // S1-04: chỉ thu hồi phiên KHÁC; phiên hiện tại (đúng activeSessionId) vừa đổi mật khẩu vẫn dùng tiếp
+                    boolean isCurrentSession = dbUser != null && jwtSessionId != null
+                            && jwtSessionId.equals(dbUser.getActiveSessionId());
+                    if (!isCurrentSession && issuedAt != null && dbUser != null && dbUser.getPasswordChangedAt() != null) {
                         long changedAtEpochSec = dbUser.getPasswordChangedAt()
                                 .atZone(ZoneId.systemDefault()).toEpochSecond();
                         long issuedAtEpochSec = issuedAt.getTime() / 1000;

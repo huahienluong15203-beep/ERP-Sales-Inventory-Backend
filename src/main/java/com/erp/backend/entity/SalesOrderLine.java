@@ -64,6 +64,14 @@ public class SalesOrderLine {
     @Column(name = "unit_price", nullable = false, precision = 15, scale = 2)
     private BigDecimal unitPrice;
 
+    // S4-01: Đơn giá áp dụng theo đơn vị tính đã chọn (unitName). Bằng unitPrice * conversionFactor nếu dùng giá niêm yết
+    @Column(name = "price_per_unit", precision = 15, scale = 2)
+    private BigDecimal pricePerUnit;
+
+    // S4-01: Đánh dấu dòng hàng đã sửa giá thủ công
+    @Column(name = "is_custom_price")
+    private Boolean isCustomPrice;
+
     @Column(name = "floor_price", nullable = false, precision = 15, scale = 2)
     private BigDecimal floorPrice;
 
@@ -78,4 +86,41 @@ public class SalesOrderLine {
 
     @Column(name = "net_amount", nullable = false, precision = 18, scale = 2)
     private BigDecimal netAmount;
+
+    // S5-01: Số lượng thực giao theo đơn vị tính đã chọn (unitName)
+    @Column(name = "delivered_quantity", precision = 15, scale = 4)
+    private BigDecimal deliveredQuantity;
+
+    // S5-01: Lý do giao thiếu nếu phát sinh giao thiếu so với số lượng đặt
+    @Column(name = "shortage_reason", length = 255)
+    private String shortageReason;
+
+    // S6-05: số lượng đặt ban đầu (theo unitName) khi kho xuất thiếu; quantity lúc đó = số thực xuất.
+    // null = dòng chưa từng bị xuất thiếu (quantity chính là số đặt)
+    @Column(name = "ordered_quantity", precision = 15, scale = 4)
+    private BigDecimal orderedQuantity;
+
+    // S6-05: số lượng còn nợ (theo unitName) đã chuyển sang đơn nợ hàng
+    @Column(name = "backorder_quantity", precision = 15, scale = 4)
+    private BigDecimal backorderQuantity;
+
+    // S6-05: lý do kho xuất thiếu dòng này
+    @Column(name = "dispatch_shortage_reason", length = 255)
+    private String dispatchShortageReason;
+
+    // S6-04: Số lô thực xuất
+    @Column(name = "batch_number", length = 100)
+    private String batchNumber;
+
+    // S6-04: Số lô mặc định do FEFO gợi ý
+    @Column(name = "suggested_batch_number", length = 100)
+    private String suggestedBatchNumber;
+
+    // S6-04: Lý do đổi lô khác với lô gợi ý FEFO
+    @Column(name = "lot_change_reason", length = 500)
+    private String lotChangeReason;
+
+    // S6-04: Hạn sử dụng của lô đã xuất
+    @Column(name = "lot_expired_date")
+    private java.time.LocalDate lotExpiredDate;
 }

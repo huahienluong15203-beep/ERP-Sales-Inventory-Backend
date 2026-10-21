@@ -192,6 +192,7 @@ class AuthServiceForgotPasswordTest {
                 .username("testuser")
                 .status("LOCKED")
                 .failedLoginAttempts(5)
+                .lockUntil(LocalDateTime.now().plusMinutes(10)) // đang tạm khoá 15 phút do sai mật khẩu
                 .build();
 
         PasswordResetToken token = PasswordResetToken.builder()
@@ -212,8 +213,53 @@ class AuthServiceForgotPasswordTest {
         assertNull(user.getLockUntil());
         assertEquals("ACTIVE", user.getStatus());
         assertTrue(token.isUsed());
+        // S1-03: đặt lại mật khẩu thu hồi phiên đang đăng nhập
+        assertNull(user.getActiveSessionId());
+        assertNotNull(user.getPasswordChangedAt());
 
         verify(userRepository, times(1)).save(user);
         verify(tokenRepository, times(1)).save(token);
+    }
+
+    @Test
+    @DisplayName("Mục 12: Tài khoản bị Admin khoá -> đặt lại mật khẩu KHÔNG tự mở khoá")
+    void testResetPassword_AdminLocked_StaysLocked() {
+        ResetPasswordRequest request = new ResetPasswordRequest();
+        request.setToken("good-token");
+        request.setNewPassword("NewPass123");
+
+        User user = User.builder().id(2L).username("locked_by_admin").status("LOCKED").failedLoginAttempts(0).build();
+        PasswordResetToken token = PasswordResetToken.builder()
+                .token("good-token").user(user).used(false).expiryDate(LocalDateTime.now().plusMinutes(20)).build();
+
+        when(tokenRepository.findByToken("good-token")).thenReturn(Optional.of(token));
+        when(passwordEncoder.encode("NewPass123")).thenReturn("hashed_new_password");
+
+        authService.resetPassword(request);
+
+        assertEquals("LOCKED", user.getStatus());
+        assertEquals("hashed_new_password", user.getPassword());
+    }
+
+    @Test
+    @DisplayName("S1-02: Gia hạn phiên -> cấp token mới cùng phiên hiện tại")
+    void testRefreshSession_IssuesNewTokenSameSession() {
+        User user = User.builder().id(3L).username("sales_rep").activeSessionId("sid-1").build();
+        when(userRepository.findById(3L)).thenReturn(Optional.of(user));
+        when(jwtUtils.generateTokenFromUsernameAndSession("sales_rep", "sid-1")).thenReturn("new-token");
+
+        var res = authService.refreshSession(3L);
+
+        assertEquals("new-token", res.get("accessToken"));
+    }
+
+    @Test
+    @DisplayName("S1-02: Phiên đã đăng xuất / bị thu hồi -> không gia hạn được")
+    void testRefreshSession_NoActiveSession_Rejected() {
+        User user = User.builder().id(3L).username("sales_rep").activeSessionId(null).build();
+        when(userRepository.findById(3L)).thenReturn(Optional.of(user));
+
+        assertThrows(RuntimeException.class, () -> authService.refreshSession(3L));
+        verify(jwtUtils, never()).generateTokenFromUsernameAndSession(any(), any());
     }
 }

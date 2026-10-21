@@ -2,6 +2,7 @@ package com.erp.backend.controller;
 
 import com.erp.backend.dto.product.*;
 import com.erp.backend.dto.user.PageResponse;
+import java.util.List;
 import com.erp.backend.security.UserDetailsImpl;
 import com.erp.backend.service.ProductExcelImportService;
 import com.erp.backend.service.ProductService;
@@ -67,6 +68,19 @@ public class ProductManagementController {
     }
 
     /**
+     * Tra cứu nhanh danh sách sản phẩm cho các ô chọn (combobox, bảng giá, đơn hàng).
+     */
+    @GetMapping("/search-options")
+    @Operation(summary = "Tìm kiếm nhanh sản phẩm cho ô chọn (combobox)", description = "Tìm kiếm nhanh theo từ khoá (SKU hoặc Tên sản phẩm) đang hoạt động (ACTIVE).")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'WH_MANAGER', 'WAREHOUSE', 'SALES_REP', 'ACCOUNTANT')")
+    public ResponseEntity<List<ProductOptionItemResponse>> searchProductOptions(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(defaultValue = "200") int limit,
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        return ResponseEntity.ok(productService.searchProductOptions(keyword, limit, actor));
+    }
+
+    /**
      * S2-05 & S2-07: Lấy chi tiết sản phẩm theo ID kèm toàn bộ đơn vị quy đổi.
      */
     @GetMapping("/{id}")
@@ -95,11 +109,12 @@ public class ProductManagementController {
      */
     @GetMapping
     @Operation(summary = "Danh sách sản phẩm (có tìm kiếm & phân trang)",
-            description = "Tìm kiếm theo từ khóa (tên, mã SKU), lọc theo nhóm hàng hoặc trạng thái kinh doanh. Giá vốn chỉ trả về cho Quản lý kinh doanh.")
+            description = "Tìm kiếm theo từ khóa (tên, mã SKU), lọc theo nhóm hàng hoặc trạng thái kinh doanh. Hỗ trợ loại trừ nhóm hàng (excludeCategory). Giá vốn chỉ trả về cho Quản lý kinh doanh.")
     @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'WH_MANAGER', 'WAREHOUSE', 'SALES_REP', 'ACCOUNTANT')")
     public ResponseEntity<PageResponse<ProductResponse>> searchProducts(
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) String category,
+            @RequestParam(required = false) String excludeCategory,
             @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
@@ -107,7 +122,7 @@ public class ProductManagementController {
             @AuthenticationPrincipal UserDetailsImpl actor) {
 
         int safePage = Math.max(page, 0);
-        int safeSize = size <= 0 ? 20 : Math.min(size, 100);
+        int safeSize = size <= 0 ? 20 : Math.min(size, 500);
 
         Sort sortOrder = Sort.by(Sort.Direction.DESC, "id");
         if (sort != null && !sort.isBlank()) {
@@ -141,7 +156,7 @@ public class ProductManagementController {
         }
 
         PageResponse<ProductResponse> result = productService.searchProducts(
-                keyword, category, status, PageRequest.of(safePage, safeSize, sortOrder), actor);
+                keyword, category, excludeCategory, status, PageRequest.of(safePage, safeSize, sortOrder), actor);
         return ResponseEntity.ok(result);
     }
 

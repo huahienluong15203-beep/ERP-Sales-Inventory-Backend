@@ -11,6 +11,7 @@ import java.time.LocalDate;
 @Setter
 public class DiscountCalculationRequest {
     private String productSku;
+    private String customerGroup;
     private BigDecimal quantity;
     private BigDecimal unitPrice;
     private LocalDate date;

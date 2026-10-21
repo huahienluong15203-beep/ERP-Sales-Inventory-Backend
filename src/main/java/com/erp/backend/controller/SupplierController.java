@@ -16,7 +16,7 @@ import org.springframework.web.bind.annotation.*;
 /**
  * S2-09: Danh mục nhà cung cấp.
  * - Xem: Admin, Quản lý kho, Nhân viên kho, Quản lý kinh doanh, Kế toán.
- * - Thêm/sửa/ngừng giao dịch/xoá: Admin, Quản lý kho, Nhân viên kho.
+ * - Thêm/sửa/ngừng giao dịch/xoá: Admin, Quản lý kho.
  */
 @RestController
 @RequestMapping("/api/suppliers")
@@ -42,26 +42,26 @@ public class SupplierController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('ADMIN', 'WH_MANAGER', 'WAREHOUSE')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'WH_MANAGER')")
     public ResponseEntity<SupplierResponse> create(@Valid @RequestBody CreateSupplierRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(supplierService.create(request));
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyRole('ADMIN', 'WH_MANAGER', 'WAREHOUSE')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'WH_MANAGER')")
     public SupplierResponse update(@PathVariable Long id, @Valid @RequestBody SupplierProfileRequest request) {
         return supplierService.update(id, request);
     }
 
     /** Ngừng giao dịch (bắt buộc lý do) hoặc giao dịch lại. */
     @PatchMapping("/{id}/status")
-    @PreAuthorize("hasAnyRole('ADMIN', 'WH_MANAGER', 'WAREHOUSE')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'WH_MANAGER')")
     public SupplierResponse changeStatus(@PathVariable Long id, @Valid @RequestBody ChangeSupplierStatusRequest request) {
         return supplierService.changeStatus(id, request);
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyRole('ADMIN', 'WH_MANAGER', 'WAREHOUSE')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'WH_MANAGER')")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         supplierService.delete(id);
         return ResponseEntity.noContent().build();

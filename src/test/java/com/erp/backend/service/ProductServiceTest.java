@@ -217,14 +217,15 @@ class ProductServiceTest {
         assertThat(response).isNotNull();
         assertThat(existing.getName()).isEqualTo("Coca mới");
         assertThat(existing.getCostPrice()).isEqualByComparingTo(BigDecimal.valueOf(210000));
+        // Đổi giá vốn -> ghi nhật ký nhóm giá (PRICING) kèm giá cũ / mới
         verify(auditLogService).record(
-                eq(AuditModule.INVENTORY),
-                eq("UPDATE_PRODUCT"),
+                eq(AuditModule.PRICING),
+                eq("UPDATE_COST_PRICE"),
                 eq("PRODUCT"),
                 eq(1L),
-                eq("SP-COCA-330"),
-                any(),
-                any(),
+                eq("SP-COCA-330:Coca mới"),
+                eq("200000"),
+                eq("210000"),
                 anyString(),
                 eq(actor)
         );
@@ -321,5 +322,45 @@ class ProductServiceTest {
 
         // Bảo mật: Nhân viên kho không thấy được giá vốn
         assertThat(response.getCostPrice()).isNull();
+    }
+
+    @Test
+    @DisplayName("S2-05: Khai báo URL ảnh không hợp lệ -> Ném lỗi INVALID_IMAGE_URL")
+    void createProduct_Fails_WhenInvalidImageUrl() {
+        CreateProductRequest request = CreateProductRequest.builder()
+                .sku("SP-TEST-IMG")
+                .name("Sản phẩm test ảnh")
+                .baseUnit("Lon")
+                .imageUrl("https://13212312")
+                .build();
+
+        when(productRepository.existsBySku("SP-TEST-IMG")).thenReturn(false);
+
+        assertThatThrownBy(() -> productService.createProduct(request, actor))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "INVALID_IMAGE_URL");
+    }
+
+    @Test
+    @DisplayName("S2-05: Cập nhật URL ảnh không hợp lệ -> Ném lỗi INVALID_IMAGE_URL")
+    void updateProduct_Fails_WhenInvalidImageUrl() {
+        Product existing = Product.builder()
+                .id(1L)
+                .sku("SP-COCA-330")
+                .name("Coca cũ")
+                .baseUnit("Lon")
+                .build();
+
+        UpdateProductRequest request = UpdateProductRequest.builder()
+                .name("Coca mới")
+                .baseUnit("Lon")
+                .imageUrl("https://13212312")
+                .build();
+
+        when(productRepository.findById(1L)).thenReturn(Optional.of(existing));
+
+        assertThatThrownBy(() -> productService.updateProduct(1L, request, actor))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "INVALID_IMAGE_URL");
     }
 }

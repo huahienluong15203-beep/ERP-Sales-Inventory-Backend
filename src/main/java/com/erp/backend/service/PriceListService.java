@@ -3,10 +3,12 @@ package com.erp.backend.service;
 import com.erp.backend.dto.pricing.*;
 import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
+import com.erp.backend.repository.PriceHistoryRepository;
 import com.erp.backend.repository.PriceListItemRepository;
 import com.erp.backend.repository.PriceListRepository;
 import com.erp.backend.repository.PriceListSpecifications;
 import com.erp.backend.dto.user.PageResponse;
+import com.erp.backend.repository.CustomerRepository;
 import com.erp.backend.repository.ProductRepository;
 import com.erp.backend.security.UserDetailsImpl;
 import lombok.RequiredArgsConstructor;
@@ -37,6 +39,9 @@ public class PriceListService {
 
     static final String ACTIVE = "ACTIVE";
     static final String INACTIVE = "INACTIVE";
+    /** S3-02: xoá mềm - giữ lại bảng giá (ẩn khỏi danh sách) để lịch sử giá không bị mất. */
+    static final String DELETED = "DELETED";
+    private static final LocalDate FAR_FUTURE = LocalDate.of(9999, 12, 31);
     static final ZoneId VN_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
     private static final Pattern CODE_PATTERN = Pattern.compile("^[A-Z0-9][A-Z0-9_-]{1,39}$");
     private static final BigDecimal MAX_PRICE = new BigDecimal("9999999999999.99");
@@ -46,6 +51,18 @@ public class PriceListService {
     private final ProductRepository productRepository;
     private final AuditLogService auditLogService;
     private final PriceHistoryService priceHistoryService;
+    private final PriceHistoryRepository priceHistoryRepository;
+    private final CustomerRepository customerRepository;
+    private final com.erp.backend.repository.SalesOrderLineRepository orderLineRepository;
+
+    static final List<String> CONFIRMED_ORDER_STATUSES = List.of(
+            SalesOrder.STATUS_PENDING_APPROVAL,
+            SalesOrder.STATUS_APPROVED,
+            SalesOrder.STATUS_PICKING,
+            SalesOrder.STATUS_DISPATCHED,
+            SalesOrder.STATUS_DELIVERED,
+            SalesOrder.STATUS_CLOSED
+    );
 
     // ======================= XEM / TRA CỨU =======================
 
@@ -67,11 +84,11 @@ public class PriceListService {
     @Transactional(readOnly = true)
     public PriceListStatsResponse stats() {
         return new PriceListStatsResponse(
-                priceListRepository.count(),
+                priceListRepository.countByStatusNot(DELETED),
                 priceListRepository.countByStatus("ACTIVE"),
-                priceListRepository.countByCustomerGroup(CustomerGroup.DEALER_LEVEL_1),
-                priceListRepository.countByCustomerGroup(CustomerGroup.DEALER_LEVEL_2),
-                priceListRepository.countByCustomerGroup(CustomerGroup.RETAIL),
+                priceListRepository.countByCustomerGroupAndStatusNot(CustomerGroup.DEALER_LEVEL_1, DELETED),
+                priceListRepository.countByCustomerGroupAndStatusNot(CustomerGroup.DEALER_LEVEL_2, DELETED),
+                priceListRepository.countByCustomerGroupAndStatusNot(CustomerGroup.RETAIL, DELETED),
                 priceListRepository.countByHasOrdersTrue());
     }
 
@@ -112,6 +129,7 @@ public class PriceListService {
         }
         validateName(req.getName());
         validateDates(req.getStartDate(), req.getEndDate());
+        assertNoOverlap(parseGroup(req.getCustomerGroup()), req.getStartDate(), req.getEndDate(), null);
 
         PriceList priceList = PriceList.builder()
                 .code(code)
@@ -144,6 +162,9 @@ public class PriceListService {
         }
         validateName(req.getName());
         validateDates(req.getStartDate(), req.getEndDate());
+        if (ACTIVE.equals(priceList.getStatus())) {
+            assertNoOverlap(parseGroup(req.getCustomerGroup()), req.getStartDate(), req.getEndDate(), id);
+        }
 
         priceList.setCode(code);
         priceList.setName(req.getName().trim());
@@ -177,6 +198,18 @@ public class PriceListService {
         LocalDate end = r.getEndDate() != null ? r.getEndDate()
                 : (source.getEndDate() != null && !source.getEndDate().isBefore(start) ? source.getEndDate() : null);
         validateDates(start, end);
+        CustomerGroup cloneGroup = StringUtils.hasText(r.getCustomerGroup()) ? parseGroup(r.getCustomerGroup()) : source.getCustomerGroup();
+        // S2-10: phiên bản mới thay bảng cũ -> bảng cũ (cùng nhóm, đang bật) tự kết thúc hiệu lực trước ngày bắt đầu bản mới
+        if (ACTIVE.equals(source.getStatus()) && source.getCustomerGroup() == cloneGroup
+                && source.getStartDate() != null && source.getStartDate().isBefore(start)
+                && (source.getEndDate() == null || !source.getEndDate().isBefore(start))) {
+            String oldEnd = source.getEndDate() != null ? source.getEndDate().toString() : "không thời hạn";
+            source.setEndDate(start.minusDays(1));
+            priceListRepository.save(source);
+            audit("END_PRICE_LIST_FOR_NEW_VERSION", source, oldEnd, source.getEndDate().toString(),
+                    "Kết thúc hiệu lực " + source.getCode() + " để áp dụng phiên bản mới từ " + start, actor);
+        }
+        assertNoOverlap(cloneGroup, start, end, null);
 
         PriceList copy = PriceList.builder()
                 .code(code)
@@ -226,11 +259,56 @@ public class PriceListService {
         if (st.equals(priceList.getStatus())) {
             return toResponse(priceList, true);
         }
+        if (DELETED.equals(priceList.getStatus())) {
+            throw BusinessException.notFound("Không tìm thấy bảng giá ID " + id);
+        }
+        if (ACTIVE.equals(st)) {
+            assertNoOverlap(priceList.getCustomerGroup(), priceList.getStartDate(), priceList.getEndDate(), id);
+        }
         String old = priceList.getStatus();
         priceList.setStatus(st);
         PriceList saved = priceListRepository.save(priceList);
         audit("CHANGE_PRICE_LIST_STATUS", saved, old, st, "Đổi trạng thái bảng giá " + saved.getCode(), actor);
         return toResponse(saved, true);
+    }
+
+    /** Xoá bảng giá khi chưa phát sinh đơn hàng chính thức. Nếu chỉ có đơn nháp, gỡ liên kết để xóa được (Cách 2). */
+    @Transactional
+    public void delete(Long id, UserDetailsImpl actor) {
+        PriceList priceList = findForUpdate(id);
+        long confirmedOrdersCount = orderLineRepository.countByPriceListIdAndOrderStatuses(id, CONFIRMED_ORDER_STATUSES);
+        if (priceList.isHasOrders() || confirmedOrdersCount > 0) {
+            throw BusinessException.conflict("PRICE_LIST_HAS_ORDERS",
+                    "Không thể xoá bảng giá đã phát sinh đơn hàng chính thức (chờ duyệt hoặc đã duyệt)", null);
+        }
+
+        // Chặn xoá nếu đây là bảng giá hiệu lực duy nhất của nhóm và nhóm đang có đại lý
+        if (ACTIVE.equals(priceList.getStatus())) {
+            LocalDate today = LocalDate.now(VN_ZONE);
+            List<PriceList> effectiveLists = priceListRepository.findEffectiveByCustomerGroup(priceList.getCustomerGroup(), today);
+            boolean isOnlyEffective = effectiveLists.stream().allMatch(p -> p.getId().equals(priceList.getId()));
+            if (isOnlyEffective) {
+                long customerCount = customerRepository.countByCustomerGroup(priceList.getCustomerGroup());
+                if (customerCount > 0) {
+                    throw BusinessException.conflict("LAST_ACTIVE_PRICE_LIST",
+                            "Không thể xoá bảng giá hiệu lực duy nhất của nhóm '" + priceList.getCustomerGroup().getLabel()
+                                    + "' vì đang có " + customerCount + " đại lý thuộc nhóm này. Vui lòng tạo bảng giá mới thay thế trước khi xoá.",
+                            null);
+                }
+            }
+        }
+
+        String before = summary(priceList);
+        String originalCode = priceList.getCode();
+        // S3-02: xoá mềm - KHÔNG xoá lịch sử giá. Bảng giá chuyển DELETED (ẩn khỏi danh sách, không áp dụng nữa),
+        // đổi mã để có thể tạo lại bảng giá cùng mã. Lịch sử giá vẫn tra được theo priceListId.
+        orderLineRepository.clearPriceListReference(priceList.getId());
+        audit("DELETE_PRICE_LIST", priceList, before, null, "Xoá bảng giá " + originalCode + " (giữ lịch sử giá)", actor);
+        String suffix = "-XOA-" + priceList.getId();
+        String base = originalCode.length() + suffix.length() > 40 ? originalCode.substring(0, 40 - suffix.length()) : originalCode;
+        priceList.setCode(base + suffix);
+        priceList.setStatus(DELETED);
+        priceListRepository.save(priceList);
     }
 
     /** Thêm dòng giá mới, hoặc sửa giá nếu sản phẩm đã có trong bảng. */
@@ -260,9 +338,18 @@ public class PriceListService {
 
         PriceList saved = priceListRepository.save(priceList);
         priceHistoryService.record(saved, change == null ? List.of() : List.of(change), actor);
-        audit(before == null ? "ADD_PRICE_ITEM" : "UPDATE_PRICE_ITEM", saved, before,
+        auditLogService.record(
+                AuditModule.PRICING,
+                before == null ? "ADD_PRICE_ITEM" : "UPDATE_PRICE_ITEM",
+                "PRODUCT_PRICE",
+                product.getId(),
+                product.getSku() + ":" + product.getName(),
+                before,
                 priceText(req.getPrice(), req.getFloorPrice()),
-                "SKU " + product.getSku() + " trong bảng giá " + saved.getCode(), actor);
+                String.format("Cập nhật giá bán SKU %s (%s) trong bảng giá %s: %s",
+                        product.getSku(), product.getName(), saved.getCode(), priceText(req.getPrice(), req.getFloorPrice())),
+                actor
+        );
         return toResponse(saved, true);
     }
 
@@ -279,8 +366,17 @@ public class PriceListService {
         PriceList saved = priceListRepository.save(priceList);
         priceHistoryService.record(saved, List.of(new PriceChange(item.getProduct(), PriceHistory.DELETE,
                 item.getPrice(), null, item.getFloorPrice(), null)), actor);
-        audit("DELETE_PRICE_ITEM", saved, item.getProductSku() + ": " + priceText(item.getPrice(), item.getFloorPrice()),
-                null, "Xoá dòng giá khỏi bảng giá " + saved.getCode(), actor);
+        auditLogService.record(
+                AuditModule.PRICING,
+                "DELETE_PRICE_ITEM",
+                "PRODUCT_PRICE",
+                item.getProduct().getId(),
+                item.getProductSku() + ":" + item.getProduct().getName(),
+                item.getProductSku() + ": " + priceText(item.getPrice(), item.getFloorPrice()),
+                null,
+                "Xoá dòng giá SKU " + item.getProductSku() + " (" + item.getProduct().getName() + ") khỏi bảng giá " + saved.getCode(),
+                actor
+        );
         return toResponse(saved, true);
     }
 
@@ -288,16 +384,38 @@ public class PriceListService {
 
     private PriceList findPriceList(Long id) {
         return priceListRepository.findById(id)
+                .filter(p -> !DELETED.equals(p.getStatus()))
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy bảng giá ID " + id));
+    }
+
+    /**
+     * S2-10: không cho 2 bảng giá đang bật của cùng nhóm khách hàng trùng thời gian hiệu lực
+     * (trùng thì không biết áp giá nào). Muốn thay giá thì tạo phiên bản mới.
+     */
+    private void assertNoOverlap(CustomerGroup group, LocalDate start, LocalDate end, Long excludeId) {
+        if (group == null || start == null) {
+            return;
+        }
+        List<PriceList> overlapping = priceListRepository.findOverlapping(group, start, end != null ? end : FAR_FUTURE, excludeId);
+        if (!overlapping.isEmpty()) {
+            PriceList other = overlapping.get(0);
+            throw BusinessException.conflict("PRICE_LIST_PERIOD_OVERLAP",
+                    "Nhóm '" + group.getLabel() + "' đã có bảng giá " + other.getCode() + " hiệu lực từ " + other.getStartDate()
+                            + (other.getEndDate() != null ? " đến " + other.getEndDate() : " (không thời hạn)")
+                            + ", trùng thời gian. Hãy đổi ngày, tắt bảng giá cũ hoặc tạo phiên bản mới.",
+                    "startDate");
+        }
     }
 
     private PriceList findForUpdate(Long id) {
         return priceListRepository.findByIdForUpdate(id)
+                .filter(p -> !DELETED.equals(p.getStatus()))
                 .orElseThrow(() -> BusinessException.notFound("Không tìm thấy bảng giá ID " + id));
     }
 
     private void checkEditable(PriceList priceList) {
-        if (priceList.isHasOrders()) {
+        long confirmedOrdersCount = orderLineRepository.countByPriceListIdAndOrderStatuses(priceList.getId(), CONFIRMED_ORDER_STATUSES);
+        if (priceList.isHasOrders() || confirmedOrdersCount > 0) {
             throw BusinessException.conflict("PRICE_LIST_LOCKED",
                     "Bảng giá đã phát sinh đơn hàng nên không thể chỉnh sửa. Vui lòng tạo phiên bản mới.", null);
         }
@@ -483,8 +601,9 @@ public class PriceListService {
                         i.getPrice(), i.getFloorPrice(), i.getCreatedAt(), i.getUpdatedAt()))
                 .toList()
                 : null;
+        boolean hasOrders = p.isHasOrders() || orderLineRepository.countByPriceListIdAndOrderStatuses(p.getId(), CONFIRMED_ORDER_STATUSES) > 0;
         return new PriceListResponse(p.getId(), p.getCode(), p.getName(), p.getCustomerGroup().name(),
-                p.getCustomerGroup().getLabel(), p.getStartDate(), p.getEndDate(), p.getStatus(), p.isHasOrders(),
+                p.getCustomerGroup().getLabel(), p.getStartDate(), p.getEndDate(), p.getStatus(), hasOrders,
                 p.getVersion(), p.getSourcePriceList() != null ? p.getSourcePriceList().getId() : null, p.getNote(),
                 p.getItems().size(), items, p.getCreatedAt(), p.getUpdatedAt());
     }

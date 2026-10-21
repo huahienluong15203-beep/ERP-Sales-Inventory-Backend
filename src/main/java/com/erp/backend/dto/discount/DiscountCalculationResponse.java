@@ -24,10 +24,17 @@ public record DiscountCalculationResponse(
             String policyCode,
             String policyName,
             String scope,
+            String customerGroup,
             String discountType,
             BigDecimal tierMinQuantity,
             BigDecimal discountValue,
             BigDecimal discountPerUnit,
             BigDecimal discountAmount) {
+
+        public Candidate(Long policyId, String policyCode, String policyName, String scope,
+                         String discountType, BigDecimal tierMinQuantity, BigDecimal discountValue,
+                         BigDecimal discountPerUnit, BigDecimal discountAmount) {
+            this(policyId, policyCode, policyName, scope, null, discountType, tierMinQuantity, discountValue, discountPerUnit, discountAmount);
+        }
     }
 }

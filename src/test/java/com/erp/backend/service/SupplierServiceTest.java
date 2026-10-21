@@ -27,6 +27,8 @@ import static org.mockito.Mockito.*;
 class SupplierServiceTest {
 
     @Mock private SupplierRepository supplierRepository;
+    @Mock private com.erp.backend.repository.GoodsReceiptRepository goodsReceiptRepository;
+    @Mock private com.erp.backend.repository.ProductLotRepository productLotRepository;
 
     @InjectMocks private SupplierService service;
 
@@ -175,5 +177,17 @@ class SupplierServiceTest {
         service.delete(1L);
 
         verify(supplierRepository).delete(s);
+    }
+
+    @Test
+    @DisplayName("Mục 12: Xoá NCC đã có phiếu nhập -> 409 SUPPLIER_IN_USE, không xoá")
+    void delete_usedSupplier_conflict() {
+        existing(1, "ACTIVE");
+        when(goodsReceiptRepository.existsBySupplier_Id(1L)).thenReturn(true);
+
+        assertThatThrownBy(() -> service.delete(1L))
+                .isInstanceOf(BusinessException.class)
+                .extracting("code").isEqualTo("SUPPLIER_IN_USE");
+        verify(supplierRepository, never()).delete(any(Supplier.class));
     }
 }

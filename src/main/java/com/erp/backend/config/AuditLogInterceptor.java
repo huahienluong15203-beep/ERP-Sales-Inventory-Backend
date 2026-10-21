@@ -79,6 +79,7 @@ public class AuditLogInterceptor implements HandlerInterceptor {
                     .actorId(actor != null ? actor.getId() : null)
                     .actorUsername(actor != null ? actor.getUsername() : "anonymous")
                     .actorFullName(actor != null ? actor.getFullName() : "Anonymous User")
+                    .actorRole(AuditLogService.resolveRoleLabel(actor))
                     .reason("Thao tác HTTP " + method + " qua API")
                     .build();
 
@@ -90,7 +91,9 @@ public class AuditLogInterceptor implements HandlerInterceptor {
 
     static boolean isReadOnlyPost(String uri) {
         String lower = uri.toLowerCase();
-        return lower.endsWith("/preview") || lower.endsWith("/preview/");
+        // S5-02: /reorder-preview (đặt lại đơn cũ) cũng chỉ tính thử, không đổi dữ liệu
+        return lower.endsWith("/preview") || lower.endsWith("/preview/")
+                || lower.endsWith("/reorder-preview") || lower.endsWith("/reorder-preview/");
     }
 
     private AuditModule resolveModule(String uri) {
@@ -104,7 +107,10 @@ public class AuditLogInterceptor implements HandlerInterceptor {
         if (lower.contains("/pricing") || lower.contains("/prices") || lower.contains("/cost-price")) {
             return AuditModule.PRICING;
         }
-        if (lower.contains("/invoices") || lower.contains("/orders")) {
+        if (lower.contains("/orders")) {
+            return AuditModule.ORDER;
+        }
+        if (lower.contains("/invoices")) {
             return AuditModule.INVOICE;
         }
         return null;

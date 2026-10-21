@@ -10,6 +10,7 @@ import com.erp.backend.entity.RoleName;
 import com.erp.backend.entity.User;
 import com.erp.backend.entity.Warehouse;
 import com.erp.backend.exception.BusinessException;
+import com.erp.backend.repository.CustomerRepository;
 import com.erp.backend.repository.RegionRepository;
 import com.erp.backend.repository.RoleRepository;
 import com.erp.backend.repository.UserRepository;
@@ -42,6 +43,7 @@ class UserManagementServiceTest {
     @Mock private PasswordEncoder passwordEncoder;
     @Mock private TempPasswordGenerator tempPasswordGenerator;
     @Mock private MailService mailService;
+    @Mock private CustomerRepository customerRepository;
 
     @InjectMocks private UserManagementService service;
 

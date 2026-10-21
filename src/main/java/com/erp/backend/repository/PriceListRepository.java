@@ -20,10 +20,43 @@ public interface PriceListRepository extends JpaRepository<PriceList, Long>, Jpa
 
     long countByHasOrdersTrue();
 
+    long countByStatusNot(String status);
+
+    long countByCustomerGroupAndStatusNot(com.erp.backend.entity.CustomerGroup customerGroup, String status);
+
+    /** S2-10: các bảng giá đang bật của cùng nhóm có khoảng hiệu lực giao với [start, end]. */
+    @Query("SELECT p FROM PriceList p WHERE p.status = 'ACTIVE' AND p.customerGroup = :customerGroup "
+            + "AND (:excludeId IS NULL OR p.id <> :excludeId) "
+            + "AND p.startDate <= :end AND (p.endDate IS NULL OR p.endDate >= :start) ORDER BY p.startDate")
+    java.util.List<PriceList> findOverlapping(@Param("customerGroup") com.erp.backend.entity.CustomerGroup customerGroup,
+                                              @Param("start") java.time.LocalDate start,
+                                              @Param("end") java.time.LocalDate end,
+                                              @Param("excludeId") Long excludeId);
+
     boolean existsByCodeIgnoreCaseAndIdNot(String code, Long id);
+
+    java.util.List<PriceList> findByStatusOrderByStartDateDesc(String status);
+
+    java.util.List<PriceList> findByCustomerGroupAndStatusOrderByStartDateDesc(
+            com.erp.backend.entity.CustomerGroup customerGroup, String status);
+
+    @Query("SELECT p FROM PriceList p WHERE p.status = 'ACTIVE' "
+            + "AND p.startDate <= :date AND (p.endDate IS NULL OR p.endDate >= :date) "
+            + "ORDER BY p.startDate DESC, p.version DESC, p.id DESC")
+    java.util.List<PriceList> findAllEffective(@Param("date") java.time.LocalDate date);
+
+    @Query("SELECT p FROM PriceList p WHERE p.status = 'ACTIVE' AND p.customerGroup = :customerGroup "
+            + "AND p.startDate <= :date AND (p.endDate IS NULL OR p.endDate >= :date) "
+            + "ORDER BY p.startDate DESC, p.version DESC, p.id DESC")
+    java.util.List<PriceList> findEffectiveByCustomerGroup(@Param("customerGroup") com.erp.backend.entity.CustomerGroup customerGroup,
+                                                          @Param("date") java.time.LocalDate date);
 
     /** Khoá dòng bảng giá khi sửa để 2 người sửa cùng lúc không ghi đè nhau. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT p FROM PriceList p WHERE p.id = :id")
     Optional<PriceList> findByIdForUpdate(@Param("id") Long id);
+
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("UPDATE PriceList p SET p.sourcePriceList = null WHERE p.sourcePriceList.id = :id")
+    void clearSourcePriceList(@Param("id") Long id);
 }

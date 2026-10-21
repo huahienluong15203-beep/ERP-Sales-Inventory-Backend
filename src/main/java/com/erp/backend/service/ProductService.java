@@ -24,6 +24,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.math.BigDecimal;
+import java.net.URI;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -56,6 +57,7 @@ public class ProductService {
         }
 
         String baseUnit = request.getBaseUnit().trim();
+        validateImageUrl(request.getImageUrl());
 
         Product product = Product.builder()
                 .sku(trimmedSku)
@@ -171,6 +173,7 @@ public class ProductService {
                         actor != null ? actor.getUsername() : "unknown");
             }
         }
+        validateImageUrl(request.getImageUrl());
         product.setBarcode(request.getBarcode() != null ? request.getBarcode().trim() : null);
         product.setImageUrl(request.getImageUrl() != null ? request.getImageUrl().trim() : null);
         product.setDescription(request.getDescription() != null ? request.getDescription().trim() : null);
@@ -188,15 +191,15 @@ public class ProductService {
                 ? (updated.getCostPrice() != null ? updated.getCostPrice().stripTrailingZeros().toPlainString() : "0")
                 : updated.getBaseUnit();
         String reasonLog = costChanged
-                ? String.format("Cập nhật giá vốn sản phẩm SKU %s: %s -> %s", updated.getSku(), oldValueLog, newValueLog)
-                : "Cập nhật thông tin sản phẩm SKU " + updated.getSku();
+                ? String.format("Cập nhật giá vốn sản phẩm SKU %s (%s): %s đ -> %s đ", updated.getSku(), updated.getName(), oldValueLog, newValueLog)
+                : "Cập nhật thông tin sản phẩm SKU " + updated.getSku() + " (" + updated.getName() + ")";
 
         auditLogService.record(
-                AuditModule.INVENTORY,
-                "UPDATE_PRODUCT",
+                costChanged ? AuditModule.PRICING : AuditModule.INVENTORY,
+                costChanged ? "UPDATE_COST_PRICE" : "UPDATE_PRODUCT",
                 "PRODUCT",
                 updated.getId(),
-                updated.getSku(),
+                updated.getSku() + ":" + updated.getName(),
                 oldValueLog,
                 newValueLog,
                 reasonLog,
@@ -240,10 +243,47 @@ public class ProductService {
      * Tìm kiếm và phân trang danh mục sản phẩm (có bảo mật giá vốn S2-05).
      */
     @Transactional(readOnly = true)
-    public PageResponse<ProductResponse> searchProducts(String keyword, String category, String status, Pageable pageable, UserDetailsImpl actor) {
-        Page<Product> page = productRepository.searchProducts(
+    public PageResponse<ProductResponse> searchProducts(String keyword, String category, String excludeCategory, String status, Pageable pageable, UserDetailsImpl actor) {
+        boolean hasCategory = StringUtils.hasText(category) && !"ALL".equalsIgnoreCase(category.trim());
+        boolean hasExcludeCategory = StringUtils.hasText(excludeCategory) && !"ALL".equalsIgnoreCase(excludeCategory.trim());
+
+        java.util.List<ProductCategory> allCats = null;
+        if (hasCategory || hasExcludeCategory) {
+            allCats = productCategoryRepository.findAll();
+        }
+
+        java.util.Set<String> categoryNames = new java.util.HashSet<>();
+        java.util.Set<Long> categoryIds = new java.util.HashSet<>();
+        if (hasCategory && allCats != null) {
+            resolveCategoryHierarchy(category.trim(), allCats, categoryNames, categoryIds);
+        }
+        if (categoryNames.isEmpty()) {
+            categoryNames.add("__NONE__");
+        }
+        if (categoryIds.isEmpty()) {
+            categoryIds.add(-1L);
+        }
+
+        java.util.Set<String> excludeCategoryNames = new java.util.HashSet<>();
+        java.util.Set<Long> excludeCategoryIds = new java.util.HashSet<>();
+        if (hasExcludeCategory && allCats != null) {
+            resolveCategoryHierarchy(excludeCategory.trim(), allCats, excludeCategoryNames, excludeCategoryIds);
+        }
+        if (excludeCategoryNames.isEmpty()) {
+            excludeCategoryNames.add("__NONE__");
+        }
+        if (excludeCategoryIds.isEmpty()) {
+            excludeCategoryIds.add(-1L);
+        }
+
+        Page<Product> page = productRepository.searchProductsHierarchical(
                 StringUtils.hasText(keyword) ? keyword.trim() : null,
-                StringUtils.hasText(category) ? category.trim() : null,
+                hasCategory,
+                categoryNames,
+                categoryIds,
+                hasExcludeCategory,
+                excludeCategoryNames,
+                excludeCategoryIds,
                 StringUtils.hasText(status) ? status.trim() : null,
                 pageable
         );
@@ -252,9 +292,79 @@ public class ProductService {
         return PageResponse.of(page.map(p -> mapToResponse(p, canViewCost)));
     }
 
+    private void resolveCategoryHierarchy(String search, java.util.List<ProductCategory> allCats,
+                                          java.util.Set<String> namesOut, java.util.Set<Long> idsOut) {
+        ProductCategory target = null;
+        try {
+            Long targetId = Long.parseLong(search);
+            target = allCats.stream().filter(c -> c.getId().equals(targetId)).findFirst().orElse(null);
+        } catch (NumberFormatException ignored) {}
+
+        if (target == null) {
+            target = allCats.stream()
+                    .filter(c -> c.getCode().equalsIgnoreCase(search) || c.getName().equalsIgnoreCase(search))
+                    .findFirst()
+                    .orElse(null);
+        }
+
+        if (target != null) {
+            java.util.Map<Long, java.util.List<ProductCategory>> childrenMap = new java.util.HashMap<>();
+            for (ProductCategory c : allCats) {
+                if (c.getParent() != null) {
+                    childrenMap.computeIfAbsent(c.getParent().getId(), k -> new java.util.ArrayList<>()).add(c);
+                }
+            }
+            java.util.Deque<ProductCategory> queue = new java.util.ArrayDeque<>();
+            queue.add(target);
+            while (!queue.isEmpty()) {
+                ProductCategory curr = queue.poll();
+                idsOut.add(curr.getId());
+                namesOut.add(curr.getName());
+                java.util.List<ProductCategory> children = childrenMap.get(curr.getId());
+                if (children != null) {
+                    queue.addAll(children);
+                }
+            }
+        } else {
+            namesOut.add(search);
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<ProductResponse> searchProducts(String keyword, String category, String status, Pageable pageable, UserDetailsImpl actor) {
+        return searchProducts(keyword, category, null, status, pageable, actor);
+    }
+
     @Transactional(readOnly = true)
     public PageResponse<ProductResponse> searchProducts(String keyword, String category, String status, Pageable pageable) {
-        return searchProducts(keyword, category, status, pageable, null);
+        return searchProducts(keyword, category, null, status, pageable, null);
+    }
+
+    /**
+     * Tra cứu nhanh danh sách sản phẩm cho các ô chọn (combobox, bảng giá, đơn hàng).
+     */
+    @Transactional(readOnly = true)
+    public List<ProductOptionItemResponse> searchProductOptions(String keyword, int limit, UserDetailsImpl actor) {
+        int safeLimit = Math.max(1, Math.min(limit, 2000));
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(0, safeLimit, org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.ASC, "sku"));
+        Page<Product> page = productRepository.searchProducts(
+                StringUtils.hasText(keyword) ? keyword.trim() : null,
+                null,
+                "ACTIVE",
+                pageable
+        );
+        boolean canViewCost = canViewCostPrice(actor);
+        return page.getContent().stream()
+                .map(p -> new ProductOptionItemResponse(
+                        p.getId(),
+                        p.getSku(),
+                        p.getName(),
+                        p.getBaseUnit(),
+                        p.getPackaging(),
+                        p.getCategory(),
+                        canViewCost ? p.getCostPrice() : null,
+                        p.getStatus()))
+                .toList();
     }
 
     /**
@@ -302,6 +412,7 @@ public class ProductService {
                 .barcode(p.getBarcode())
                 .imageUrl(p.getImageUrl())
                 .description(p.getDescription())
+                .hasBatchManagement(Boolean.TRUE.equals(p.getHasBatchManagement()))
                 .createdAt(p.getCreatedAt())
                 .updatedAt(p.getUpdatedAt())
                 .build();
@@ -330,6 +441,7 @@ public class ProductService {
                 .barcode(p.getBarcode())
                 .imageUrl(p.getImageUrl())
                 .description(p.getDescription())
+                .hasBatchManagement(Boolean.TRUE.equals(p.getHasBatchManagement()))
                 .createdAt(p.getCreatedAt())
                 .updatedAt(p.getUpdatedAt())
                 .unitConversions(conversionsOnly)
@@ -376,5 +488,29 @@ public class ProductService {
         } catch (Exception ignored) {
         }
         return false;
+    }
+
+    /**
+     * Kiểm tra tính hợp lệ của đường dẫn ảnh sản phẩm.
+     */
+    public static void validateImageUrl(String imageUrl) {
+        if (!StringUtils.hasText(imageUrl)) return;
+        String trimmed = imageUrl.trim();
+        try {
+            URI uri = URI.create(trimmed);
+            String scheme = uri.getScheme();
+            if (scheme == null || (!scheme.equalsIgnoreCase("http") && !scheme.equalsIgnoreCase("https"))) {
+                throw BusinessException.badRequest("INVALID_IMAGE_URL",
+                        "Đường dẫn hình ảnh phải bắt đầu bằng http:// hoặc https://");
+            }
+            String host = uri.getHost();
+            if (host == null || (!host.contains(".") && !host.equalsIgnoreCase("localhost"))) {
+                throw BusinessException.badRequest("INVALID_IMAGE_URL",
+                        "Đường dẫn hình ảnh không hợp lệ (tên miền không đúng định dạng)");
+            }
+        } catch (IllegalArgumentException e) {
+            throw BusinessException.badRequest("INVALID_IMAGE_URL",
+                    "Đường dẫn hình ảnh không đúng định dạng URL");
+        }
     }
 }

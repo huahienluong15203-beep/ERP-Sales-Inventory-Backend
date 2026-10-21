@@ -9,6 +9,12 @@ public interface ProductCategoryRepository extends JpaRepository<ProductCategory
 
     boolean existsByCodeIgnoreCase(String code);
 
+    java.util.Optional<ProductCategory> findByCodeIgnoreCase(String code);
+
+    java.util.List<ProductCategory> findByLevelAndNameIgnoreCase(Integer level, String name);
+
+    java.util.List<ProductCategory> findByParent_IdAndNameIgnoreCase(Long parentId, String name);
+
     boolean existsByParent_Id(Long parentId);
 
     List<ProductCategory> findAllByOrderByLevelAscNameAsc();

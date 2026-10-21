@@ -66,6 +66,16 @@ public class Product {
     @Builder.Default
     private String status = "ACTIVE";
 
+    // S6-01: Quản lý theo lô & HSD theo từng SKU (Bật/Tắt)
+    @Column(name = "has_batch_management", nullable = false, columnDefinition = "boolean default false")
+    @Builder.Default
+    private Boolean hasBatchManagement = false;
+
+    // S6-03: Vị trí lưu kho mặc định để sắp xếp đường đi soạn hàng
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "default_location_id")
+    private WarehouseLocation defaultLocation;
+
     // Mã vạch sản phẩm (Barcode / EAN-13...)
     @Column(length = 50)
     private String barcode;

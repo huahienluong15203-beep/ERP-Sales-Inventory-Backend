@@ -48,9 +48,58 @@ public class GlobalExceptionHandler {
                 .body(ApiError.of("INVALID_PARAMETER", message, details));
     }
 
+    /**
+     * S1-10: lỗi ném bằng ResponseStatusException (vd khoá tài khoản thiếu lý do) trước đây trả body mặc định
+     * của Spring (status, error, path). Đưa về đúng định dạng chung {code, message, details, timestamp}.
+     */
+    @ExceptionHandler(org.springframework.web.server.ResponseStatusException.class)
+    public ResponseEntity<ApiError> handleResponseStatus(org.springframework.web.server.ResponseStatusException ex) {
+        HttpStatus status = HttpStatus.resolve(ex.getStatusCode().value());
+        String code = status != null ? status.name() : "ERROR";
+        String message = ex.getReason() != null ? ex.getReason() : (status != null ? status.getReasonPhrase() : "Có lỗi xảy ra");
+        return ResponseEntity.status(ex.getStatusCode()).body(ApiError.of(code, message, Map.of()));
+    }
+
+    /**
+     * Trùng dữ liệu bị ràng buộc DB chặn (vd 2 người cùng lập hoá đơn cho 1 đơn, S7-01) -> 409 thay vì 500.
+     * Không trả chi tiết lỗi SQL ra ngoài.
+     */
+    @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
+    public ResponseEntity<ApiError> handleDataIntegrity(org.springframework.dao.DataIntegrityViolationException ex) {
+        // Dữ liệu vượt độ dài cột (PostgreSQL 22001) không phải "trùng dữ liệu": báo đúng để người dùng sửa lại
+        String cause = ex.getMostSpecificCause() != null ? ex.getMostSpecificCause().getMessage() : null;
+        if (cause != null && cause.toLowerCase(java.util.Locale.ROOT).contains("value too long")) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(ApiError.of("DATA_TOO_LONG", "Có trường dữ liệu dài quá mức cho phép. Vui lòng rút gọn nội dung rồi thử lại.", Map.of()));
+        }
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiError.of("DATA_CONFLICT", "Dữ liệu bị trùng hoặc vừa được người khác cập nhật. Vui lòng tải lại và thử lại.", Map.of()));
+    }
+
+    /** 2 người cùng sửa 1 bản ghi (@Version) hoặc chờ khoá dòng quá lâu -> 409, người dùng tải lại rồi làm lại. */
+    @ExceptionHandler({org.springframework.orm.ObjectOptimisticLockingFailureException.class,
+            org.springframework.dao.PessimisticLockingFailureException.class})
+    public ResponseEntity<ApiError> handleConcurrentUpdate(RuntimeException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiError.of("CONCURRENT_UPDATE", "Dữ liệu vừa được người khác cập nhật. Vui lòng tải lại và thử lại.", Map.of()));
+    }
+
     @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
     public ResponseEntity<ApiError> handleNotReadable(org.springframework.http.converter.HttpMessageNotReadableException ex) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiError.of("MALFORMED_JSON", "Dữ liệu JSON gửi lên không đúng định dạng.", Map.of("error", "Định dạng JSON không hợp lệ")));
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ApiError> handleGeneric(Exception ex) throws Exception {
+        if (ex instanceof org.springframework.security.access.AccessDeniedException
+                || ex instanceof org.springframework.security.authorization.AuthorizationDeniedException
+                || ex instanceof org.springframework.security.core.AuthenticationException) {
+            throw ex;
+        }
+        ex.printStackTrace();
+        String msg = ex.getMessage() != null ? ex.getMessage() : ex.toString();
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ApiError.of("INTERNAL_ERROR", msg, Map.of("class", ex.getClass().getName())));
     }
 }

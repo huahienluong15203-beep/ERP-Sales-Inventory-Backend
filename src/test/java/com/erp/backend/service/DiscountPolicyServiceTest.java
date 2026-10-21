@@ -35,6 +35,7 @@ class DiscountPolicyServiceTest {
     @Mock private ProductRepository productRepository;
     @Mock private ProductCategoryRepository categoryRepository;
     @Mock private AuditLogService auditLogService;
+    @Mock private com.erp.backend.repository.SalesOrderLineRepository orderLineRepository;
 
     @InjectMocks private DiscountPolicyService service;
 
@@ -152,8 +153,8 @@ class DiscountPolicyServiceTest {
     }
 
     @Test
-    @DisplayName("S3-01: Nhiều chính sách -> chọn chính sách có lợi nhất cho khách, không cộng dồn")
-    void calculate_bestPolicyWins() {
+    @DisplayName("S3-01: Nhiều chính sách -> ưu tiên chính sách riêng theo SKU trước chính sách theo nhóm hàng")
+    void calculate_prefersProductScopeOverCategory() {
         when(policyRepository.findEffective(eq(10L), anyCollection(), eq(day))).thenReturn(List.of(
                 policy(1, "PRODUCT", "PERCENT", "96", "5"),            // 500đ/lon -> 60.000
                 policy(2, "CATEGORY", "AMOUNT_PER_UNIT", "100", "600") // 600đ/lon -> 72.000
@@ -161,8 +162,8 @@ class DiscountPolicyServiceTest {
 
         DiscountCalculationResponse res = service.calculate(coca, new BigDecimal("120"), new BigDecimal("10000"), day);
 
-        assertThat(res.applied().policyId()).isEqualTo(2L);
-        assertThat(res.discountAmount()).isEqualByComparingTo("72000");
+        assertThat(res.applied().policyId()).isEqualTo(1L);
+        assertThat(res.discountAmount()).isEqualByComparingTo("60000");
         assertThat(res.candidates()).hasSize(2);
     }
 
@@ -266,5 +267,18 @@ class DiscountPolicyServiceTest {
         when(policyRepository.countByScope("CATEGORY")).thenReturn(2L);
 
         assertThat(service.stats()).isEqualTo(new DiscountPolicyStatsResponse(6, 4, 4, 2));
+    }
+
+    @Test
+    @DisplayName("S3-01: Xoá chính sách đã áp dụng trong đơn hàng -> 409, không xoá cứng")
+    void delete_usedPolicy_conflict() {
+        DiscountPolicy p = policy(7, "PRODUCT", "PERCENT", "10", "5");
+        when(policyRepository.findById(7L)).thenReturn(java.util.Optional.of(p));
+        when(orderLineRepository.existsByDiscountPolicyCodeIgnoreCase("CK-7")).thenReturn(true);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.delete(7L, manager))
+                .isInstanceOf(com.erp.backend.exception.BusinessException.class)
+                .extracting("code").isEqualTo("DISCOUNT_POLICY_IN_USE");
+        verify(policyRepository, never()).delete(any(DiscountPolicy.class));
     }
 }

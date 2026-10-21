@@ -1,6 +1,9 @@
 package com.erp.backend.service;
 
+import com.erp.backend.dto.user.PageResponse;
+import com.erp.backend.dto.customer.CreditStatusResponse;
 import com.erp.backend.dto.discount.DiscountCalculationResponse;
+import com.erp.backend.dto.inventory.StockInfoDto;
 import com.erp.backend.dto.order.*;
 import com.erp.backend.entity.*;
 import com.erp.backend.exception.BusinessException;
@@ -21,6 +24,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
@@ -38,8 +42,12 @@ class OrderDraftServiceTest {
     @Mock private CustomerDeliveryAddressRepository addressRepository;
     @Mock private ProductRepository productRepository;
     @Mock private PriceListItemRepository priceItemRepository;
+    @Mock private PriceListRepository priceListRepository;
     @Mock private DiscountPolicyService discountPolicyService;
     @Mock private CustomerService customerService;
+    @Mock private CustomerCreditService creditService;
+    @Mock private InventoryService inventoryService;
+    @Mock private AuditLogService auditLogService;
 
     @InjectMocks private OrderDraftService service;
 
@@ -63,12 +71,14 @@ class OrderDraftServiceTest {
         lenient().when(productRepository.findBySku("SP-COCA")).thenReturn(Optional.of(coca));
         lenient().when(addressRepository.findByCustomer_IdAndStatusOrderByDefaultAddressDescIdAsc(6L, "ACTIVE"))
                 .thenReturn(List.of(defaultAddress));
+        lenient().when(addressRepository.findByIdAndCustomer_Id(eq(3L), eq(6L)))
+                .thenReturn(Optional.of(defaultAddress));
         lenient().when(priceItemRepository.findEffective(eq(CustomerGroup.DEALER_LEVEL_1), eq("SP-COCA"), any(), any(Pageable.class)))
                 .thenReturn(List.of(PriceListItem.builder().priceList(priceList).product(coca).productSku("SP-COCA")
                         .productName("Coca lon").price(new BigDecimal("10000")).floorPrice(new BigDecimal("9000")).build()));
-        lenient().when(discountPolicyService.calculate(any(Product.class), any(), any(), any())).thenAnswer(inv -> {
-            BigDecimal qty = inv.getArgument(1);
-            BigDecimal price = inv.getArgument(2);
+        lenient().when(discountPolicyService.calculate(any(), any(Product.class), any(), any(), any())).thenAnswer(inv -> {
+            BigDecimal qty = inv.getArgument(2);
+            BigDecimal price = inv.getArgument(3);
             BigDecimal gross = price.multiply(qty).setScale(2, RoundingMode.HALF_UP);
             // giả lập: từ 96 lon giảm 5%
             BigDecimal discount = qty.compareTo(new BigDecimal("96")) >= 0
@@ -86,13 +96,23 @@ class OrderDraftServiceTest {
             if (o.getId() == null) o.setId(100L);
             return o;
         });
+
+        Warehouse defaultWarehouse = Warehouse.builder().id(1L).code("WH-MB01").name("Kho Tổng Miền Bắc").build();
+        lenient().when(inventoryService.resolveWarehouseForCustomer(any())).thenReturn(defaultWarehouse);
+        lenient().when(inventoryService.getStockInfo(any(), any()))
+                .thenReturn(StockInfoDto.of("WH-MB01", "Kho Tổng Miền Bắc", new BigDecimal("100000"), BigDecimal.ZERO, new BigDecimal("100000")));
     }
 
     private OrderLineRequest line(String sku, String unit, String qty) {
+        return line(sku, unit, qty, null);
+    }
+
+    private OrderLineRequest line(String sku, String unit, String qty, String unitPrice) {
         OrderLineRequest l = new OrderLineRequest();
         l.setProductSku(sku);
         l.setUnitName(unit);
         l.setQuantity(qty == null ? null : new BigDecimal(qty));
+        l.setUnitPrice(unitPrice == null ? null : new BigDecimal(unitPrice));
         return l;
     }
 
@@ -232,6 +252,52 @@ class OrderDraftServiceTest {
         verify(orderRepository, never()).saveAndFlush(any());
     }
 
+    private static CreditStatusResponse credit(boolean exceeds, String message) {
+        return new CreditStatusResponse(6L, "DL006", "Đại lý", new BigDecimal("1000000"), new BigDecimal("900000"),
+                new BigDecimal("100000"), new BigDecimal("500000"), new BigDecimal("1400000"), exceeds,
+                exceeds ? new BigDecimal("400000") : BigDecimal.ZERO, 30, false, 0, BigDecimal.ZERO, 0, false, message);
+    }
+
+    @Test
+    @DisplayName("S4-02: Xem trước đơn vượt hạn mức -> trả về công nợ, cờ cần duyệt và cảnh báo")
+    void preview_overCreditLimit_flaggedNeedsApproval() {
+        when(creditService.evaluate(eq(customer), any())).thenReturn(credit(true, "Công nợ sau đơn vượt hạn mức. Đơn cần được duyệt"));
+
+        OrderResponse res = service.preview(request(line("SP-COCA", "Lon", "50")), rep);
+
+        verify(creditService).evaluate(eq(customer), argThat(a -> a.compareTo(new BigDecimal("500000")) == 0));
+        assertThat(res.credit()).isNotNull();
+        assertThat(res.credit().exceedsLimit()).isTrue();
+        assertThat(res.credit().currentDebt()).isEqualByComparingTo("900000");
+        assertThat(res.warnings()).containsExactly("Công nợ sau đơn vượt hạn mức. Đơn cần được duyệt");
+    }
+
+    @Test
+    @DisplayName("S4-02: Đại lý nợ quá hạn -> chặn tạo đơn nháp mới (409)")
+    void overdueCustomer_createDraftBlocked() {
+        doThrow(BusinessException.conflict("CUSTOMER_DEBT_OVERDUE", "Nợ quá hạn", "customerId"))
+                .when(customerService).assertCanCreateOrder(customer);
+
+        assertThatThrownBy(() -> service.createDraft(request(line("SP-COCA", null, "1")), rep))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "CUSTOMER_DEBT_OVERDUE")
+                .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT);
+        verify(orderRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("S4-02: Đơn đã duyệt -> không tính lại công nợ (tiền đơn đã nằm trong công nợ)")
+    void approvedOrder_noCreditEvaluation() {
+        SalesOrder approved = SalesOrder.builder().id(100L).code("DH261004-AAAA").customer(customer)
+                .status(SalesOrder.STATUS_APPROVED).build();
+        when(orderRepository.findById(100L)).thenReturn(Optional.of(approved));
+
+        OrderResponse res = service.getById(100L, rep);
+
+        assertThat(res.credit()).isNull();
+        verify(creditService, never()).evaluate(any(), any());
+    }
+
     @Test
     @DisplayName("S3-07: Đại lý không bị khoá -> không có cảnh báo")
     void unlockedCustomer_noWarnings() {
@@ -288,6 +354,8 @@ class OrderDraftServiceTest {
     void productOptions() {
         when(productRepository.findByNameContainingIgnoreCaseOrSkuContainingIgnoreCase(eq("coca"), eq("coca"), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(coca)));
+        when(productRepository.findByNameContainingIgnoreCaseOrSkuContainingIgnoreCase(eq("c"), eq("c"), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
 
         List<ProductOptionResponse> res = service.productOptions(6L, "coca", rep);
 
@@ -296,5 +364,444 @@ class OrderDraftServiceTest {
         assertThat(res.get(0).priceAvailable()).isTrue();
         assertThat(res.get(0).unitPrice()).isEqualByComparingTo("10000");
         assertThat(service.productOptions(6L, "c", rep)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("S4-01: Sửa giá thủ công trên giá sàn -> áp dụng giá mới, tính lại chiết khấu, không vi phạm giá sàn")
+    void preview_manualPriceAboveFloor() {
+        // Giá niêm yết: 240.000 đ/thùng (10.000 đ/lon), giá sàn: 9.000 đ/lon (216.000 đ/thùng)
+        // Nhân viên sửa giá thủ công thành 230.000 đ/thùng (9.583 đ/lon > 9.000 đ)
+        OrderResponse res = service.preview(request(line("sp-coca", "thùng", "5", "230000")), rep);
+
+        OrderLineResponse l = res.lines().get(0);
+        assertThat(l.isCustomPrice()).isTrue();
+        assertThat(l.isBelowFloor()).isFalse();
+        assertThat(l.pricePerUnit()).isEqualByComparingTo("230000");
+        assertThat(res.subtotal()).isEqualByComparingTo("1150000"); // 5 * 230.000
+        assertThat(res.discountTotal()).isEqualByComparingTo("57500"); // 5% trên 1.150.000
+        assertThat(res.totalAmount()).isEqualByComparingTo("1092500");
+        assertThat(res.warnings()).doesNotContain("giá sàn");
+        assertThat(res.approvalReasons()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("S4-01: Sửa giá thủ công dưới giá sàn -> đánh dấu dòng vi phạm, thêm cảnh báo và lý do cần duyệt")
+    void preview_manualPriceBelowFloor() {
+        // Giá sàn: 9.000 đ/lon (216.000 đ/thùng). Sửa thành 200.000 đ/thùng (8.333 đ/lon < 9.000 đ/lon)
+        OrderResponse res = service.preview(request(line("sp-coca", "thùng", "5", "200000")), rep);
+
+        OrderLineResponse l = res.lines().get(0);
+        assertThat(l.isCustomPrice()).isTrue();
+        assertThat(l.isBelowFloor()).isTrue();
+        assertThat(l.pricePerUnit()).isEqualByComparingTo("200000");
+        assertThat(res.subtotal()).isEqualByComparingTo("1000000"); // 5 * 200.000
+        assertThat(res.discountTotal()).isEqualByComparingTo("50000"); // 5% trên 1.000.000
+        assertThat(res.totalAmount()).isEqualByComparingTo("950000");
+        assertThat(res.warnings()).anyMatch(w -> w.contains("bán dưới giá sàn quy định"));
+        assertThat(res.approvalReasons()).extracting(ApprovalReason::code).contains(ApprovalReason.BELOW_FLOOR_PRICE);
+    }
+
+    @Test
+    @DisplayName("S4-01: Sửa giá âm -> ném lỗi 400 INVALID_UNIT_PRICE")
+    void preview_negativePrice_throwsBadRequest() {
+        OrderDraftRequest r = request(line("sp-coca", "thùng", "1", "-50000"));
+        assertThatThrownBy(() -> service.preview(r, rep))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "INVALID_UNIT_PRICE");
+    }
+
+    @Test
+    @DisplayName("S4-01: Không có bảng giá hiệu lực cho SKU -> chặn thêm dòng kèm lý do rõ ràng")
+    void preview_noEffectivePrice_throwsBadRequestWithReason() {
+        Product pepsi = Product.builder().id(20L).sku("SP-PEPSI").name("Pepsi").baseUnit("Lon").status("ACTIVE").build();
+        when(productRepository.findBySku("SP-PEPSI")).thenReturn(Optional.of(pepsi));
+        when(priceItemRepository.findEffective(eq(CustomerGroup.DEALER_LEVEL_1), eq("SP-PEPSI"), any(), any(Pageable.class)))
+                .thenReturn(List.of());
+
+        OrderDraftRequest r = request(line("SP-PEPSI", "Lon", "10"));
+        assertThatThrownBy(() -> service.preview(r, rep))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("code", "NO_EFFECTIVE_PRICE")
+                .hasMessageContaining("SP-PEPSI")
+                .hasMessageContaining("chưa có giá trong bảng giá đang hiệu lực của nhóm");
+    }
+
+    @Test
+    @DisplayName("S4-01: Chốt đơn bảo toàn đơn giá sửa thủ công của dòng hàng")
+    void recalculateForSubmit_preservesCustomPrice() {
+        SalesOrder order = SalesOrder.builder().id(100L).code("DH261008-0001").customer(customer).status(SalesOrder.STATUS_DRAFT).build();
+        SalesOrderLine line = SalesOrderLine.builder()
+                .lineNo(1)
+                .product(coca)
+                .productSku("SP-COCA")
+                .productName("Coca")
+                .unitName("Thùng")
+                .conversionFactor(new BigDecimal("24"))
+                .quantity(new BigDecimal("5"))
+                .baseUnit("Lon")
+                .baseQuantity(new BigDecimal("120"))
+                .priceList(priceList)
+                .unitPrice(new BigDecimal("8333.33"))
+                .pricePerUnit(new BigDecimal("200000"))
+                .isCustomPrice(true)
+                .floorPrice(new BigDecimal("9000"))
+                .grossAmount(new BigDecimal("1000000"))
+                .discountAmount(new BigDecimal("50000"))
+                .netAmount(new BigDecimal("950000"))
+                .build();
+        order.addLine(line);
+
+        service.recalculateForSubmit(order, rep);
+
+        SalesOrderLine updated = order.getLines().get(0);
+        assertThat(updated.getIsCustomPrice()).isTrue();
+        assertThat(updated.getPricePerUnit()).isEqualByComparingTo("200000");
+        assertThat(order.getBelowFloorLineCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("S4-01: Gợi ý sản phẩm khi có bảng giá hiệu lực -> trả về giá sàn và liệt kê cả SKU chưa có giá kèm lý do chặn")
+    void productOptions_withEffectivePriceList_includesUnpricedCatalogMatches() {
+        when(priceListRepository.findEffectiveByCustomerGroup(eq(CustomerGroup.DEALER_LEVEL_1), any()))
+                .thenReturn(List.of(priceList));
+        PriceListItem item = PriceListItem.builder().priceList(priceList).product(coca).productSku("SP-COCA")
+                .productName("Coca lon").price(new BigDecimal("10000")).floorPrice(new BigDecimal("9000")).build();
+        when(priceItemRepository.findByPriceListIdAndKeyword(eq(priceList.getId()), eq("coca"), any(Pageable.class)))
+                .thenReturn(List.of(item));
+
+        Product sprite = Product.builder().id(30L).sku("SP-SPRITE-COCA").name("Sprite Coca").baseUnit("Lon").status("ACTIVE").build();
+        when(productRepository.findByNameContainingIgnoreCaseOrSkuContainingIgnoreCase(eq("coca"), eq("coca"), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(coca, sprite)));
+
+        List<ProductOptionResponse> res = service.productOptions(6L, "coca", rep);
+
+        assertThat(res).hasSize(2);
+        // Sản phẩm 1: Có trong bảng giá
+        ProductOptionResponse opt1 = res.get(0);
+        assertThat(opt1.sku()).isEqualTo("SP-COCA");
+        assertThat(opt1.priceAvailable()).isTrue();
+        assertThat(opt1.unitPrice()).isEqualByComparingTo("10000");
+        assertThat(opt1.floorPrice()).isEqualByComparingTo("9000");
+        assertThat(opt1.priceListCode()).isEqualTo("BG-C1");
+        assertThat(opt1.message()).isNull();
+
+        // Sản phẩm 2: Khớp từ khóa nhưng chưa có trong bảng giá
+        ProductOptionResponse opt2 = res.get(1);
+        assertThat(opt2.sku()).isEqualTo("SP-SPRITE-COCA");
+        assertThat(opt2.priceAvailable()).isFalse();
+        assertThat(opt2.unitPrice()).isNull();
+        assertThat(opt2.message()).contains("SP-SPRITE-COCA").contains("chưa có giá trong bảng giá đang hiệu lực của nhóm " + customer.getCustomerGroup().getLabel());
+    }
+
+    @Test
+    @DisplayName("S4-01 (TC38): Nhóm có 2 bảng giá cùng hiệu lực -> SKU chỉ có ở bảng cũ vẫn có giá, khớp với xem trước đơn")
+    void productOptions_multipleEffectivePriceLists_matchesPreview() {
+        PriceList newer = PriceList.builder().id(2L).code("BG-MOI").name("Bảng giá mới").build();
+        PriceList older = PriceList.builder().id(28L).code("PL-QA-TC28").name("Bảng giá QA").build();
+        when(priceListRepository.findEffectiveByCustomerGroup(eq(CustomerGroup.DEALER_LEVEL_1), any()))
+                .thenReturn(List.of(newer, older));
+        Product uom = Product.builder().id(40L).sku("SKU-UOM-1").name("Hàng QA").baseUnit("Cái").status("ACTIVE").build();
+        // SP-COCA có ở cả 2 bảng: lấy giá bảng mới nhất; SKU-UOM-1 chỉ có ở bảng cũ
+        when(priceItemRepository.findByPriceListIdAndKeyword(eq(2L), eq(""), any(Pageable.class)))
+                .thenReturn(List.of(PriceListItem.builder().priceList(newer).product(coca).productSku("SP-COCA")
+                        .productName("Coca lon").price(new BigDecimal("11000")).floorPrice(new BigDecimal("9000")).build()));
+        when(priceItemRepository.findByPriceListIdAndKeyword(eq(28L), eq(""), any(Pageable.class)))
+                .thenReturn(List.of(
+                        PriceListItem.builder().priceList(older).product(coca).productSku("SP-COCA")
+                                .productName("Coca lon").price(new BigDecimal("10000")).build(),
+                        PriceListItem.builder().priceList(older).product(uom).productSku("SKU-UOM-1")
+                                .productName("Hàng QA").price(new BigDecimal("10000")).build()));
+
+        List<ProductOptionResponse> res = service.productOptions(6L, null, rep);
+
+        assertThat(res).extracting(ProductOptionResponse::sku).containsExactly("SKU-UOM-1", "SP-COCA");
+        ProductOptionResponse uomOpt = res.get(0);
+        assertThat(uomOpt.priceAvailable()).isTrue();
+        assertThat(uomOpt.unitPrice()).isEqualByComparingTo("10000");
+        assertThat(uomOpt.priceListCode()).isEqualTo("PL-QA-TC28");
+        ProductOptionResponse cocaOpt = res.get(1);
+        assertThat(cocaOpt.unitPrice()).isEqualByComparingTo("11000");
+        assertThat(cocaOpt.priceListCode()).isEqualTo("BG-MOI");
+    }
+
+    @Test
+    @DisplayName("Góp ý GV: gợi ý sản phẩm phân trang - mỗi trang đúng số lượng, chỉ tra tồn cho trang đang lấy")
+    void productOptionsPage_slicesInSkuOrder_andLooksUpStockOnlyForPage() {
+        when(priceListRepository.findEffectiveByCustomerGroup(eq(CustomerGroup.DEALER_LEVEL_1), any()))
+                .thenReturn(List.of(priceList));
+        List<PriceListItem> items = new ArrayList<>();
+        for (int i = 1; i <= 5; i++) {
+            Product p = Product.builder().id(100L + i).sku("SKU-0" + i).name("Hàng " + i).baseUnit("Lon").status("ACTIVE").build();
+            items.add(PriceListItem.builder().priceList(priceList).product(p).productSku("SKU-0" + i)
+                    .productName("Hàng " + i).price(new BigDecimal("1000")).build());
+        }
+        Collections.reverse(items);
+        when(priceItemRepository.findByPriceListIdAndKeyword(eq(priceList.getId()), eq(""), any(Pageable.class)))
+                .thenReturn(items);
+
+        PageResponse<ProductOptionResponse> first = service.productOptionsPage(6L, null, 0, 2, rep);
+        PageResponse<ProductOptionResponse> last = service.productOptionsPage(6L, null, 2, 2, rep);
+        PageResponse<ProductOptionResponse> beyond = service.productOptionsPage(6L, null, 9, 2, rep);
+
+        assertThat(first.content()).extracting(ProductOptionResponse::sku).containsExactly("SKU-01", "SKU-02");
+        assertThat(first.totalElements()).isEqualTo(5);
+        assertThat(first.totalPages()).isEqualTo(3);
+        assertThat(last.content()).extracting(ProductOptionResponse::sku).containsExactly("SKU-05");
+        assertThat(beyond.content()).isEmpty();
+        // 3 lần gọi, tổng cộng chỉ dựng 3 sản phẩm -> chỉ tra tồn 3 lần chứ không phải 15 lần
+        verify(inventoryService, times(3)).getStockInfo(any(), any(Product.class));
+    }
+
+    @Test
+    @DisplayName("Góp ý GV: kích thước trang bị giới hạn (size <= 0 thành 1, quá lớn thành tối đa)")
+    void productOptionsPage_clampsPageSize() {
+        when(priceListRepository.findEffectiveByCustomerGroup(eq(CustomerGroup.DEALER_LEVEL_1), any()))
+                .thenReturn(List.of());
+
+        assertThat(service.productOptionsPage(6L, null, 0, 0, rep).size()).isEqualTo(1);
+        assertThat(service.productOptionsPage(6L, null, -3, 10_000, rep).size())
+                .isEqualTo(OrderDraftService.MAX_PRODUCT_OPTIONS_PAGE_SIZE);
+        assertThat(service.productOptionsPage(6L, null, -3, 10, rep).page()).isZero();
+    }
+
+    @Test
+    @DisplayName("S4-03: Gợi ý sản phẩm kèm tồn khả dụng của kho phục vụ đại lý")
+    void productOptions_shouldIncludeStockInfo() {
+        when(priceListRepository.findEffectiveByCustomerGroup(eq(CustomerGroup.DEALER_LEVEL_1), any()))
+                .thenReturn(List.of(priceList));
+        PriceListItem item = PriceListItem.builder().priceList(priceList).product(coca).productSku("SP-COCA")
+                .productName("Coca lon").price(new BigDecimal("10000")).floorPrice(new BigDecimal("9000")).build();
+        when(priceItemRepository.findByPriceListIdAndKeyword(eq(priceList.getId()), eq("coca"), any(Pageable.class)))
+                .thenReturn(List.of(item));
+        when(productRepository.findByNameContainingIgnoreCaseOrSkuContainingIgnoreCase(eq("coca"), eq("coca"), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(coca)));
+
+        when(inventoryService.getStockInfo(any(), eq(coca)))
+                .thenReturn(StockInfoDto.of("WH-MB01", "Kho Tổng Miền Bắc", new BigDecimal("100"), new BigDecimal("30"), new BigDecimal("70")));
+
+        List<ProductOptionResponse> res = service.productOptions(6L, "coca", rep);
+
+        assertThat(res).isNotEmpty();
+        ProductOptionResponse opt = res.get(0);
+        assertThat(opt.warehouseCode()).isEqualTo("WH-MB01");
+        assertThat(opt.warehouseName()).isEqualTo("Kho Tổng Miền Bắc");
+        assertThat(opt.physicalStock()).isEqualByComparingTo("100");
+        assertThat(opt.reservedStock()).isEqualByComparingTo("30");
+        assertThat(opt.availableStock()).isEqualByComparingTo("70");
+    }
+
+    @Test
+    @DisplayName("S4-03: Đặt vượt tồn khả dụng -> dòng hàng bị gắn cờ isOverStock và thêm cảnh báo gợi ý số lượng tối đa")
+    void toResponse_whenQuantityExceedsAvailableStock_shouldFlagOverStockAndAddWarning() {
+        // Tồn khả dụng = 10 lon, quy đổi 1 thùng = 24 lon -> chỉ đặt tối đa 0 thùng (hoặc 10 lon)
+        when(inventoryService.getStockInfo(any(), eq(coca)))
+                .thenReturn(StockInfoDto.of("WH-MB01", "Kho Tổng Miền Bắc", new BigDecimal("20"), new BigDecimal("10"), new BigDecimal("10")));
+
+        OrderDraftRequest req = request(line("SP-COCA", "Thùng", "1")); // 1 thùng = 24 lon > 10 lon khả dụng
+        OrderResponse draft = service.preview(req, rep);
+
+        assertThat(draft.warnings()).anyMatch(w -> w.contains("SP-COCA") && w.contains("Kho Tổng Miền Bắc"));
+        assertThat(draft.lines()).hasSize(1);
+        OrderLineResponse line = draft.lines().get(0);
+        assertThat(line.isOverStock()).isTrue();
+        assertThat(line.availableStock()).isEqualByComparingTo("10");
+        assertThat(line.maxAllowedQuantity()).isEqualByComparingTo("0"); // 10 lon / 24 lon mỗi thùng (FLOOR) = 0 thùng
+    }
+
+    private SalesOrder reservedOrder(String status, String reservationStatus) {
+        SalesOrder o = SalesOrder.builder().id(143L).code("DH261010-8XWR").status(status).customer(customer)
+                .reservationStatus(reservationStatus)
+                .reservedWarehouse(Warehouse.builder().id(1L).code("WH-MB01").name("Kho Tổng Miền Bắc").build())
+                .build();
+        o.addLine(SalesOrderLine.builder().lineNo(1).product(coca).productSku("SP-COCA").productName("Coca lon")
+                .unitName("Lon").conversionFactor(BigDecimal.ONE).quantity(new BigDecimal("800")).baseUnit("Lon")
+                .baseQuantity(new BigDecimal("800")).unitPrice(new BigDecimal("10000")).pricePerUnit(new BigDecimal("10000"))
+                .grossAmount(new BigDecimal("8000000")).discountAmount(BigDecimal.ZERO).netAmount(new BigDecimal("8000000"))
+                .build());
+        return o;
+    }
+
+    @Test
+    @DisplayName("S4-03 (S403-22): Đơn vừa chốt đang giữ 800 / 1000 lon -> không tự báo vượt tồn trên chính nó")
+    void toResponse_ownReservation_notOverStock() {
+        // Tồn thực tế 1000, đang giữ 800 (chính là đơn này) -> khả dụng chung 200
+        when(inventoryService.getStockInfo(any(), eq(coca)))
+                .thenReturn(StockInfoDto.of("WH-MB01", "Kho Tổng Miền Bắc", new BigDecimal("1000"), new BigDecimal("800"), new BigDecimal("200")));
+
+        OrderResponse res = service.toResponse(reservedOrder(SalesOrder.STATUS_PENDING_APPROVAL, SalesOrder.RESERVATION_RESERVED));
+
+        OrderLineResponse line = res.lines().get(0);
+        assertThat(line.isOverStock()).isFalse();
+        assertThat(line.availableStock()).isEqualByComparingTo("1000");
+        assertThat(res.warnings()).noneMatch(w -> w.contains("vượt quá tồn khả dụng"));
+    }
+
+    @Test
+    @DisplayName("S4-03: Đơn đã giữ chỗ nhưng tồn bị người khác chiếm thêm vẫn báo đúng khi thật sự thiếu")
+    void toResponse_ownReservation_stillFlagsRealShortage() {
+        // Tồn thực tế 900, giữ chỗ 1000 (800 của đơn này + 200 của đơn khác) -> khả dụng chung -100, cho đơn này 700 < 800
+        when(inventoryService.getStockInfo(any(), eq(coca)))
+                .thenReturn(StockInfoDto.of("WH-MB01", "Kho Tổng Miền Bắc", new BigDecimal("900"), new BigDecimal("1000"), new BigDecimal("-100")));
+
+        OrderResponse res = service.toResponse(reservedOrder(SalesOrder.STATUS_APPROVED, SalesOrder.RESERVATION_RESERVED));
+
+        assertThat(res.lines().get(0).isOverStock()).isTrue();
+    }
+
+    @Test
+    @DisplayName("S4-03: Đơn đã xuất kho / đã huỷ không còn cảnh báo tồn")
+    void toResponse_settledOrder_noStockWarning() {
+        lenient().when(inventoryService.getStockInfo(any(), eq(coca)))
+                .thenReturn(StockInfoDto.of("WH-MB01", "Kho Tổng Miền Bắc", BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
+
+        assertThat(service.toResponse(reservedOrder(SalesOrder.STATUS_DISPATCHED, SalesOrder.RESERVATION_DISPATCHED))
+                .lines().get(0).isOverStock()).isFalse();
+        assertThat(service.toResponse(reservedOrder(SalesOrder.STATUS_CANCELLED, SalesOrder.RESERVATION_RELEASED))
+                .lines().get(0).isOverStock()).isFalse();
+    }
+
+    // ================================= S4-09: SAO CHÉP ĐƠN HÀNG =================================
+
+    @Test
+    @DisplayName("S4-09 / SCRUM-159: Sao chép đơn cũ thành công - sao chép toàn bộ dòng hàng, tính lại giá theo bảng giá hiện hành, bắt đầu ở trạng thái Nháp")
+    void copyOrder_success_copiesAllLines_reappliesPrices_startsAsDraft() {
+        SalesOrder source = SalesOrder.builder()
+                .id(50L)
+                .code("DH261001-OLD1")
+                .status(SalesOrder.STATUS_APPROVED)
+                .customer(customer)
+                .deliveryAddress(defaultAddress)
+                .desiredDeliveryDate(LocalDate.now().plusDays(2))
+                .note("Đơn định kỳ cũ")
+                .build();
+        SalesOrderLine sourceLine = SalesOrderLine.builder()
+                .product(coca)
+                .productSku("SP-COCA")
+                .productName("Coca lon")
+                .unitName("Thùng")
+                .conversionFactor(new BigDecimal("24"))
+                .quantity(new BigDecimal("10"))
+                .baseUnit("Lon")
+                .baseQuantity(new BigDecimal("240"))
+                .isCustomPrice(true) // Giá cũ được sửa tay
+                .unitPrice(new BigDecimal("5000")) // Giá cũ khác giá bảng giá
+                .pricePerUnit(new BigDecimal("120000"))
+                .grossAmount(new BigDecimal("1200000"))
+                .discountAmount(BigDecimal.ZERO)
+                .netAmount(new BigDecimal("1200000"))
+                .build();
+        source.addLine(sourceLine);
+
+        when(orderRepository.findById(50L)).thenReturn(Optional.of(source));
+
+        OrderResponse res = service.copyOrder(50L, rep);
+
+        assertThat(res).isNotNull();
+        assertThat(res.id()).isEqualTo(100L);
+        assertThat(res.code()).startsWith("DH");
+        assertThat(res.code()).isNotEqualTo("DH261001-OLD1");
+        assertThat(res.status()).isEqualTo("DRAFT"); // AC3: Bản sao luôn bắt đầu ở trạng thái Nháp
+        assertThat(res.lines()).hasSize(1); // AC1: Sao chép toàn bộ dòng hàng
+
+        OrderLineResponse copiedLine = res.lines().get(0);
+        assertThat(copiedLine.productSku()).isEqualTo("SP-COCA");
+        assertThat(copiedLine.unitName()).isEqualTo("Thùng");
+        assertThat(copiedLine.quantity()).isEqualByComparingTo("10");
+        assertThat(copiedLine.isCustomPrice()).isFalse(); // AC2: Bỏ giá cũ, áp giá bảng giá hiện hành
+        // Bảng giá hiện hành: 10,000 / lon * 24 = 240,000 / thùng (khác với 120,000 cũ)
+        assertThat(copiedLine.pricePerUnit()).isEqualByComparingTo("240000");
+
+        verify(auditLogService).record(eq(AuditModule.ORDER), eq("COPY_ORDER"), eq("SALES_ORDER"),
+                eq(100L), any(), eq("DH261001-OLD1"), any(), contains("DH261001-OLD1"), eq(rep));
+    }
+
+    @Test
+    @DisplayName("S4-09: Sao chép đơn kèm tuỳ biến ngày giao và ghi chú mới")
+    void copyOrder_withCustomFields_appliesRequestedFields() {
+        SalesOrder source = SalesOrder.builder()
+                .id(51L)
+                .code("DH261001-OLD2")
+                .status(SalesOrder.STATUS_CLOSED)
+                .customer(customer)
+                .deliveryAddress(defaultAddress)
+                .note("Ghi chú cũ")
+                .build();
+        source.addLine(SalesOrderLine.builder()
+                .product(coca)
+                .productSku("SP-COCA")
+                .unitName("Lon")
+                .conversionFactor(BigDecimal.ONE)
+                .quantity(new BigDecimal("5"))
+                .baseUnit("Lon")
+                .baseQuantity(new BigDecimal("5"))
+                .build());
+
+        when(orderRepository.findById(51L)).thenReturn(Optional.of(source));
+
+        LocalDate customDate = LocalDate.now().plusDays(5);
+        OrderCopyRequest req = OrderCopyRequest.builder()
+                .note("Giao đợt 2 tuần này")
+                .desiredDeliveryDate(customDate)
+                .build();
+
+        OrderResponse res = service.copyOrder(51L, req, rep);
+
+        assertThat(res.note()).isEqualTo("Giao đợt 2 tuần này");
+        assertThat(res.desiredDeliveryDate()).isEqualTo(customDate);
+        assertThat(res.status()).isEqualTo("DRAFT");
+    }
+
+    @Test
+    @DisplayName("S4-09: Đại lý không đủ điều kiện đặt đơn (nợ quá hạn...) -> Chặn sao chép đơn")
+    void copyOrder_failsWhenCustomerCannotCreateOrder() {
+        SalesOrder source = SalesOrder.builder()
+                .id(52L)
+                .customer(customer)
+                .build();
+        when(orderRepository.findById(52L)).thenReturn(Optional.of(source));
+        doThrow(BusinessException.conflict("OVERDUE_DEBT", "Đại lý có nợ quá hạn", "customerId"))
+                .when(customerService).assertCanCreateOrder(customer);
+
+        assertThatThrownBy(() -> service.copyOrder(52L, rep))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Đại lý có nợ quá hạn");
+
+        verify(orderRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("S4-09: Đơn gốc không có dòng hàng nào -> Báo lỗi BAD_REQUEST")
+    void copyOrder_failsWhenSourceHasNoLines() {
+        SalesOrder source = SalesOrder.builder()
+                .id(53L)
+                .code("DH261001-EMPTY")
+                .customer(customer)
+                .build();
+        when(orderRepository.findById(53L)).thenReturn(Optional.of(source));
+
+        assertThatThrownBy(() -> service.copyOrder(53L, rep))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("không có dòng hàng nào");
+
+        verify(orderRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("S4-09: Ngày giao mong muốn trong quá khứ -> Báo lỗi BAD_REQUEST")
+    void copyOrder_failsWhenDesiredDateInPast() {
+        SalesOrder source = SalesOrder.builder()
+                .id(54L)
+                .code("DH261001-DATE")
+                .customer(customer)
+                .build();
+        when(orderRepository.findById(54L)).thenReturn(Optional.of(source));
+
+        OrderCopyRequest req = OrderCopyRequest.builder()
+                .desiredDeliveryDate(LocalDate.now().minusDays(1))
+                .build();
+
+        assertThatThrownBy(() -> service.copyOrder(54L, req, rep))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("không được trước hôm nay");
     }
 }

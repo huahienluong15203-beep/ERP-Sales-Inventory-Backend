@@ -41,6 +41,7 @@ public class UserManagementService {
     private final PasswordEncoder passwordEncoder;
     private final TempPasswordGenerator tempPasswordGenerator;
     private final MailService mailService;
+    private final CustomerRepository customerRepository;
 
     // ======================= S1-10: KHÓA / MỞ KHÓA TÀI KHOẢN =======================
 
@@ -63,6 +64,13 @@ public class UserManagementService {
         }
 
         User user = findUser(userId);
+
+        long assignedCustomers = customerRepository.countBySalesRep_Id(userId);
+        if (assignedCustomers > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Nhân viên đang phụ trách " + assignedCustomers + " đại lý. Vui lòng bàn giao địa bàn cho nhân viên khác trước khi khóa tài khoản.");
+        }
+
         user.setStatus("LOCKED");
         user.setLockUntil(null);
         user.setLockReason(reason);
@@ -92,7 +100,8 @@ public class UserManagementService {
                 .anyMatch(roleName -> roleName == RoleName.ROLE_SALES_REP || roleName == RoleName.ROLE_SALES_MANAGER);
         boolean handoverRequired = salesEmployee
                 && "LOCKED".equalsIgnoreCase(user.getStatus())
-                && user.getLockUntil() == null;
+                && user.getLockUntil() == null
+                && customerRepository.countBySalesRep_Id(user.getId()) > 0;
 
         return new UserAccountResponse(
                 user.getId(),
@@ -315,7 +324,8 @@ public class UserManagementService {
                 .anyMatch(roleName -> roleName == RoleName.ROLE_SALES_REP || roleName == RoleName.ROLE_SALES_MANAGER);
         boolean handoverRequired = salesEmployee
                 && "LOCKED".equalsIgnoreCase(u.getStatus())
-                && u.getLockUntil() == null;
+                && u.getLockUntil() == null
+                && customerRepository.countBySalesRep_Id(u.getId()) > 0;
 
         List<String> sortedRoles = u.getRoles().stream()
                 .map(Role::getName)

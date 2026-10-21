@@ -5,6 +5,11 @@ import com.erp.backend.dto.user.PageResponse;
 import com.erp.backend.entity.CustomerGroup;
 import com.erp.backend.security.UserDetailsImpl;
 import com.erp.backend.service.CustomerDeliveryAddressService;
+import com.erp.backend.service.CustomerCreditService;
+import com.erp.backend.service.CustomerPurchaseHistoryService;
+import com.erp.backend.service.PortalAccountService;
+import com.erp.backend.dto.portal.PortalAccountRequest;
+import com.erp.backend.dto.portal.PortalMeResponse;
 import com.erp.backend.service.CustomerService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -14,6 +19,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 /**
@@ -33,6 +39,9 @@ import java.util.List;
 public class CustomerController {
 
     private final CustomerService customerService;
+    private final CustomerCreditService creditService;
+    private final CustomerPurchaseHistoryService purchaseHistoryService;
+    private final PortalAccountService portalAccountService;
     private final CustomerDeliveryAddressService deliveryAddressService;
 
     // ======================= S3-08: TÌM KIẾM / XEM =======================
@@ -90,6 +99,19 @@ public class CustomerController {
         return customerService.changeStatus(id, request, actor);
     }
 
+    /**
+     * Xoá hồ sơ đại lý chưa phát sinh giao dịch (Admin, Kế toán công nợ). Bắt buộc lý do.
+     * Đã có đơn hàng -> 409 CUSTOMER_HAS_TRANSACTIONS, dùng "Ngừng giao dịch" thay thế.
+     */
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasAnyRole('ADMIN', 'ACCOUNTANT')")
+    public ResponseEntity<Void> delete(@PathVariable Long id,
+                                       @Valid @RequestBody DeleteCustomerRequest request,
+                                       @AuthenticationPrincipal UserDetailsImpl actor) {
+        customerService.delete(id, request, actor);
+        return ResponseEntity.noContent().build();
+    }
+
     // ======================= S3-05: HẠN MỨC CÔNG NỢ & SỐ NGÀY NỢ =======================
 
     /**
@@ -121,8 +143,43 @@ public class CustomerController {
      * Cho phép các nền tảng bán hàng kiểm tra trước khi tạo đơn.
      */
     @GetMapping("/{id}/check-order-creation")
-    public OrderCreationCheckResponse checkOrderCreation(@PathVariable Long id) {
-        return customerService.checkOrderCreation(id);
+    public OrderCreationCheckResponse checkOrderCreation(@PathVariable Long id,
+                                                         @AuthenticationPrincipal UserDetailsImpl actor) {
+        return customerService.checkOrderCreation(id, actor);
+    }
+
+    /**
+     * S4-02: Công nợ hiện tại, hạn mức, còn lại của đại lý; truyền orderAmount để biết đơn có vượt hạn mức (cần duyệt) không.
+     * Có nợ quá hạn thì blocked = true (chặn tạo đơn).
+     */
+    @GetMapping("/{id}/credit-status")
+    public CreditStatusResponse creditStatus(@PathVariable Long id,
+                                             @RequestParam(required = false) BigDecimal orderAmount,
+                                             @AuthenticationPrincipal UserDetailsImpl actor) {
+        return creditService.getStatus(id, orderAmount, actor);
+    }
+
+    /**
+     * S4-04: Lịch sử mua hàng của đại lý trong N tháng gần nhất (mặc định 3, tối đa 12):
+     * mặt hàng đã mua kèm số lượng bình quân, đơn mua gần nhất để thêm nhanh vào đơn mới.
+     * NV kinh doanh chỉ xem được đại lý mình phụ trách.
+     */
+    @GetMapping("/{id}/purchase-history")
+    public CustomerPurchaseHistoryResponse purchaseHistory(@PathVariable Long id,
+                                                           @RequestParam(required = false) Integer months,
+                                                           @AuthenticationPrincipal UserDetailsImpl actor) {
+        return purchaseHistoryService.getHistory(id, months, actor);
+    }
+
+    /**
+     * S4-10: Gắn tài khoản đăng nhập cổng đại lý (vai trò Đại lý) với hồ sơ đại lý; userId = null là gỡ. Chỉ Admin.
+     */
+    @PutMapping("/{id}/portal-account")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER')")
+    public PortalMeResponse linkPortalAccount(@PathVariable Long id,
+                                              @Valid @RequestBody PortalAccountRequest request,
+                                              @AuthenticationPrincipal UserDetailsImpl actor) {
+        return portalAccountService.link(id, request, actor);
     }
 
     // ======================= S3-04: ĐIỂM GIAO HÀNG =======================
@@ -180,6 +237,26 @@ public class CustomerController {
     public TransferCustomersResponse transfer(@Valid @RequestBody TransferCustomersRequest request,
                                               @AuthenticationPrincipal UserDetailsImpl actor) {
         return customerService.transfer(request, actor);
+    }
+
+    /**
+     * Tra cứu lịch sử phân công và chuyển giao địa bàn toàn hệ thống kèm bộ lọc.
+     * Dùng cho phân hệ Nhật ký hệ thống & Kiểm toán điều chuyển nhân sự.
+     */
+    @GetMapping("/assignment-histories")
+    @PreAuthorize("hasAnyRole('ADMIN', 'SALES_MANAGER', 'ACCOUNTANT', 'SALES_REP')")
+    public PageResponse<AssignmentHistoryItemResponse> searchAssignmentHistories(
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) Long customerId,
+            @RequestParam(required = false) Long fromSalesRepId,
+            @RequestParam(required = false) Long toSalesRepId,
+            @RequestParam(required = false) String changeType,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE_TIME) java.time.LocalDateTime startDate,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE_TIME) java.time.LocalDateTime endDate,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @AuthenticationPrincipal UserDetailsImpl actor) {
+        return customerService.searchAssignmentHistories(keyword, customerId, fromSalesRepId, toSalesRepId, changeType, startDate, endDate, page, size, actor);
     }
 
     @GetMapping("/{id}/assignment-history")

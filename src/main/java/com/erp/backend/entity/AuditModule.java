@@ -10,15 +10,22 @@ import lombok.RequiredArgsConstructor;
  * - DEBT_LIMIT: Hạn mức công nợ, số ngày nợ, khóa/mở giao dịch đại lý
  * - INVOICE: Hóa đơn, thanh toán, công nợ
  * - CUSTOMER: Hồ sơ đại lý
+ * - ORDER: Đơn hàng bán (chốt, duyệt, chuyển trạng thái, huỷ, sao chép)
+ * - SALES_TARGET: Chỉ tiêu doanh số theo tháng của NV kinh doanh / khu vực (S8-04)
  */
 @Getter
-@RequiredArgsConstructor
 public enum AuditModule {
     INVENTORY("Tồn kho"),
     PRICING("Bảng giá"),
     DEBT_LIMIT("Hạn mức công nợ"),
     INVOICE("Hóa đơn"),
-    CUSTOMER("Đại lý");
+    CUSTOMER("Đại lý"),
+    ORDER("Đơn hàng"),
+    SALES_TARGET("Chỉ tiêu doanh số");
 
     private final String label;
+
+    AuditModule(String label) {
+        this.label = label;
+    }
 }
