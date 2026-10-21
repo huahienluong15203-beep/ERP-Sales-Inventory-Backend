@@ -49,6 +49,7 @@ public class InventoryAgingReportService {
     private final ProductCategoryRepository categoryRepository;
     private final UserRepository userRepository;
     private final StockMovementRepository stockMovementRepository;
+    private final DashboardCacheService cacheService;
 
     Clock clock = Clock.system(VN_ZONE);
 
@@ -57,11 +58,20 @@ public class InventoryAgingReportService {
             String categoryIdStr,
             String agingBracketFilter,
             String keyword) {
-        return getAgingReport(warehouseIdStr, categoryIdStr, agingBracketFilter, keyword, null);
+        return getAgingReport(warehouseIdStr, categoryIdStr, agingBracketFilter, keyword, null, null, null);
+    }
+
+    public InventoryAgingReportResponse getAgingReport(
+            String warehouseIdStr,
+            String categoryIdStr,
+            String agingBracketFilter,
+            String keyword,
+            UserDetailsImpl actor) {
+        return getAgingReport(warehouseIdStr, categoryIdStr, agingBracketFilter, keyword, null, null, actor);
     }
 
     /**
-     * Lấy báo cáo tồn kho và tuổi hàng theo các tiêu chí lọc.
+     * Lấy báo cáo tồn kho và tuổi hàng theo các tiêu chí lọc với hỗ trợ phân trang Server-side & Caching.
      */
     @Transactional(readOnly = true)
     public InventoryAgingReportResponse getAgingReport(
@@ -69,6 +79,8 @@ public class InventoryAgingReportService {
             String categoryIdStr,
             String agingBracketFilter,
             String keyword,
+            Integer page,
+            Integer size,
             UserDetailsImpl actor) {
 
         LocalDate today = LocalDate.now(clock);
@@ -86,130 +98,174 @@ public class InventoryAgingReportService {
         // TC807-13: Kiểm tra quyền xem giá vốn
         boolean canViewCost = canViewCostPrice(actor);
 
-        // TC807-19: Tối ưu hiệu năng - Lấy dữ liệu với JOIN FETCH tránh N+1
-        List<Inventory> inventoryList = inventoryRepository.findAgingInventoryWithProductAndWarehouse(filterWhId);
-        if (inventoryList == null || inventoryList.isEmpty()) {
-            if (filterWhId != null) {
-                inventoryList = inventoryRepository.findByWarehouse_Id(filterWhId);
-            }
+        // Tạo cache key theo toàn bộ tiêu chí lọc
+        String cacheKey = "inventory:aging:"
+                + (filterWhId != null ? filterWhId : "ALL") + ":"
+                + (StringUtils.hasText(categoryIdStr) ? categoryIdStr.trim().toLowerCase() : "ALL") + ":"
+                + (StringUtils.hasText(validatedBracket) ? validatedBracket : "ALL") + ":"
+                + (StringUtils.hasText(keyword) ? keyword.trim().toLowerCase() : "ALL") + ":"
+                + canViewCost;
+
+        InventoryAgingReportResponse fullResponse = cacheService.get(cacheKey, InventoryAgingReportResponse.class).orElse(null);
+
+        if (fullResponse == null) {
+            // TC807-19: Tối ưu hiệu năng - Lấy dữ liệu với JOIN FETCH tránh N+1
+            List<Inventory> inventoryList = inventoryRepository.findAgingInventoryWithProductAndWarehouse(filterWhId);
             if (inventoryList == null || inventoryList.isEmpty()) {
-                inventoryList = inventoryRepository.findAll();
-            }
-        }
-
-        // Tải trước toàn bộ lô active và các đợt nhập mới nhất để tính toán trong bộ nhớ (Batch lookup)
-        List<ProductLot> activeLots = productLotRepository.findActiveLotsByWarehouseId(filterWhId);
-        if (activeLots == null) {
-            activeLots = Collections.emptyList();
-        }
-        Map<String, List<ProductLot>> lotsByProductAndWarehouse = activeLots.stream()
-                .filter(l -> l.getProduct() != null && l.getWarehouse() != null && l.getQuantity() != null && l.getQuantity().compareTo(BigDecimal.ZERO) > 0)
-                .collect(Collectors.groupingBy(l -> l.getProduct().getId() + "_" + l.getWarehouse().getId()));
-
-        List<Object[]> movementRows = stockMovementRepository.findLatestInboundMovementDates(filterWhId);
-        Map<String, LocalDateTime> latestInboundDates = new HashMap<>();
-        if (movementRows != null) {
-            for (Object[] row : movementRows) {
-                if (row != null && row.length >= 3 && row[0] != null && row[1] != null && row[2] != null) {
-                    Long whId = (Long) row[0];
-                    Long prodId = (Long) row[1];
-                    LocalDateTime dt = (LocalDateTime) row[2];
-                    latestInboundDates.put(whId + "_" + prodId, dt);
+                if (filterWhId != null) {
+                    inventoryList = inventoryRepository.findByWarehouse_Id(filterWhId);
+                }
+                if (inventoryList == null || inventoryList.isEmpty()) {
+                    inventoryList = inventoryRepository.findAll();
                 }
             }
-        }
 
-        // Lọc các bản ghi có tồn kho thực tế > 0
-        List<InventoryAgingItemResponse> items = new ArrayList<>();
+            // Tải trước toàn bộ lô active và các đợt nhập mới nhất để tính toán trong bộ nhớ (Batch lookup)
+            List<ProductLot> activeLots = productLotRepository.findActiveLotsByWarehouseId(filterWhId);
+            if (activeLots == null) {
+                activeLots = Collections.emptyList();
+            }
+            Map<String, List<ProductLot>> lotsByProductAndWarehouse = activeLots.stream()
+                    .filter(l -> l.getProduct() != null && l.getWarehouse() != null && l.getQuantity() != null && l.getQuantity().compareTo(BigDecimal.ZERO) > 0)
+                    .collect(Collectors.groupingBy(l -> l.getProduct().getId() + "_" + l.getWarehouse().getId()));
 
-        for (Inventory inv : inventoryList) {
-            BigDecimal qty = inv.getPhysicalStock() != null ? inv.getPhysicalStock() : BigDecimal.ZERO;
-            if (qty.compareTo(BigDecimal.ZERO) <= 0) {
-                continue;
+            List<Object[]> movementRows = stockMovementRepository.findLatestInboundMovementDates(filterWhId);
+            Map<String, LocalDateTime> latestInboundDates = new HashMap<>();
+            if (movementRows != null) {
+                for (Object[] row : movementRows) {
+                    if (row != null && row.length >= 3 && row[0] != null && row[1] != null && row[2] != null) {
+                        Long whId = (Long) row[0];
+                        Long prodId = (Long) row[1];
+                        LocalDateTime dt = (LocalDateTime) row[2];
+                        latestInboundDates.put(whId + "_" + prodId, dt);
+                    }
+                }
             }
 
-            Product product = inv.getProduct();
-            Warehouse warehouse = inv.getWarehouse();
-            if (product == null || warehouse == null) {
-                continue;
-            }
+            // Lọc các bản ghi có tồn kho thực tế > 0
+            List<InventoryAgingItemResponse> items = new ArrayList<>();
 
-            ProductCategory cat = product.getProductCategory();
-            // Lọc theo nhóm hàng nếu có (hỗ trợ phân cấp cây nhóm hàng và danh mục theo tên/id)
-            if (!allowedCatIds.isEmpty() || !allowedCatNames.isEmpty()) {
-                Long catId = cat != null ? cat.getId() : null;
-                String catName = cat != null ? cat.getName() : product.getCategory();
-                boolean matches = (catId != null && allowedCatIds.contains(catId))
-                        || (catName != null && allowedCatNames.contains(catName.trim().toLowerCase()));
-                if (!matches) {
+            for (Inventory inv : inventoryList) {
+                BigDecimal qty = inv.getPhysicalStock() != null ? inv.getPhysicalStock() : BigDecimal.ZERO;
+                if (qty.compareTo(BigDecimal.ZERO) <= 0) {
                     continue;
                 }
-            }
 
-            // Lọc theo từ khóa tìm kiếm (SKU hoặc Tên sản phẩm)
-            if (StringUtils.hasText(keyword)) {
-                String kw = keyword.trim().toLowerCase();
-                boolean matchSku = product.getSku() != null && product.getSku().toLowerCase().contains(kw);
-                boolean matchName = product.getName() != null && product.getName().toLowerCase().contains(kw);
-                if (!matchSku && !matchName) {
+                Product product = inv.getProduct();
+                Warehouse warehouse = inv.getWarehouse();
+                if (product == null || warehouse == null) {
                     continue;
                 }
-            }
 
-            // Tính giá vốn và tổng giá trị tồn (TC807-13: Ẩn với NV kho / Kế toán)
-            BigDecimal costPrice = product.getCostPrice() != null ? product.getCostPrice() : BigDecimal.ZERO;
-            BigDecimal totalValue = qty.multiply(costPrice).setScale(2, RoundingMode.HALF_UP);
-
-            // Thuật toán tính số ngày lưu kho bình quân (Aging calculation)
-            String pwKey = warehouse.getId() + "_" + product.getId();
-            List<ProductLot> prodLots = lotsByProductAndWarehouse.get(product.getId() + "_" + warehouse.getId());
-            LocalDateTime latestInbound = latestInboundDates.get(pwKey);
-
-            long avgDays = calculateAverageAgingDays(product, warehouse, inv, today, prodLots, latestInbound);
-
-            String bracket = determineAgingBracket(avgDays);
-            String speed = determineTurnoverSpeed(avgDays);
-
-            // Lọc theo nhóm tuổi hàng nếu có
-            if (StringUtils.hasText(validatedBracket) && !"ALL".equalsIgnoreCase(validatedBracket)) {
-                if (!validatedBracket.equalsIgnoreCase(bracket)) {
-                    continue;
+                ProductCategory cat = product.getProductCategory();
+                // Lọc theo nhóm hàng nếu có (hỗ trợ phân cấp cây nhóm hàng và danh mục theo tên/id)
+                if (!allowedCatIds.isEmpty() || !allowedCatNames.isEmpty()) {
+                    Long catId = cat != null ? cat.getId() : null;
+                    String catName = cat != null ? cat.getName() : product.getCategory();
+                    boolean matches = (catId != null && allowedCatIds.contains(catId))
+                            || (catName != null && allowedCatNames.contains(catName.trim().toLowerCase()));
+                    if (!matches) {
+                        continue;
+                    }
                 }
+
+                // Lọc theo từ khóa tìm kiếm (SKU hoặc Tên sản phẩm)
+                if (StringUtils.hasText(keyword)) {
+                    String kw = keyword.trim().toLowerCase();
+                    boolean matchSku = product.getSku() != null && product.getSku().toLowerCase().contains(kw);
+                    boolean matchName = product.getName() != null && product.getName().toLowerCase().contains(kw);
+                    if (!matchSku && !matchName) {
+                        continue;
+                    }
+                }
+
+                // Tính giá vốn và tổng giá trị tồn (TC807-13: Ẩn với NV kho / Kế toán)
+                BigDecimal costPrice = product.getCostPrice() != null ? product.getCostPrice() : BigDecimal.ZERO;
+                BigDecimal totalValue = qty.multiply(costPrice).setScale(2, RoundingMode.HALF_UP);
+
+                // Thuật toán tính số ngày lưu kho bình quân (Aging calculation)
+                String pwKey = warehouse.getId() + "_" + product.getId();
+                List<ProductLot> prodLots = lotsByProductAndWarehouse.get(product.getId() + "_" + warehouse.getId());
+                LocalDateTime latestInbound = latestInboundDates.get(pwKey);
+
+                long avgDays = calculateAverageAgingDays(product, warehouse, inv, today, prodLots, latestInbound);
+
+                String bracket = determineAgingBracket(avgDays);
+                String speed = determineTurnoverSpeed(avgDays);
+
+                // Lọc theo nhóm tuổi hàng nếu có
+                if (StringUtils.hasText(validatedBracket) && !"ALL".equalsIgnoreCase(validatedBracket)) {
+                    if (!validatedBracket.equalsIgnoreCase(bracket)) {
+                        continue;
+                    }
+                }
+
+                String lastMovement = inv.getUpdatedAt() != null ? inv.getUpdatedAt().format(DATE_TIME_FORMATTER) : null;
+                String categoryName = cat != null ? cat.getName() : (product.getCategory() != null ? product.getCategory() : "Chưa phân loại");
+
+                items.add(InventoryAgingItemResponse.builder()
+                        .id(inv.getId())
+                        .productId(product.getId())
+                        .productSku(product.getSku())
+                        .productName(product.getName())
+                        .categoryName(categoryName)
+                        .warehouseId(warehouse.getId())
+                        .warehouseCode(warehouse.getCode())
+                        .warehouseName(warehouse.getName())
+                        .baseUnit(product.getBaseUnit())
+                        .quantity(qty.setScale(2, RoundingMode.HALF_UP))
+                        .costPrice(canViewCost ? costPrice.setScale(2, RoundingMode.HALF_UP) : null)
+                        .totalValue(canViewCost ? totalValue : null)
+                        .averageAgingDays(avgDays)
+                        .agingBracket(bracket)
+                        .turnoverSpeed(speed)
+                        .lastMovementDate(lastMovement)
+                        .build());
             }
 
-            String lastMovement = inv.getUpdatedAt() != null ? inv.getUpdatedAt().format(DATE_TIME_FORMATTER) : null;
-            String categoryName = cat != null ? cat.getName() : (product.getCategory() != null ? product.getCategory() : "Chưa phân loại");
+            // Sắp xếp mặt hàng có số ngày tồn lâu nhất lên đầu để dễ nhận diện hàng đọng vốn
+            items.sort(Comparator.comparing(InventoryAgingItemResponse::getAverageAgingDays).reversed()
+                    .thenComparing(item -> item.getTotalValue() != null ? item.getTotalValue() : BigDecimal.ZERO, Comparator.reverseOrder()));
 
-            items.add(InventoryAgingItemResponse.builder()
-                    .id(inv.getId())
-                    .productId(product.getId())
-                    .productSku(product.getSku())
-                    .productName(product.getName())
-                    .categoryName(categoryName)
-                    .warehouseId(warehouse.getId())
-                    .warehouseCode(warehouse.getCode())
-                    .warehouseName(warehouse.getName())
-                    .baseUnit(product.getBaseUnit())
-                    .quantity(qty.setScale(2, RoundingMode.HALF_UP))
-                    .costPrice(canViewCost ? costPrice.setScale(2, RoundingMode.HALF_UP) : null)
-                    .totalValue(canViewCost ? totalValue : null)
-                    .averageAgingDays(avgDays)
-                    .agingBracket(bracket)
-                    .turnoverSpeed(speed)
-                    .lastMovementDate(lastMovement)
-                    .build());
+            // 2. Tính toán tổng hợp Summary
+            InventoryAgingSummaryResponse summary = calculateSummary(items, canViewCost);
+
+            fullResponse = InventoryAgingReportResponse.builder()
+                    .items(items)
+                    .summary(summary)
+                    .build();
+
+            cacheService.put(cacheKey, fullResponse, java.time.Duration.ofSeconds(60));
         }
 
-        // Sắp xếp mặt hàng có số ngày tồn lâu nhất lên đầu để dễ nhận diện hàng đọng vốn
-        items.sort(Comparator.comparing(InventoryAgingItemResponse::getAverageAgingDays).reversed()
-                .thenComparing(item -> item.getTotalValue() != null ? item.getTotalValue() : BigDecimal.ZERO, Comparator.reverseOrder()));
+        List<InventoryAgingItemResponse> allItems = fullResponse.getItems() != null ? fullResponse.getItems() : Collections.emptyList();
+        long totalElements = allItems.size();
+        List<InventoryAgingItemResponse> pagedItems;
+        int currentPage = (page != null && page > 0) ? page : 1;
+        int pageSize = (size != null && size > 0) ? size : 0;
+        int totalPages = 1;
 
-        // 2. Tính toán tổng hợp Summary
-        InventoryAgingSummaryResponse summary = calculateSummary(items, canViewCost);
+        if (pageSize > 0) {
+            totalPages = (int) Math.ceil((double) totalElements / pageSize);
+            int fromIndex = (currentPage - 1) * pageSize;
+            if (fromIndex >= totalElements) {
+                pagedItems = Collections.emptyList();
+            } else {
+                int toIndex = Math.min(fromIndex + pageSize, (int) totalElements);
+                pagedItems = new ArrayList<>(allItems.subList(fromIndex, toIndex));
+            }
+        } else {
+            pagedItems = allItems;
+            pageSize = (int) totalElements;
+        }
 
         return InventoryAgingReportResponse.builder()
-                .items(items)
-                .summary(summary)
+                .items(pagedItems)
+                .summary(fullResponse.getSummary())
+                .page(currentPage)
+                .size(pageSize)
+                .totalElements(totalElements)
+                .totalPages(totalPages)
                 .build();
     }
 
@@ -265,8 +321,8 @@ public class InventoryAgingReportService {
         LocalDate refDate = null;
         if (cachedLatestInbound != null) {
             refDate = cachedLatestInbound.toLocalDate();
-        } else {
-            // Thử tìm đợt nhập gần nhất nếu chưa cache
+        } else if (cachedLots == null) {
+            // Thử tìm đợt nhập gần nhất nếu chưa cache (ví dụ chạy đơn lẻ trong test case)
             List<Object[]> rows = stockMovementRepository.findLatestInboundMovementDates(warehouse.getId());
             if (rows != null) {
                 for (Object[] r : rows) {
@@ -362,6 +418,12 @@ public class InventoryAgingReportService {
         boolean canViewCost = canViewCostPrice(actor);
         Long allowedWhId = resolveAndValidateWarehouseId(null, actor);
 
+        String cacheKey = "inventory:aging:summary-wh:" + (allowedWhId != null ? allowedWhId : "ALL") + ":" + canViewCost;
+        Optional<List> cached = cacheService.get(cacheKey, List.class);
+        if (cached.isPresent()) {
+            return (List<InventoryAgingWarehouseValueResponse>) cached.get();
+        }
+
         List<Inventory> all;
         if (allowedWhId != null) {
             all = inventoryRepository.findByWarehouse_Id(allowedWhId);
@@ -401,6 +463,8 @@ public class InventoryAgingReportService {
         result.sort(Comparator.comparing(
                 r -> r.getTotalValue() != null ? r.getTotalValue() : BigDecimal.ZERO,
                 Comparator.reverseOrder()));
+
+        cacheService.put(cacheKey, result, java.time.Duration.ofSeconds(60));
         return result;
     }
 
@@ -415,6 +479,12 @@ public class InventoryAgingReportService {
     public List<InventoryAgingCategoryValueResponse> getSummaryByCategory(UserDetailsImpl actor) {
         boolean canViewCost = canViewCostPrice(actor);
         Long allowedWhId = resolveAndValidateWarehouseId(null, actor);
+
+        String cacheKey = "inventory:aging:summary-cat:" + (allowedWhId != null ? allowedWhId : "ALL") + ":" + canViewCost;
+        Optional<List> cached = cacheService.get(cacheKey, List.class);
+        if (cached.isPresent()) {
+            return (List<InventoryAgingCategoryValueResponse>) cached.get();
+        }
 
         List<Inventory> all;
         if (allowedWhId != null) {
@@ -463,6 +533,8 @@ public class InventoryAgingReportService {
         result.sort(Comparator.comparing(
                 r -> r.getTotalValue() != null ? r.getTotalValue() : BigDecimal.ZERO,
                 Comparator.reverseOrder()));
+
+        cacheService.put(cacheKey, result, java.time.Duration.ofSeconds(60));
         return result;
     }
 

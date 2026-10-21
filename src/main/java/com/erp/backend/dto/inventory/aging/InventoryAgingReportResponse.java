@@ -17,4 +17,8 @@ import java.util.List;
 public class InventoryAgingReportResponse {
     private List<InventoryAgingItemResponse> items;
     private InventoryAgingSummaryResponse summary;
+    private Integer page;
+    private Integer size;
+    private Long totalElements;
+    private Integer totalPages;
 }
