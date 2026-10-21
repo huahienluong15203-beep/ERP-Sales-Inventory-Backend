@@ -43,8 +43,10 @@ public class InventoryAgingReportController {
             @RequestParam(required = false) String categoryId,
             @RequestParam(required = false) String agingBracket,
             @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer size,
             @AuthenticationPrincipal UserDetailsImpl actor) {
-        return ResponseEntity.ok(agingReportService.getAgingReport(warehouseId, categoryId, agingBracket, keyword, actor));
+        return ResponseEntity.ok(agingReportService.getAgingReport(warehouseId, categoryId, agingBracket, keyword, page, size, actor));
     }
 
     /**

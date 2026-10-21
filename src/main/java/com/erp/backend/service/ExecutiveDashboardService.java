@@ -143,15 +143,7 @@ public class ExecutiveDashboardService {
         }
 
         // 5. Số SKU dưới tồn tối thiểu
-        long belowMinStockCount = 0;
-        try {
-            MinStockSummaryResponse minStockSummary = minStockAlertService.getSummary(null, actor);
-            if (minStockSummary != null) {
-                belowMinStockCount = minStockSummary.getTotalAlerts();
-            }
-        } catch (Exception ex) {
-            log.warn("S8-05: Lỗi khi lấy số lượng SKU dưới định mức: {}", ex.getMessage());
-        }
+        long belowMinStockCount = getBelowMinStockCount(refresh, actor);
 
         ExecutiveDashboardSummaryResponse response = ExecutiveDashboardSummaryResponse.builder()
                 .revenueToday(revenueToday.setScale(2, RoundingMode.HALF_UP))
@@ -168,36 +160,31 @@ public class ExecutiveDashboardService {
         return response;
     }
 
-    /**
-     * 2. Biểu đồ doanh số theo ngày trong tháng.
-     */
-    @Transactional(readOnly = true)
-    public ExecutiveDailySalesResponse getDailySalesInMonth(Integer targetMonth, Integer targetYear, boolean refresh, UserDetailsImpl actor) {
-        validateMonthYear(targetMonth, targetYear);
-        LocalDate today = LocalDate.now(clock);
-        int month = targetMonth != null ? targetMonth : today.getMonthValue();
-        int year = targetYear != null ? targetYear : today.getYear();
-
-        String cacheKey = CACHE_KEY_DAILY_PREFIX + getScopeKey(actor) + ":" + year + "-" + month;
+    public long getBelowMinStockCount(boolean refresh, UserDetailsImpl actor) {
+        String minStockCacheKey = "dashboard:executive:minstock:" + getScopeKey(actor);
         if (!refresh) {
-            Optional<ExecutiveDailySalesResponse> cached = cacheService.get(cacheKey, ExecutiveDailySalesResponse.class);
+            Optional<Long> cached = cacheService.get(minStockCacheKey, Long.class);
             if (cached.isPresent()) {
-                ExecutiveDailySalesResponse resp = cached.get();
-                resp.setFromCache(true);
-                return resp;
+                return cached.get();
             }
         }
+        long count = 0;
+        try {
+            MinStockSummaryResponse minStockSummary = minStockAlertService.getSummary(null, actor);
+            if (minStockSummary != null) {
+                count = minStockSummary.getTotalAlerts();
+            }
+        } catch (Exception ex) {
+            log.warn("S8-05: Lỗi khi lấy số lượng SKU dưới định mức: {}", ex.getMessage());
+        }
+        cacheService.put(minStockCacheKey, count, Duration.ofSeconds(120));
+        return count;
+    }
 
+    public ExecutiveDailySalesResponse buildDailySalesResponse(int month, int year, List<Object[]> rows) {
         LocalDate firstDay = LocalDate.of(year, month, 1);
-        LocalDate nextMonthFirstDay = firstDay.plusMonths(1);
         int lengthOfMonth = firstDay.lengthOfMonth();
 
-        LocalDateTime startOfMonth = firstDay.atStartOfDay();
-        LocalDateTime endOfMonth = nextMonthFirstDay.atStartOfDay();
-
-        List<Object[]> rows = salesOrderRepository.findSalesDataForPeriod(REVENUE_STATUSES, startOfMonth, endOfMonth);
-
-        // Khởi tạo map cho tất cả các ngày trong tháng
         Map<Integer, BigDecimal> amountByDay = new HashMap<>();
         Map<Integer, Long> countByDay = new HashMap<>();
         for (int d = 1; d <= lengthOfMonth; d++) {
@@ -232,7 +219,7 @@ public class ExecutiveDashboardService {
                     .build());
         }
 
-        ExecutiveDailySalesResponse response = ExecutiveDailySalesResponse.builder()
+        return ExecutiveDailySalesResponse.builder()
                 .month(month)
                 .year(year)
                 .totalMonthSales(totalMonthSales.setScale(2, RoundingMode.HALF_UP))
@@ -240,26 +227,23 @@ public class ExecutiveDashboardService {
                 .points(points)
                 .fromCache(false)
                 .build();
-
-        cacheService.put(cacheKey, response);
-        return response;
     }
 
     /**
-     * 3. Biểu đồ doanh số theo khu vực.
+     * 2. Biểu đồ doanh số theo ngày trong tháng.
      */
     @Transactional(readOnly = true)
-    public ExecutiveRegionSalesResponse getSalesByRegion(Integer targetMonth, Integer targetYear, boolean refresh, UserDetailsImpl actor) {
+    public ExecutiveDailySalesResponse getDailySalesInMonth(Integer targetMonth, Integer targetYear, boolean refresh, UserDetailsImpl actor) {
         validateMonthYear(targetMonth, targetYear);
         LocalDate today = LocalDate.now(clock);
         int month = targetMonth != null ? targetMonth : today.getMonthValue();
         int year = targetYear != null ? targetYear : today.getYear();
 
-        String cacheKey = CACHE_KEY_REGION_PREFIX + getScopeKey(actor) + ":" + year + "-" + month;
+        String cacheKey = CACHE_KEY_DAILY_PREFIX + getScopeKey(actor) + ":" + year + "-" + month;
         if (!refresh) {
-            Optional<ExecutiveRegionSalesResponse> cached = cacheService.get(cacheKey, ExecutiveRegionSalesResponse.class);
+            Optional<ExecutiveDailySalesResponse> cached = cacheService.get(cacheKey, ExecutiveDailySalesResponse.class);
             if (cached.isPresent()) {
-                ExecutiveRegionSalesResponse resp = cached.get();
+                ExecutiveDailySalesResponse resp = cached.get();
                 resp.setFromCache(true);
                 return resp;
             }
@@ -270,8 +254,12 @@ public class ExecutiveDashboardService {
         LocalDateTime endOfMonth = firstDay.plusMonths(1).atStartOfDay();
 
         List<Object[]> rows = salesOrderRepository.findSalesDataForPeriod(REVENUE_STATUSES, startOfMonth, endOfMonth);
+        ExecutiveDailySalesResponse response = buildDailySalesResponse(month, year, rows);
+        cacheService.put(cacheKey, response);
+        return response;
+    }
 
-        // Gom nhóm theo Khu vực
+    public ExecutiveRegionSalesResponse buildRegionSalesResponse(int month, int year, List<Object[]> rows) {
         Map<String, ExecutiveRegionSalesItem> regionMap = new LinkedHashMap<>();
         BigDecimal totalSales = BigDecimal.ZERO;
 
@@ -300,7 +288,6 @@ public class ExecutiveDashboardService {
             totalSales = totalSales.add(amount);
         }
 
-        // Tính tỷ trọng % và làm tròn
         List<ExecutiveRegionSalesItem> regionList = new ArrayList<>(regionMap.values());
         for (ExecutiveRegionSalesItem item : regionList) {
             if (totalSales.compareTo(BigDecimal.ZERO) > 0) {
@@ -315,53 +302,61 @@ public class ExecutiveDashboardService {
             item.setAmount(item.getAmount().setScale(2, RoundingMode.HALF_UP));
         }
 
-        // Sắp xếp giảm dần theo doanh số
         regionList.sort(Comparator.comparing(ExecutiveRegionSalesItem::getAmount).reversed());
 
-        ExecutiveRegionSalesResponse response = ExecutiveRegionSalesResponse.builder()
+        return ExecutiveRegionSalesResponse.builder()
                 .month(month)
                 .year(year)
                 .totalSales(totalSales.setScale(2, RoundingMode.HALF_UP))
                 .regions(regionList)
                 .fromCache(false)
                 .build();
-
-        cacheService.put(cacheKey, response);
-        return response;
     }
 
     /**
-     * 4. Danh sách đại lý quá hạn công nợ, xếp theo số tiền nợ giảm dần.
+     * 3. Biểu đồ doanh số theo khu vực.
      */
     @Transactional(readOnly = true)
-    public ExecutiveOverdueAgenciesResponse getOverdueAgencies(Integer limit, boolean refresh, UserDetailsImpl actor) {
-        int maxResults = (limit != null && limit > 0) ? Math.min(limit, 100) : 10;
-        String cacheKey = CACHE_KEY_OVERDUE_PREFIX + getScopeKey(actor) + ":" + maxResults;
+    public ExecutiveRegionSalesResponse getSalesByRegion(Integer targetMonth, Integer targetYear, boolean refresh, UserDetailsImpl actor) {
+        validateMonthYear(targetMonth, targetYear);
+        LocalDate today = LocalDate.now(clock);
+        int month = targetMonth != null ? targetMonth : today.getMonthValue();
+        int year = targetYear != null ? targetYear : today.getYear();
 
+        String cacheKey = CACHE_KEY_REGION_PREFIX + getScopeKey(actor) + ":" + year + "-" + month;
         if (!refresh) {
-            Optional<ExecutiveOverdueAgenciesResponse> cached = cacheService.get(cacheKey, ExecutiveOverdueAgenciesResponse.class);
+            Optional<ExecutiveRegionSalesResponse> cached = cacheService.get(cacheKey, ExecutiveRegionSalesResponse.class);
             if (cached.isPresent()) {
-                ExecutiveOverdueAgenciesResponse resp = cached.get();
+                ExecutiveRegionSalesResponse resp = cached.get();
                 resp.setFromCache(true);
                 return resp;
             }
         }
 
+        LocalDate firstDay = LocalDate.of(year, month, 1);
+        LocalDateTime startOfMonth = firstDay.atStartOfDay();
+        LocalDateTime endOfMonth = firstDay.plusMonths(1).atStartOfDay();
+
+        List<Object[]> rows = salesOrderRepository.findSalesDataForPeriod(REVENUE_STATUSES, startOfMonth, endOfMonth);
+        ExecutiveRegionSalesResponse response = buildRegionSalesResponse(month, year, rows);
+        cacheService.put(cacheKey, response);
+        return response;
+    }
+
+    public ExecutiveOverdueAgenciesResponse buildOverdueAgenciesResponse(int maxResults, DebtLedgerService.Computed debtComputed, UserDetailsImpl actor) {
         List<ExecutiveOverdueAgencyItem> items = new ArrayList<>();
         BigDecimal totalOverdue = BigDecimal.ZERO;
         int totalAgencies = 0;
 
-        try {
-            DebtLedgerService.Computed debtComputed = debtLedgerService.compute(
-                    new DebtLedgerService.Filter(null, null, null, true, false, "OVERDUE"), actor);
-
+        if (debtComputed != null && debtComputed.rows() != null) {
             List<DebtAgingRow> overdueRows = debtComputed.rows().stream()
-                    .filter(r -> r.overdueAmount().compareTo(BigDecimal.ZERO) > 0)
+                    .filter(r -> r.overdueAmount() != null && r.overdueAmount().compareTo(BigDecimal.ZERO) > 0)
                     .sorted(Comparator.comparing(DebtAgingRow::overdueAmount).reversed()
                             .thenComparing(DebtAgingRow::oldestDebtDays, Comparator.reverseOrder()))
                     .toList();
 
-            totalOverdue = debtComputed.totals() != null ? debtComputed.totals().overdueAmount() : BigDecimal.ZERO;
+            totalOverdue = debtComputed.totals() != null && debtComputed.totals().overdueAmount() != null
+                    ? debtComputed.totals().overdueAmount() : BigDecimal.ZERO;
             totalAgencies = overdueRows.size();
             int rank = 1;
 
@@ -381,24 +376,49 @@ public class ExecutiveDashboardService {
                         .oldestOverdueDays(row.oldestDebtDays())
                         .build());
             }
-        } catch (Exception ex) {
-            log.info("S8-05: Người dùng {} không có quyền xem chi tiết công nợ: {}",
-                    actor != null ? actor.getUsername() : "anonymous", ex.getMessage());
         }
 
-        ExecutiveOverdueAgenciesResponse response = ExecutiveOverdueAgenciesResponse.builder()
+        return ExecutiveOverdueAgenciesResponse.builder()
                 .totalOverdueAmount(totalOverdue.setScale(2, RoundingMode.HALF_UP))
                 .totalOverdueAgencies(totalAgencies)
                 .agencies(items)
                 .fromCache(false)
                 .build();
+    }
 
+    /**
+     * 4. Danh sách đại lý quá hạn công nợ, xếp theo số tiền nợ giảm dần.
+     */
+    @Transactional(readOnly = true)
+    public ExecutiveOverdueAgenciesResponse getOverdueAgencies(Integer limit, boolean refresh, UserDetailsImpl actor) {
+        int maxResults = (limit != null && limit > 0) ? Math.min(limit, 100) : 10;
+        String cacheKey = CACHE_KEY_OVERDUE_PREFIX + getScopeKey(actor) + ":" + maxResults;
+
+        if (!refresh) {
+            Optional<ExecutiveOverdueAgenciesResponse> cached = cacheService.get(cacheKey, ExecutiveOverdueAgenciesResponse.class);
+            if (cached.isPresent()) {
+                ExecutiveOverdueAgenciesResponse resp = cached.get();
+                resp.setFromCache(true);
+                return resp;
+            }
+        }
+
+        DebtLedgerService.Computed debtComputed = null;
+        try {
+            debtComputed = debtLedgerService.compute(
+                    new DebtLedgerService.Filter(null, null, null, true, false, "OVERDUE"), actor);
+        } catch (Exception ex) {
+            log.info("S8-05: Người dùng {} không có quyền xem chi tiết công nợ: {}",
+                    actor != null ? actor.getUsername() : "anonymous", ex.getMessage());
+        }
+
+        ExecutiveOverdueAgenciesResponse response = buildOverdueAgenciesResponse(maxResults, debtComputed, actor);
         cacheService.put(cacheKey, response);
         return response;
     }
 
     /**
-     * 5. Toàn bộ Dashboard điều hành bán hàng và kho (tổng hợp 1-call để load dưới 2s).
+     * 5. Toàn bộ Dashboard điều hành bán hàng và kho (tổng hợp 1-call tối ưu triệt để < 2s).
      */
     @Transactional(readOnly = true)
     public ExecutiveDashboardOverviewResponse getCompleteDashboard(Integer month, Integer year, Integer limit, boolean refresh, UserDetailsImpl actor) {
@@ -421,10 +441,81 @@ public class ExecutiveDashboardService {
             }
         }
 
-        ExecutiveDashboardSummaryResponse summary = getSummary(refresh, actor);
-        ExecutiveDailySalesResponse dailySales = getDailySalesInMonth(targetMonth, targetYear, refresh, actor);
-        ExecutiveRegionSalesResponse regionSales = getSalesByRegion(targetMonth, targetYear, refresh, actor);
-        ExecutiveOverdueAgenciesResponse overdueAgencies = getOverdueAgencies(topLimit, refresh, actor);
+        // Tối ưu 1: Truy vấn bán hàng 1 lần cho biểu đồ ngày và khu vực
+        LocalDate firstDay = LocalDate.of(targetYear, targetMonth, 1);
+        LocalDateTime startOfMonth = firstDay.atStartOfDay();
+        LocalDateTime endOfMonth = firstDay.plusMonths(1).atStartOfDay();
+
+        List<Object[]> monthSalesRows = salesOrderRepository.findSalesDataForPeriod(REVENUE_STATUSES, startOfMonth, endOfMonth);
+
+        ExecutiveDailySalesResponse dailySales = buildDailySalesResponse(targetMonth, targetYear, monthSalesRows);
+        cacheService.put(CACHE_KEY_DAILY_PREFIX + getScopeKey(actor) + ":" + targetYear + "-" + targetMonth, dailySales);
+
+        ExecutiveRegionSalesResponse regionSales = buildRegionSalesResponse(targetMonth, targetYear, monthSalesRows);
+        cacheService.put(CACHE_KEY_REGION_PREFIX + getScopeKey(actor) + ":" + targetYear + "-" + targetMonth, regionSales);
+
+        // Tối ưu 2: Tính công nợ quá hạn 1 lần cho cả Thẻ chỉ số và Bảng đại lý quá hạn
+        DebtLedgerService.Computed debtComputed = null;
+        try {
+            debtComputed = debtLedgerService.compute(new DebtLedgerService.Filter(null, null, null, false, false, "OLDEST"), actor);
+        } catch (Exception ex) {
+            log.warn("S8-05: Lỗi khi tính sổ công nợ: {}", ex.getMessage());
+        }
+
+        BigDecimal overdueDebtAmount = (debtComputed != null && debtComputed.totals() != null && debtComputed.totals().overdueAmount() != null)
+                ? debtComputed.totals().overdueAmount() : BigDecimal.ZERO;
+
+        ExecutiveOverdueAgenciesResponse overdueAgencies = buildOverdueAgenciesResponse(topLimit, debtComputed, actor);
+        cacheService.put(CACHE_KEY_OVERDUE_PREFIX + getScopeKey(actor) + ":" + topLimit, overdueAgencies);
+
+        // Tối ưu 3: Tính doanh số hôm nay & tháng này
+        BigDecimal revenueToday = BigDecimal.ZERO;
+        BigDecimal revenueThisMonth = BigDecimal.ZERO;
+        LocalDateTime startOfToday = today.atStartOfDay();
+        LocalDateTime endOfToday = today.plusDays(1).atStartOfDay();
+
+        if (targetMonth == today.getMonthValue() && targetYear == today.getYear()) {
+            for (Object[] row : monthSalesRows) {
+                LocalDateTime orderTime = (LocalDateTime) row[0];
+                BigDecimal amount = row[1] != null ? (BigDecimal) row[1] : BigDecimal.ZERO;
+
+                revenueThisMonth = revenueThisMonth.add(amount);
+
+                if (orderTime != null && !orderTime.isBefore(startOfToday) && orderTime.isBefore(endOfToday)) {
+                    revenueToday = revenueToday.add(amount);
+                }
+            }
+        } else {
+            LocalDate curFirstDay = today.withDayOfMonth(1);
+            List<Object[]> curMonthRows = salesOrderRepository.findSalesDataForPeriod(REVENUE_STATUSES, curFirstDay.atStartOfDay(), curFirstDay.plusMonths(1).atStartOfDay());
+            for (Object[] row : curMonthRows) {
+                LocalDateTime orderTime = (LocalDateTime) row[0];
+                BigDecimal amount = row[1] != null ? (BigDecimal) row[1] : BigDecimal.ZERO;
+                revenueThisMonth = revenueThisMonth.add(amount);
+                if (orderTime != null && !orderTime.isBefore(startOfToday) && orderTime.isBefore(endOfToday)) {
+                    revenueToday = revenueToday.add(amount);
+                }
+            }
+        }
+
+        // Tối ưu 4: Đơn chờ duyệt & chờ xuất
+        long pendingApprovalCount = salesOrderRepository.countByStatus(STATUS_PENDING_APPROVAL);
+        long pendingDispatchCount = salesOrderRepository.countByStatusIn(PENDING_DISPATCH_STATUSES);
+
+        // Tối ưu 5: SKU dưới định mức (có cache)
+        long belowMinStockCount = getBelowMinStockCount(refresh, actor);
+
+        ExecutiveDashboardSummaryResponse summary = ExecutiveDashboardSummaryResponse.builder()
+                .revenueToday(revenueToday.setScale(2, RoundingMode.HALF_UP))
+                .revenueThisMonth(revenueThisMonth.setScale(2, RoundingMode.HALF_UP))
+                .pendingApprovalOrders(pendingApprovalCount)
+                .pendingDispatchOrders(pendingDispatchCount)
+                .overdueDebtAmount(overdueDebtAmount.setScale(2, RoundingMode.HALF_UP))
+                .skusBelowMinStock(belowMinStockCount)
+                .fromCache(false)
+                .computedAt(LocalDateTime.now(clock))
+                .build();
+        cacheService.put(CACHE_KEY_SUMMARY + ":" + getScopeKey(actor), summary);
 
         long durationMs = System.currentTimeMillis() - startMs;
 

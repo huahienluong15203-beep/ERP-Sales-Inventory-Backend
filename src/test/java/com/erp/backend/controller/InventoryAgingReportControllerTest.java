@@ -94,7 +94,7 @@ class InventoryAgingReportControllerTest {
                         .build())
                 .build();
 
-        when(agingReportService.getAgingReport(any(), any(), any(), any(), any()))
+        when(agingReportService.getAgingReport(any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockResponse);
 
         mockMvc.perform(get("/api/inventory/aging-report")

@@ -61,6 +61,9 @@ class InventoryAgingReportServiceTest {
         @Mock
         private StockMovementRepository stockMovementRepository;
 
+        @org.mockito.Spy
+        private DashboardCacheService cacheService = new DashboardCacheService();
+
         @InjectMocks
         private InventoryAgingReportService agingReportService;
 
@@ -78,6 +81,7 @@ class InventoryAgingReportServiceTest {
         @BeforeEach
         void setUp() {
                 agingReportService.clock = fixedClock;
+                cacheService.clearAll();
 
                 warehouse1 = Warehouse.builder()
                                 .id(1L)
@@ -392,5 +396,22 @@ class InventoryAgingReportServiceTest {
                                         assertThat(be.getStatus().value()).isEqualTo(403);
                                         assertThat(be.getCode()).isEqualTo("ACCESS_DENIED");
                                 });
+        }
+
+        @Test
+        @DisplayName("TC807-21: Phân trang Server-side báo cáo luân chuyển kho")
+        void testGetAgingReport_WithPagination() {
+                when(inventoryRepository.findAgingInventoryWithProductAndWarehouse(1L))
+                                .thenReturn(List.of(inventory1, inventory2));
+
+                InventoryAgingReportResponse response = agingReportService.getAgingReport(
+                                "1", "ALL", "ALL", null, 1, 1, null);
+
+                assertThat(response.getItems()).hasSize(1);
+                assertThat(response.getTotalElements()).isEqualTo(2);
+                assertThat(response.getTotalPages()).isEqualTo(2);
+                assertThat(response.getPage()).isEqualTo(1);
+                assertThat(response.getSize()).isEqualTo(1);
+                assertThat(response.getSummary()).isNotNull();
         }
 }
