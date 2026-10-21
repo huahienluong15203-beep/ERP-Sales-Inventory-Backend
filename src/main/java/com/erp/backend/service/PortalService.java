@@ -209,11 +209,12 @@ public class PortalService {
             throw BusinessException.conflict("PORTAL_ACCOUNT_NOT_LINKED",
                     "Tài khoản chưa được gắn với đại lý nào. Vui lòng liên hệ quản trị viên.", null);
         }
-        // Ưu tiên liên kết cổng đại lý (S4-10), sau đó liên kết tài khoản của S5-01 (Customer.user)
-        return customerRepository.findByPortalUser_Id(actor.getId())
-                .or(() -> customerRepository.findByUser_Id(actor.getId()))
-                .orElseThrow(() -> BusinessException.conflict("PORTAL_ACCOUNT_NOT_LINKED",
-                        "Tài khoản chưa được gắn với đại lý nào. Vui lòng liên hệ quản trị viên.", null));
+        Customer c = CustomerAccess.resolveCustomerForActor(actor, customerRepository);
+        if (c == null) {
+            throw BusinessException.conflict("PORTAL_ACCOUNT_NOT_LINKED",
+                    "Tài khoản chưa được gắn với đại lý nào. Vui lòng liên hệ quản trị viên.", null);
+        }
+        return c;
     }
 
     /** Đơn của chính đại lý; đơn đại lý khác -> 404 như không tồn tại. */

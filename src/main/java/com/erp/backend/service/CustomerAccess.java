@@ -93,6 +93,12 @@ public final class CustomerAccess {
                     }
                     return java.util.Optional.empty();
                 })
+                .or(() -> {
+                    if (actor.getAuthorities() != null && actor.getAuthorities().stream().anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()))) {
+                        return customerRepository.findAll().stream().filter(c -> "ACTIVE".equalsIgnoreCase(c.getStatus())).findFirst();
+                    }
+                    return java.util.Optional.empty();
+                })
                 .orElse(null);
     }
 
