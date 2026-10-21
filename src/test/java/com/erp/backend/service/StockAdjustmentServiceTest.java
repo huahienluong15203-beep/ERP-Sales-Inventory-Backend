@@ -363,4 +363,67 @@ class StockAdjustmentServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("Không thể huỷ phiếu điều chỉnh tồn kho ở trạng thái APPROVED");
     }
+
+    private StockAdjustment pendingLotAdjustment(String qty) {
+        StockAdjustment adjustment = StockAdjustment.builder()
+                .id(2L)
+                .code("DC-202610-002")
+                .warehouse(sampleWarehouse)
+                .warehouseCode("KHO-TONG")
+                .adjustmentReason(StockAdjustment.REASON_DAMAGED_GOODS)
+                .status(StockAdjustment.STATUS_PENDING_APPROVAL)
+                .createdById(10L)
+                .createdByName("staff_user")
+                .totalQuantity(new BigDecimal(qty))
+                .totalLossValue(BigDecimal.ZERO)
+                .build();
+        adjustment.addLine(StockAdjustmentLine.builder()
+                .id(21L)
+                .stockAdjustment(adjustment)
+                .product(sampleProduct)
+                .currentStock(new BigDecimal("100"))
+                .adjustmentQuantity(new BigDecimal(qty))
+                .costPrice(new BigDecimal("12000"))
+                .lossValue(BigDecimal.ZERO)
+                .hasBatchManagement(true)
+                .batchNumber("LOT-HN-202610")
+                .build());
+        return adjustment;
+    }
+
+    @Test
+    @DisplayName("S8-03: Duyệt phiếu khi lô không đủ -> báo lỗi, KHÔNG tự đặt lô về 0 (tránh lệch tồn tổng và tồn lô)")
+    void testApproveAdjustment_LotInsufficient_Rejected() {
+        StockAdjustment adjustment = pendingLotAdjustment("60"); // tồn tổng 100 đủ, nhưng lô chỉ còn 50
+        when(stockAdjustmentRepository.findByIdForUpdate(2L)).thenReturn(Optional.of(adjustment));
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(1L, 100L)).thenReturn(Optional.of(sampleInventory));
+        when(productLotRepository.findByProductAndWarehouseAndBatchNumberForUpdate(100L, 1L, "LOT-HN-202610"))
+                .thenReturn(Optional.of(sampleLot));
+
+        assertThatThrownBy(() -> stockAdjustmentService.approveAdjustment(
+                2L, new StockAdjustmentDecisionRequest("Duyệt"), warehouseManagerActor))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("không đủ");
+
+        assertThat(sampleLot.getQuantity()).isEqualByComparingTo("50");
+        verify(productLotRepository, never()).save(any(ProductLot.class));
+        verify(stockMovementRepository, never()).save(any(StockMovement.class));
+    }
+
+    @Test
+    @DisplayName("S8-03: Duyệt phiếu khi lô không còn tồn tại -> báo lỗi thay vì bỏ qua trừ lô")
+    void testApproveAdjustment_LotMissing_Rejected() {
+        StockAdjustment adjustment = pendingLotAdjustment("10");
+        when(stockAdjustmentRepository.findByIdForUpdate(2L)).thenReturn(Optional.of(adjustment));
+        when(inventoryRepository.findByWarehouseIdAndProductIdForUpdate(1L, 100L)).thenReturn(Optional.of(sampleInventory));
+        when(productLotRepository.findByProductAndWarehouseAndBatchNumberForUpdate(100L, 1L, "LOT-HN-202610"))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> stockAdjustmentService.approveAdjustment(
+                2L, new StockAdjustmentDecisionRequest("Duyệt"), warehouseManagerActor))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Không tìm thấy lô");
+
+        verify(stockMovementRepository, never()).save(any(StockMovement.class));
+    }
 }
