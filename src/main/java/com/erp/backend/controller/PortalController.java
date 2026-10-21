@@ -28,7 +28,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/portal")
 @RequiredArgsConstructor
-@PreAuthorize("hasRole('CUSTOMER')")
+@PreAuthorize("hasAnyRole('CUSTOMER', 'ADMIN')")
 public class PortalController {
 
     private final PortalService portalService;

@@ -67,7 +67,7 @@ public class StockTakeController {
 
     /** Nhập số đếm thực tế, hệ thống tự tính chênh lệch từng dòng. */
     @PutMapping("/{id}/counts")
-    @PreAuthorize("hasAnyRole('WAREHOUSE', 'WH_MANAGER')")
+    @PreAuthorize("hasAnyRole('WAREHOUSE', 'WH_MANAGER', 'ADMIN')")
     public StockTakeResponse updateCounts(@PathVariable Long id, @Valid @RequestBody StockTakeCountRequest request,
                                           @AuthenticationPrincipal UserDetailsImpl actor) {
         return stockTakeService.updateCounts(id, request, actor);
