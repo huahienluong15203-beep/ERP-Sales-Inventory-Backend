@@ -190,11 +190,16 @@ class ProductLotServiceTest {
     }
 
     @Test
-    @DisplayName("S6-01: Bật/tắt quản lý lô bị từ chối 403 nếu là Nhân viên kho thông thường")
-    void toggleBatchManagement_asWarehouseStaff_throwsForbidden() {
-        assertThatThrownBy(() -> service.toggleBatchManagement(20L, true, staff))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("Chỉ Quản lý kho, Quản lý bán hàng hoặc Quản trị viên");
+    @DisplayName("S6-01: Bật/tắt quản lý lô theo SKU thành công khi là Nhân viên kho")
+    void toggleBatchManagement_asWarehouseStaff_success() {
+        when(productRepository.findById(20L)).thenReturn(Optional.of(productPepsi));
+
+        ProductResponse res = service.toggleBatchManagement(20L, true, staff);
+
+        assertThat(res).isNotNull();
+        assertThat(res.getSku()).isEqualTo("SP-PEPSI-330");
+        assertThat(res.getHasBatchManagement()).isTrue();
+        assertThat(productPepsi.getHasBatchManagement()).isTrue();
     }
 
     @Test
