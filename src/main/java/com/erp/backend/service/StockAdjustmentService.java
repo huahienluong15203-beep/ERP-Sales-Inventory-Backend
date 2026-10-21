@@ -363,17 +363,20 @@ public class StockAdjustmentService {
                 String cleanBatch = line.getBatchNumber().trim();
                 ProductLot lot = productLotRepository.findByProductAndWarehouseAndBatchNumberForUpdate(
                         product.getId(), warehouse.getId(), cleanBatch)
-                        .orElse(null);
+                        .orElseThrow(() -> BusinessException.badRequest(String.format(
+                                "Không tìm thấy lô %s của sản phẩm %s tại kho %s. Phiếu không được duyệt để tránh lệch tồn theo lô.",
+                                cleanBatch, product.getSku(), warehouse.getName())));
 
-                if (lot != null) {
-                    BigDecimal oldLotQty = lot.getQuantity() != null ? lot.getQuantity() : BigDecimal.ZERO;
-                    if (oldLotQty.compareTo(adjQty) < 0) {
-                        lot.setQuantity(BigDecimal.ZERO);
-                    } else {
-                        lot.setQuantity(oldLotQty.subtract(adjQty));
-                    }
-                    productLotRepository.save(lot);
+                // Không được tự đặt lô về 0 khi lô không đủ: tồn tổng đã trừ đủ adjQty nên sẽ lệch với tổng tồn các lô.
+                BigDecimal oldLotQty = lot.getQuantity() != null ? lot.getQuantity() : BigDecimal.ZERO;
+                if (oldLotQty.compareTo(adjQty) < 0) {
+                    throw BusinessException.badRequest(String.format(
+                            "Lô %s của sản phẩm %s chỉ còn %s, không đủ để điều chỉnh giảm %s. Vui lòng từ chối phiếu và lập lại theo số tồn của lô.",
+                            cleanBatch, product.getSku(),
+                            oldLotQty.stripTrailingZeros().toPlainString(), adjQty.stripTrailingZeros().toPlainString()));
                 }
+                lot.setQuantity(oldLotQty.subtract(adjQty));
+                productLotRepository.save(lot);
             }
 
             // 3. Tiêu chí 4: Mọi phiếu điều chỉnh đều xuất hiện trên thẻ kho (StockMovement)
