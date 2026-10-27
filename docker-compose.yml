@@ -1,0 +1,88 @@
+# =============================================================================
+# Chạy toàn bộ hệ thống ERP Sales & Inventory bằng 1 lệnh:  docker compose up -d --build
+#
+# Yêu cầu: 2 repo đặt cạnh nhau, ví dụ
+#   D:\Projects\ERP-Sales-Inventory-Backend    <- file này nằm ở đây
+#   D:\Projects\ERP-Sales-Inventory-Frontend
+# (đường dẫn frontend đổi được bằng biến FRONTEND_DIR trong file .env)
+#
+# Sau khi chạy:
+#   Giao diện web   : http://localhost:3000
+#   API + Swagger   : http://localhost:8080/swagger-ui/index.html
+#   PostgreSQL      : localhost:5433 (đổi cổng để không đụng PostgreSQL cài sẵn trên máy ở 5432)
+# =============================================================================
+
+name: erp-sales-inventory
+
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: erp-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-erp_db}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-123456}
+      TZ: Asia/Ho_Chi_Minh
+      PGTZ: Asia/Ho_Chi_Minh
+    ports:
+      - "${DB_PORT:-5433}:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: erp-backend:latest
+    container_name: erp-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Kết nối tới container db (không phải localhost của máy)
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/${DB_NAME:-erp_db}
+      SPRING_DATASOURCE_USERNAME: ${DB_USER:-postgres}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:-123456}
+      SPRING_JPA_SHOW_SQL: "false"
+      SPRING_JPA_PROPERTIES_HIBERNATE_FORMAT_SQL: "false"
+      # Link trong email (kích hoạt tài khoản, quên mật khẩu) trỏ về giao diện chạy bằng Docker
+      ERP_APP_FRONTENDURL: ${PUBLIC_FRONTEND_URL:-http://localhost:3000}
+      ERP_APP_RESETPASSWORDURL: ${PUBLIC_FRONTEND_URL:-http://localhost:3000}/reset-password
+      TZ: Asia/Ho_Chi_Minh
+    # Biến bí mật tuỳ chọn (ERP_APP_JWTSECRET, SPRING_MAIL_USERNAME, SPRING_MAIL_PASSWORD...) khai báo trong .env;
+    # không khai báo thì dùng giá trị trong application.properties. Không có file .env vẫn chạy được.
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    volumes:
+      # Ảnh đại diện, ảnh biên bản giao hàng, ảnh biên lai: giữ lại khi xoá / build lại container
+      - uploads:/app/uploads
+
+  frontend:
+    build:
+      context: ${FRONTEND_DIR:-../ERP-Sales-Inventory-Frontend}
+      dockerfile: Dockerfile
+      args:
+        # Để trống: giao diện tự gọi API ở http://<tên máy đang mở web>:8080 (giữ nguyên cách chạy hiện tại)
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+    image: erp-frontend:latest
+    container_name: erp-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+
+volumes:
+  db-data:
+  uploads:

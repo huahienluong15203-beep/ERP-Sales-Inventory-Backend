@@ -47,6 +47,59 @@ Nếu muốn mở cả 2 dự án trong cùng 1 cửa sổ IDE như workspace hi
 
 ---
 
+## 🐳 Chạy toàn bộ hệ thống bằng Docker
+
+Chỉ cần cài **Docker Desktop**, không cần cài Java, Node hay PostgreSQL. Một lệnh dựng đủ 3 phần:
+PostgreSQL, Backend (Spring Boot) và Frontend (React, phục vụ bằng nginx).
+
+### 1. Chuẩn bị
+Đặt 2 repo **cạnh nhau** trong cùng một thư mục:
+```
+D:\Projects\ERP-Sales-Inventory-Backend     <- có file docker-compose.yml
+D:\Projects\ERP-Sales-Inventory-Frontend
+```
+(Để repo frontend ở chỗ khác thì copy `.env.example` thành `.env` và sửa `FRONTEND_DIR`.)
+
+### 2. Chạy
+```bash
+cd ERP-Sales-Inventory-Backend
+docker compose up -d --build
+```
+Lần đầu mất khoảng 5–10 phút để tải image và thư viện; các lần sau nhanh hơn nhiều nhờ cache.
+
+| Thành phần | Địa chỉ |
+| :--- | :--- |
+| Giao diện web | http://localhost:3000 |
+| API + Swagger | http://localhost:8080/swagger-ui/index.html |
+| PostgreSQL | `localhost:5433` (user `postgres`, mật khẩu `123456`, DB `erp_db`) |
+
+PostgreSQL trong Docker dùng cổng **5433** để không đụng PostgreSQL đã cài sẵn trên máy (5432).
+Tài khoản mẫu được tạo tự động khi backend khởi động lần đầu (vd: `admin / admin123`).
+
+### 3. Lệnh hay dùng
+| Việc cần làm | Lệnh |
+| :--- | :--- |
+| Xem trạng thái | `docker compose ps` |
+| Xem log backend | `docker compose logs -f backend` |
+| Build lại sau khi kéo code mới | `docker compose up -d --build` |
+| Tắt hệ thống (giữ dữ liệu) | `docker compose down` |
+| Tắt và **xoá sạch dữ liệu** (DB + ảnh tải lên) | `docker compose down -v` |
+
+Dữ liệu nằm trong 2 volume `db-data` (database) và `uploads` (ảnh đại diện, ảnh biên bản giao hàng,
+ảnh biên lai), nên tắt / build lại container không bị mất.
+
+### 4. Cấu hình (tuỳ chọn)
+Copy `.env.example` thành `.env` để đổi cổng, mật khẩu DB, địa chỉ trong link email, JWT secret, tài khoản gửi mail.
+File `.env` đã nằm trong `.gitignore`, không bị đẩy lên GitHub.
+
+### 5. Gặp lỗi
+- `port is already allocated`: cổng 3000 / 8080 / 5433 đang bị chương trình khác dùng
+  (vd: đang chạy `mvnw spring-boot:run` hoặc `npm run dev`). Tắt chương trình đó hoặc đổi cổng trong `.env`.
+- Giao diện báo không kết nối được máy chủ: chờ backend khởi động xong
+  (`docker compose logs -f backend` thấy dòng `Started BackendApplication`).
+
+---
+
 ## 🌿 Quy định Nhánh (Branching Strategy)
 - `main`: Nhánh production ổn định.
 - `develop`: Nhánh tích hợp tính năng chung của team.
