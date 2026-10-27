@@ -1,0 +1,21 @@
+# Chỉ gửi vào Docker những gì cần để build backend
+.git
+.gitignore
+.gitattributes
+.idea
+.vscode
+*.iml
+target
+uploads
+logs
+*.log
+QA_Testing
+docs
+skills
+AGENTS.md
+README.md
+docker-compose.yml
+.env
+.env.*
+Dockerfile
+.dockerignore
